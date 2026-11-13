@@ -1,4 +1,4 @@
-"""The server side of MiniMax Flow: its page, its API, and the renderer.
+"""The server side of MiniMax H3 Vision: its page, its API, and the renderer.
 
 Everything lives in ComfyUI's output folder under minimax_flow/:
     project.json   images, clips and the last-used settings
@@ -50,7 +50,7 @@ NAME_RE = re.compile(r"^[A-Za-z0-9_]{1,40}$")
 MENTION_RE = re.compile(r"@([A-Za-z0-9_]+)")
 
 DEFAULT_UI = {
-    "settings": {"model": "MiniMax H3", "steps": 20, "res": 0.2, "aspect": "16:9", "len": 6,
+    "settings": {"model": "MiniMax H3", "steps": 20, "res": 0.6, "aspect": "16:9", "len": 6,
                  "seedMode": "random", "seed": 48213, "loras": []},
     "attached": [],
     "perRow": 3,
@@ -101,8 +101,8 @@ def render_mode():
         return ("fake", FAKE_MODELS, str(error)) if mode == "auto" else ("real", [], str(error))
     except Exception as error:
         # Never let this break the app: say what went wrong and offer fake renders.
-        LOG.exception("MiniMax Flow couldn't check for the H3 editor")
-        why = "MiniMax Flow couldn't use the H3 editor: %s: %s" % (type(error).__name__, error)
+        LOG.exception("MiniMax H3 Vision couldn't check for the H3 editor")
+        why = "MiniMax H3 Vision couldn't use the H3 editor: %s: %s" % (type(error).__name__, error)
         return ("fake", FAKE_MODELS, why) if mode == "auto" else ("real", [], why)
     if not models:
         why = "None of the H3 editor's checkpoints are installed."
@@ -288,7 +288,7 @@ async def generate(request):
             graph = h3_bridge.build_graph(clip, images)
             clip["prompt_id"] = await h3_bridge.queue(graph, body.get("client_id"))
         except Exception as error:
-            LOG.exception("MiniMax Flow couldn't queue a render")
+            LOG.exception("MiniMax H3 Vision couldn't queue a render")
             raise web.HTTPBadRequest(text="ComfyUI refused the render: %s" % error)
 
     async with _lock:
@@ -335,7 +335,7 @@ async def delete_clip(request):
         try:
             await h3_bridge.cancel(clip["prompt_id"])
         except Exception:
-            LOG.exception("MiniMax Flow couldn't stop a render")
+            LOG.exception("MiniMax H3 Vision couldn't stop a render")
     if clip.get("file"):
         try:
             os.remove(os.path.join(output_dir(), clip.get("subfolder") or ROOT + "/clips", clip["file"]))
@@ -374,7 +374,7 @@ async def worker():
                 continue
             await fake_render(clip_id)
         except Exception as error:
-            LOG.exception("MiniMax Flow render failed")
+            LOG.exception("MiniMax H3 Vision render failed")
             await set_clip(clip_id, status="failed", error=str(error))
 
 
@@ -414,7 +414,7 @@ async def watch_real():
         except asyncio.CancelledError:
             raise
         except Exception:
-            LOG.exception("MiniMax Flow couldn't check its renders")
+            LOG.exception("MiniMax H3 Vision couldn't check its renders")
 
 
 def sample_for(aspect):

@@ -1,4 +1,4 @@
-/* MiniMax Flow: the app page. It talks to the plugin's server (/mmflow/api/...),
+/* MiniMax H3 Vision: the app page. It talks to the plugin's server (/mmflow/api/...),
    gets render progress over ComfyUI's websocket, and shows files through ComfyUI's /view. */
 
 /* ------------------------------------------------------------------
@@ -32,7 +32,7 @@ const state = {
   attached: [],              // ids of the images in the prompt bar
   library: { open: false, selected: null, query: "", sort: "newest" },
   clips: [],
-  settings: { model: "MiniMax H3", steps: 20, res: 0.2, aspect: "16:9", len: 6, seedMode: "random", seed: 48213, loras: [] },
+  settings: { model: "MiniMax H3", steps: 20, res: 0.6, aspect: "16:9", len: 6, seedMode: "random", seed: 48213, loras: [] },
   settingsOpen: false,
   loraPicker: false,
 };
@@ -183,7 +183,7 @@ function render() {
 function renderHeader() {
   $("headLeft").innerHTML = (state.view === "clip"
     ? `<button class="back" data-act="back">${ICON.back}Back to gallery</button>`
-    : `<span class="brand">MiniMax Flow</span>`)
+    : `<span class="brand">MiniMax H3 Vision</span>`)
     + (state.ready && OPT.fake ? `<button class="fake" data-act="whyFake" title="${esc(fakeWhy())}">Fake renders</button>` : "");
   const busy = state.clips.filter(isBusy).length;
   $("queueDot").classList.toggle("on", busy > 0);
@@ -208,7 +208,7 @@ function renderGrid() {
   const clips = filteredClips();
   if (!clips.length) {
     grid.innerHTML = `<div class="empty">${state.ready ? (state.filter === "starred" ? "No starred clips yet." : "Nothing here yet. Write a prompt below and press the arrow button.")
-      : state.loadError ? `The MiniMax Flow server answered with an error, so nothing could be loaded. Trying again…<br><span class="fail-why">${esc(state.loadError.slice(0, 300))}</span>` : "Loading…"}</div>`;
+      : state.loadError ? `The MiniMax H3 Vision server answered with an error, so nothing could be loaded. Trying again…<br><span class="fail-why">${esc(state.loadError.slice(0, 300))}</span>` : "Loading…"}</div>`;
     return;
   }
   grid.innerHTML = clips.map((c) => {
@@ -485,6 +485,7 @@ function renderClip() {
       </div>
       <aside class="clip-side" id="clipSide"></aside>`;
     wirePlayer();
+    $("pv")?.play().catch(() => {});
   }
   renderTakes(c);
   renderClipSide(c);
@@ -630,7 +631,7 @@ function connect() {
 }
 
 async function generate() {
-  if (!state.ready) { say("MiniMax Flow hasn't loaded from the server yet."); return; }
+  if (!state.ready) { say("MiniMax H3 Vision hasn't loaded from the server yet."); return; }
   const s = state.settings;
   const prompt = state.prompt.trim();
   if (!prompt) { say("Write a prompt first."); return; }
@@ -783,7 +784,16 @@ const ACT = {
     state.view = "gallery";
     render();
   },
-  close: () => window.parent.postMessage("mmflow-close", location.origin),
+  close: () => {
+    const busy = state.clips.filter(isBusy).length;
+    $("confirmText").textContent = "You'll go back to ComfyUI. " + (busy
+      ? (busy === 1 ? "The clip that is rendering keeps going" : "The " + busy + " clips that are rendering keep going") + " in the background, and everything is saved."
+      : "Everything is saved, so you can pick up where you left off.");
+    $("confirm").hidden = false;
+    $("confirmYes").focus();
+  },
+  closeYes: () => { $("confirm").hidden = true; window.parent.postMessage("mmflow-close", location.origin); },
+  closeNo: () => { $("confirm").hidden = true; $("closeBtn").focus(); },
   whyFake: () => say(fakeWhy()),
   star: (id) => {
     const c = clipById(id);
@@ -967,6 +977,14 @@ document.addEventListener("input", (e) => {
   if (el && INPUT[el.dataset.input]) INPUT[el.dataset.input](el);
 });
 document.addEventListener("keydown", (e) => {
+  if (!$("confirm").hidden) {
+    if (e.key === "Escape") { e.preventDefault(); ACT.closeNo(); }
+    if (e.key === "Tab") {
+      e.preventDefault();
+      (document.activeElement === $("confirmYes") ? $("confirmNo") : $("confirmYes")).focus();
+    }
+    return;
+  }
   if (e.key === "Escape" && e.target.id !== "prompt" && (state.settingsOpen || state.library.open)) ACT.closePopups();
 });
 document.addEventListener("keydown", (e) => {
@@ -1135,7 +1153,7 @@ async function load(first = true) {
       if (!OPT.models.some((m) => m.name === state.settings.model)) state.settings.model = OPT.models[0].name;
       const m = modelOf(state.settings.model), lo = m.minSteps || 1, every = m.stepSize || 1;
       if (state.settings.steps < lo || state.settings.steps > m.maxSteps || (state.settings.steps - lo) % every) state.settings.steps = m.steps;
-      if (!OPT.megapixels.includes(state.settings.res)) state.settings.res = 0.2;
+      if (!OPT.megapixels.includes(state.settings.res)) state.settings.res = 0.6;
       if (!OPT.aspects[state.settings.aspect]) state.settings.aspect = "16:9";
       state.attached = (ui.attached || []).filter((id) => state.refs.some((r) => r.id === id));
       state.perRow = ui.perRow || 3;

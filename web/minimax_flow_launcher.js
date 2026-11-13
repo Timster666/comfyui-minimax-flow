@@ -1,4 +1,4 @@
-// Adds a "MiniMax Flow" button to ComfyUI's sidebar. It opens the app full screen
+// Adds a "MiniMax H3 Vision" button to ComfyUI's sidebar. It opens the app full screen
 // over ComfyUI; the app's own Close button (or Esc on an empty screen) closes it again.
 import { app } from "/scripts/app.js";
 import { api } from "/scripts/api.js";
@@ -15,7 +15,7 @@ function openFlow() {
   frame.id = FRAME_ID;
   // A new address each time, so the browser never shows an old copy after an update.
   frame.src = "/mmflow/app/index.html?v=" + Date.now();
-  frame.title = "MiniMax Flow";
+  frame.title = "MiniMax H3 Vision";
   frame.allow = "fullscreen; clipboard-write";
   frame.style.cssText = "position:fixed;inset:0;width:100vw;height:100vh;border:0;z-index:10000;background:#121316";
   document.body.appendChild(frame);
@@ -30,18 +30,18 @@ window.addEventListener("message", (event) => {
 
 app.registerExtension({
   name: "minimax.flow",
-  commands: [{ id: "MiniMaxFlow.Open", label: "Open MiniMax Flow", icon: "pi pi-video", function: openFlow }],
+  commands: [{ id: "MiniMaxFlow.Open", label: "Open MiniMax H3 Vision", icon: "pi pi-video", function: openFlow }],
   menuCommands: [{ path: ["View"], commands: ["MiniMaxFlow.Open"] }],
   setup() {
     app.extensionManager?.registerSidebarTab?.({
       id: "minimax-flow",
       icon: "pi pi-video",
-      title: "MiniMax Flow",
-      tooltip: "Open MiniMax Flow",
+      title: "MiniMax H3 Vision",
+      tooltip: "Open MiniMax H3 Vision",
       type: "custom",
       render(element) {
         const button = document.createElement("button");
-        button.textContent = "Open MiniMax Flow";
+        button.textContent = "Open MiniMax H3 Vision";
         button.style.cssText = "margin:16px;padding:10px 16px;border-radius:8px;border:0;cursor:pointer;background:#e0a24a;color:#121316;font:600 14px system-ui";
         button.addEventListener("click", openFlow);
         element.replaceChildren(button);

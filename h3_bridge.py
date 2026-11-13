@@ -1,8 +1,8 @@
 """Real renders, through the H3 editor pack that is installed next to this one.
 
-MiniMax Flow doesn't build H3 graphs itself. It hands each clip to the H3 editor's own
+MiniMax H3 Vision doesn't build H3 graphs itself. It hands each clip to the H3 editor's own
 render_graph(), the code the editor renders with, and then sets the size, steps and file
-locations to MiniMax Flow's settings. Queueing, cancelling and reading results use the
+locations to MiniMax H3 Vision's settings. Queueing, cancelling and reading results use the
 editor's helpers too, so a render here behaves like one in the editor.
 
 Images in the prompt become cast members: "@detective" is a picture named detective, and the
@@ -85,9 +85,9 @@ def frames(seconds):
 
 
 def build_graph(clip, images, files=None):
-    """The ComfyUI graph for one MiniMax Flow clip.
+    """The ComfyUI graph for one MiniMax H3 Vision clip.
 
-    clip: the clip as MiniMax Flow keeps it (prompt, profile, steps, width, height, len, seed, loras).
+    clip: the clip as MiniMax H3 Vision keeps it (prompt, profile, steps, width, height, len, seed, loras).
     images: every uploaded image, so @names in the prompt can be found.
     """
     project_mod, api = editor()
@@ -105,7 +105,7 @@ def build_graph(clip, images, files=None):
         "cast": cast,
         "loras": [{"file": l["name"], "strength": float(l["strength"])} for l in clip.get("loras") or []],
     }
-    # "draft" is the editor's plain one-pass render. MiniMax Flow sets size and steps itself, and
+    # "draft" is the editor's plain one-pass render. MiniMax H3 Vision sets size and steps itself, and
     # adds the Realism LoRA only when it is in the clip's LoRA list.
     editor_clip = {"id": clip["id"], "action": clip["prompt"], "seconds": clip["len"], "cast": mentioned}
     graph = project_mod.render_graph(project, "minimax_flow", editor_clip, "take", "draft", clip["seed"], files)
@@ -113,11 +113,11 @@ def build_graph(clip, images, files=None):
     graph["10"]["inputs"].update({"width": int(clip["width"]), "height": int(clip["height"])})
     steps_node = graph["12"]["inputs"]
     if "steps" not in steps_node:
-        raise Missing("This version of the H3 editor builds its steps differently; MiniMax Flow needs an update.")
+        raise Missing("This version of the H3 editor builds its steps differently; MiniMax H3 Vision needs an update.")
     steps_node["steps"] = int(clip["steps"])
     graph["9"]["inputs"]["folder"] = ROOT + "/preview"
     graph[SAVE_NODE]["inputs"]["filename_prefix"] = "%s/clips/%s" % (ROOT, clip["id"])
-    # The editor keeps a take's first and last frames for extending it later; MiniMax Flow doesn't extend yet.
+    # The editor keeps a take's first and last frames for extending it later; MiniMax H3 Vision doesn't extend yet.
     graph.pop("20", None)
     return api.own_nodes(graph)
 

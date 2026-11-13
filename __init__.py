@@ -1,4 +1,4 @@
-"""MiniMax Flow: a simple prompt-and-gallery video studio for MiniMax H3, inside ComfyUI.
+"""MiniMax H3 Vision: a simple prompt-and-gallery video studio for MiniMax H3, inside ComfyUI.
 
 Relative imports only: ComfyUI loads custom node packs as packages.
 """
