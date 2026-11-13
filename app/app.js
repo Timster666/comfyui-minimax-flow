@@ -1,0 +1,1153 @@
+/* MiniMax Flow: the app page. It talks to the plugin's server (/mmflow/api/...),
+   gets render progress over ComfyUI's websocket, and shows files through ComfyUI's /view. */
+
+/* ------------------------------------------------------------------
+   Options. The server sends the real lists; these are only fallbacks.
+   ------------------------------------------------------------------ */
+let OPT = {
+  models: [{ name: "MiniMax H3", steps: 20, maxSteps: 40 }],
+  aspects: { "16:9": [16, 9], "9:16": [9, 16], "1:1": [1, 1], "4:3": [4, 3], "3:4": [3, 4], "21:9": [21, 9] },
+  megapixels: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.5, 2.0],
+  length: { min: 2, max: 20, fps: 24 },
+  loras: [],
+  fake: true,
+  root: "minimax_flow",
+};
+const TONES = ["#2a3a37", "#33302a", "#2b2d3a", "#3b3328", "#26332f", "#30262a", "#222a33", "#2f2a36"];
+
+/* ------------------------------------------------------------------
+   State. Everything on screen is drawn from this.
+   ------------------------------------------------------------------ */
+const state = {
+  ready: false,
+  view: "gallery",           // "gallery" | "clip"
+  openId: null,
+  filter: "all",
+  perRow: 3,
+  prompt: "",
+  caret: 0,
+  mentionIndex: 0,
+  mentionClosed: false,
+  refs: [],                  // every uploaded image: {id, name, file, added, img, tone}
+  attached: [],              // ids of the images in the prompt bar
+  library: { open: false, selected: null, query: "", sort: "newest" },
+  clips: [],
+  settings: { model: "MiniMax H3", steps: 20, res: 0.2, aspect: "16:9", len: 6, seedMode: "random", seed: 48213, loras: [] },
+  settingsOpen: false,
+  loraPicker: false,
+};
+const deleted = new Set();   // clips deleted here, so a late progress message can't bring one back
+
+/* ------------------------------------------------------------------
+   Helpers
+   ------------------------------------------------------------------ */
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const newSeed = () => Math.floor(Math.random() * 2 ** 31);
+const clipById = (id) => state.clips.find((c) => c.id === id);
+const mpText = (mp) => Number(mp).toFixed(1) + " MP";
+const modelOf = (name) => OPT.models.find((m) => m.name === name) || OPT.models[0];
+const clock = (s) => Math.floor(s / 60) + ":" + String(Math.floor(s % 60)).padStart(2, "0");
+const toneOf = (id) => TONES[[...id].reduce((a, ch) => a + ch.charCodeAt(0), 0) % TONES.length];
+const viewUrl = (folder, file) => `/view?type=output&subfolder=${encodeURIComponent(OPT.root + "/" + folder)}&filename=${encodeURIComponent(file)}`;
+const fileUrl = (subfolder, file) => `/view?type=output&subfolder=${encodeURIComponent(subfolder)}&filename=${encodeURIComponent(file)}`;
+const clipUrl = (c) => (c.file ? fileUrl(c.subfolder || OPT.root + "/clips", c.file) : "");
+// H3 takes lengths in steps of 17 frames, so a clip gets the nearest such length.
+const snapFrames = (seconds) => 5 + 17 * Math.max(1, Math.round((seconds * OPT.length.fps - 5) / 17));
+const isBusy = (c) => c.status === "queued" || c.status === "rendering";
+const loraText = (l) => l.name.replace(/\.[^.]+$/, "") + " · " + Number(l.strength).toFixed(2);
+const attach = (id) => { if (!state.attached.includes(id)) state.attached.push(id); };
+
+function dims(aspect, mp) {
+  const [a, b] = OPT.aspects[aspect];
+  const pixels = mp * 1024 * 1024;
+  const w = Math.max(32, Math.round(Math.sqrt((pixels * a) / b) / 32) * 32);
+  const h = Math.max(32, Math.round(Math.sqrt((pixels * b) / a) / 32) * 32);
+  return [w, h];
+}
+const sizeText = (aspect, mp) => dims(aspect, mp).join("×");
+
+async function api(method, path, body) {
+  const form = body instanceof FormData;
+  const res = await fetch("/mmflow/api/" + path, {
+    method,
+    headers: body && !form ? { "Content-Type": "application/json" } : undefined,
+    body: form ? body : body ? JSON.stringify(body) : undefined,
+  });
+  if (!res.ok) throw new Error((await res.text()) || res.statusText);
+  return res.json();
+}
+
+const ICON = {
+  x: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>',
+  close: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>',
+  plus: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>',
+  back: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M19 12H5M11 6l-6 6 6 6"/></svg>',
+  star: (on) => `<svg width="16" height="16" viewBox="0 0 24 24" fill="${on ? "currentColor" : "none"}" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 3l2.8 5.7 6.2.9-4.5 4.4 1.1 6.2L12 17.3 6.4 20.2l1.1-6.2L3 9.6l6.2-.9z"/></svg>`,
+  dice: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="4"/><circle cx="8.5" cy="8.5" r="1.2" fill="currentColor"/><circle cx="15.5" cy="15.5" r="1.2" fill="currentColor"/><circle cx="12" cy="12" r="1.2" fill="currentColor"/></svg>',
+  play: '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 4l13 8-13 8z"/></svg>',
+  pause: '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="5" width="4" height="14"/><rect x="14" y="5" width="4" height="14"/></svg>',
+  expand: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>',
+  shrink: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5"/></svg>',
+  search: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>',
+  upload: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 16V4M7 9l5-5 5 5M5 20h14"/></svg>',
+  download: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 4v12M7 11l5 5 5-5M5 20h14"/></svg>',
+  trash: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>',
+  reuse: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 12a8 8 0 0 1 14-5.3L20 9M20 4v5h-5M20 12a8 8 0 0 1-14 5.3L4 15M4 20v-5h5"/></svg>',
+  copy: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a1 1 0 0 1 1-1h10"/></svg>',
+};
+
+function mentionsIn(text) {
+  return [...text.matchAll(/@([A-Za-z0-9_]+)/g)].map((m) => m[1]);
+}
+
+// The prompt as HTML, with known @names highlighted and unknown ones underlined.
+function promptHTML(text) {
+  const names = new Set(state.refs.map((r) => r.name));
+  return text.split(/(@[A-Za-z0-9_]+)/).map((part) => {
+    if (/^@[A-Za-z0-9_]+$/.test(part)) return `<span class="${names.has(part.slice(1)) ? "m" : "bad"}">${esc(part)}</span>`;
+    return esc(part);
+  }).join("");
+}
+
+// A box with the clip's aspect ratio, fitted inside a 16:9 frame.
+function picStyle(aspect, tone) {
+  const [a, b] = OPT.aspects[aspect] || [16, 9];
+  const fit = a / b >= 16 / 9 ? "width:100%" : "height:100%";
+  return `${fit};aspect-ratio:${a} / ${b};background:${tone}`;
+}
+
+const activeLoras = () => state.settings.loras.filter((l) => l.on);
+const stepsText = (n, rec) => n + (n === rec ? " · recommended" : "");
+
+function summary() {
+  const s = state.settings;
+  const n = activeLoras().length;
+  return [s.model, s.steps + " steps", mpText(s.res), s.aspect, s.len + " s",
+    s.seedMode === "fixed" ? "Seed " + s.seed : "Random seed", n + (n === 1 ? " LoRA" : " LoRAs")].join(" · ");
+}
+
+function progressText(c) {
+  if (c.status === "queued") return "Waiting…";
+  if (c.status === "failed") return "Render failed";
+  if (!c.step) return "Loading the model…";
+  if (c.step >= c.steps) return "Finishing the video…";
+  return "Step " + c.step + " of " + c.steps;
+}
+const barWidth = (c) => ((c.step || 0) / c.steps) * 100 + "%";
+const takeProgress = (c) => (c.status === "queued" ? " · waiting" : c.status === "rendering" ? " · step " + (c.step || 0) + "/" + c.steps : c.status === "failed" ? " · failed" : "");
+
+let toastTimer;
+function say(text) {
+  const t = $("toast");
+  t.textContent = text;
+  t.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove("show"), 3200);
+}
+
+// Settings, the prompt draft and the prompt bar are saved on the server, so they survive a reload.
+let saveTimer;
+function saveUi() {
+  if (!state.ready) return;
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    api("PUT", "ui", { settings: state.settings, attached: state.attached, perRow: state.perRow, prompt: state.prompt }).catch(() => {});
+  }, 400);
+}
+
+/* ------------------------------------------------------------------
+   Drawing
+   ------------------------------------------------------------------ */
+function render() {
+  const inGallery = state.view === "gallery";
+  if (inGallery) { $("pv")?.pause(); shownClip = null; }
+  $("gallery").hidden = !inGallery;
+  $("dock").hidden = !inGallery;
+  $("clipView").hidden = inGallery;
+  $("scrim").hidden = !(inGallery && (state.settingsOpen || state.library.open));
+  renderHeader();
+  if (inGallery) {
+    renderFilters();
+    renderGrid();
+    renderRefs();
+    renderPrompt();
+    renderSettings();
+    renderLibrary();
+  } else {
+    renderClip();
+  }
+  saveUi();
+}
+
+function renderHeader() {
+  $("headLeft").innerHTML = (state.view === "clip"
+    ? `<button class="back" data-act="back">${ICON.back}Back to gallery</button>`
+    : `<span class="brand">MiniMax Flow</span>`)
+    + (OPT.fake ? `<span class="fake" title="${esc((OPT.why_fake ? OPT.why_fake + " " : "") + "Renders are sample clips until the H3 editor and its models are installed.")}">Fake renders</span>` : "");
+  const busy = state.clips.filter(isBusy).length;
+  $("queueDot").classList.toggle("on", busy > 0);
+  $("queueText").textContent = busy ? busy + " rendering" : "Queue empty";
+}
+
+const filteredClips = () => state.clips.filter((c) => state.filter === "all" || c.starred);
+
+function renderFilters() {
+  const starred = state.clips.filter((c) => c.starred).length;
+  $("filters").innerHTML = [["all", "All", state.clips.length], ["starred", "Starred", starred]]
+    .map(([id, label, n]) => `<button class="chip ${state.filter === id ? "on" : ""}" data-act="filter" data-id="${id}">${label} · ${n}</button>`).join("");
+}
+
+function renderGrid() {
+  const grid = $("grid");
+  grid.style.setProperty("--per-row", state.perRow);
+  $("perRow").value = state.perRow;
+  $("perRowVal").textContent = state.perRow;
+  const clips = filteredClips();
+  if (!clips.length) {
+    grid.innerHTML = `<div class="empty">${state.ready ? (state.filter === "starred" ? "No starred clips yet." : "Nothing here yet. Write a prompt below and press the arrow button.") : "Loading…"}</div>`;
+    return;
+  }
+  grid.innerHTML = clips.map((c) => {
+    const busy = isBusy(c), failed = c.status === "failed";
+    return `<div class="tile" data-clip="${c.id}">
+      <div class="frame">
+        <span class="pic" style="${picStyle(c.aspect, toneOf(c.id))}">${busy && c.preview ? liveVideo(c) : c.file ? `<video src="${clipUrl(c)}" muted loop playsinline preload="metadata"></video>` : ""}</span>
+        <button class="tile-hit" data-act="open" data-id="${c.id}" aria-label="Open clip: ${esc(c.prompt)}"></button>
+        ${busy ? `<span class="busy ${c.preview ? "has-live" : ""}"><span data-progtext="${c.id}">${progressText(c)}</span><span class="track"><span class="fill" data-prog="${c.id}" style="width:${barWidth(c)}"></span></span>
+          <button class="cancel" data-act="cancel" data-id="${c.id}">Cancel</button></span>` : ""}
+        ${failed ? `<span class="busy failed"><span>Render failed</span><span class="fail-why">${esc(c.error || "")}</span>
+          <button class="cancel" data-act="deleteClip" data-id="${c.id}">Remove</button></span>` : ""}
+        <span class="badge">${mpText(c.res)}</span>
+        <span class="len" data-len="${c.id}">${c.len} s</span>
+        ${c.file ? `<span class="hover-line" aria-hidden="true"><span data-hoverbar="${c.id}"></span></span>` : ""}
+        <button class="star ${c.starred ? "on" : ""}" data-act="star" data-id="${c.id}" aria-label="${c.starred ? "Unstar" : "Star"}">${ICON.star(c.starred)}</button>
+      </div>
+      <button class="tile-text" data-act="open" data-id="${c.id}" tabindex="-1">
+        <span class="tile-prompt">${esc(c.prompt)}</span>
+        <span class="tile-meta">${esc(c.model)} · Seed ${c.seed} · ${c.width}×${c.height}</span>
+      </button>
+    </div>`;
+  }).join("");
+  if (hover.id) requestAnimationFrame(hoverFrame);
+}
+
+function renderRefs() {
+  const used = new Set(mentionsIn(state.prompt));
+  const strip = state.attached.map((id) => state.refs.find((r) => r.id === id)).filter(Boolean);
+  $("refs").innerHTML = strip.map((r) => `
+    <div class="ref ${used.has(r.name) ? "used" : ""}">
+      <span class="ref-pic" style="background:${r.tone}" draggable="true" data-drag-ref="${r.id}" title="Drag into the prompt"><img src="${r.img}" alt="" draggable="false">
+        <button class="ref-x" data-act="removeRef" data-id="${r.id}" aria-label="Take @${esc(r.name)} out of the prompt bar">${ICON.x}</button>
+      </span>
+      <label class="ref-name">@<input value="${esc(r.name)}" data-change="renameRef" data-id="${r.id}" aria-label="Name of @${esc(r.name)}"></label>
+    </div>`).join("") + `
+    <button class="add-ref" id="addRef" data-act="openLibrary" aria-expanded="${state.library.open}">${ICON.plus}Add image</button>`;
+}
+
+function renderPrompt() {
+  $("mirror").innerHTML = state.prompt
+    ? promptHTML(state.prompt) + "​"
+    : `<span class="ph">Describe a shot. Type @ to use one of your images.</span>`;
+  if ($("prompt").value !== state.prompt) $("prompt").value = state.prompt;
+  renderMention();
+}
+
+/* @-mentions */
+function mentionQuery() {
+  if (state.mentionClosed) return null;
+  const m = /(^|\s)@([A-Za-z0-9_]*)$/.exec(state.prompt.slice(0, state.caret));
+  return m ? m[2] : null;
+}
+
+function mentionMatches() {
+  const q = mentionQuery();
+  if (q === null) return [];
+  return state.refs.filter((r) => r.name.toLowerCase().startsWith(q.toLowerCase()));
+}
+
+function renderMention() {
+  const q = mentionQuery();
+  const box = $("mention");
+  if (q === null) { box.hidden = true; return; }
+  const list = mentionMatches();
+  const idx = Math.min(state.mentionIndex, Math.max(list.length - 1, 0));
+  const used = new Set(mentionsIn(state.prompt));
+  box.hidden = false;
+  box.innerHTML = `<span class="mention-title">${list.length ? (q ? `Images starting with "${esc(q)}"` : "Your images") : state.refs.length ? `No image called @${esc(q)}` : "No images yet. Use Add image to upload one."}</span>`
+    + list.map((r, i) => `
+      <button class="mention-item ${i === idx ? "on" : ""}" data-act="pickMention" data-id="${r.id}" role="option" aria-selected="${i === idx}">
+        <span class="mention-thumb" style="background:${r.tone}"><img src="${r.img}" alt=""></span>
+        <span>@${esc(r.name)}<span class="mention-sub">${used.has(r.name) ? "Already in the prompt" : "Image"}</span></span>
+      </button>`).join("")
+    + `<span class="mention-help">↑ ↓ to pick · Enter to insert · Esc to close</span>`;
+}
+
+function insertMention(ref) {
+  attach(ref.id);
+  const before = state.prompt.slice(0, state.caret).replace(/@([A-Za-z0-9_]*)$/, "@" + ref.name + " ");
+  const after = state.prompt.slice(state.caret).replace(/^[A-Za-z0-9_]*\s?/, "");
+  state.prompt = before + after;
+  state.caret = before.length;
+  state.mentionIndex = 0;
+  state.mentionClosed = true;
+  renderPrompt();
+  renderRefs();
+  saveUi();
+  const ta = $("prompt");
+  ta.focus();
+  ta.setSelectionRange(state.caret, state.caret);
+}
+
+/* Image library: a pop-up above the prompt bar */
+function libraryItems() {
+  const L = state.library;
+  const q = L.query.trim().toLowerCase();
+  const items = state.refs.filter((r) => !q || r.name.toLowerCase().includes(q));
+  const order = {
+    newest: (a, b) => b.added - a.added,
+    oldest: (a, b) => a.added - b.added,
+    name: (a, b) => a.name.localeCompare(b.name),
+  }[L.sort];
+  return items.sort(order);
+}
+
+function renderLibrary() {
+  const box = $("library");
+  box.hidden = !state.library.open;
+  if (!state.library.open) return;
+  box.style.maxHeight = Math.max(320, document.querySelector(".composer").getBoundingClientRect().top - 24) + "px";
+  if (!box.firstChild) {
+    // The frame is drawn once, so the search field keeps focus while you type.
+    box.innerHTML = `
+      <div class="lib-top">
+        <label class="lib-search">${ICON.search}<input id="libQuery" type="search" placeholder="Search images" aria-label="Search images" data-input="libQuery"></label>
+        <select class="select lib-sort" aria-label="Sort images" data-change="libSort">
+          <option value="newest">Newest</option><option value="oldest">Oldest</option><option value="name">Name A–Z</option>
+        </select>
+      </div>
+      <div class="lib-body">
+        <div class="lib-list" id="libList" role="listbox" aria-label="Your images"></div>
+        <div class="lib-preview" id="libPreview"></div>
+      </div>`;
+  }
+  box.querySelector(".lib-sort").value = state.library.sort;
+  renderLibList();
+  renderLibPreview();
+}
+
+function renderLibList() {
+  const items = libraryItems();
+  $("libList").innerHTML = `
+    <label class="lib-upload">${ICON.upload}Upload image
+      <input type="file" accept="image/*" multiple data-change="addImages">
+    </label>`
+    + (items.length ? items.map((r) => `
+      <div class="lib-item ${r.id === state.library.selected ? "on" : ""}" data-act="libSelect" data-id="${r.id}" role="option" tabindex="0" aria-selected="${r.id === state.library.selected}" draggable="true" data-drag-ref="${r.id}" title="Drag into the prompt">
+        <span class="lib-thumb" style="background:${r.tone}"><img src="${r.img}" alt="" draggable="false"></span>
+        <span class="lib-text"><span class="lib-name">@${esc(r.name)}</span><span class="lib-sub">${state.attached.includes(r.id) ? "Image · in the prompt bar" : "Image"}</span></span>
+      </div>`).join("")
+    : `<span class="lib-none">${state.refs.length ? `No images match "${esc(state.library.query)}".` : "No images yet. Upload one, or drop images anywhere on the page."}</span>`);
+}
+
+function renderLibPreview() {
+  const r = state.refs.find((x) => x.id === state.library.selected);
+  if (!r) { $("libPreview").innerHTML = `<span class="lib-none">Pick an image to see it here.</span>`; return; }
+  const inBar = state.attached.includes(r.id);
+  $("libPreview").innerHTML = `
+    <div class="lib-big" draggable="true" data-drag-ref="${r.id}" title="Drag into the prompt"><img src="${r.img}" alt="@${esc(r.name)}" draggable="false"></div>
+    <button class="btn ${inBar ? "" : "primary"} lib-add" data-act="libToggle">${inBar ? "Remove from prompt" : "Add to prompt"}</button>`;
+}
+
+/* Settings: a pop-up that opens above its button */
+function renderSettings() {
+  const s = state.settings;
+  $("pill").textContent = summary();
+  $("pill").setAttribute("aria-expanded", state.settingsOpen);
+  const box = $("settings");
+  box.hidden = !state.settingsOpen;
+  if (!state.settingsOpen) return;
+  // Fit between the top of the window and the button.
+  box.style.maxHeight = Math.max(240, $("pill").getBoundingClientRect().top - 24) + "px";
+
+  const model = modelOf(s.model);
+  const minSteps = model.minSteps || 1, stepSize = model.stepSize || 1;
+  const recPct = ((model.steps - minSteps) / (model.maxSteps - minSteps)) * 100;
+  const used = new Set(s.loras.map((l) => l.id));
+  const choices = OPT.loras.filter((n) => !used.has(n));
+
+  box.innerHTML = `
+    <div class="field">
+      <label class="label" for="model">Model</label>
+      <select class="select" id="model" data-change="model">
+        ${OPT.models.map((m) => `<option value="${esc(m.name)}" ${m.name === s.model ? "selected" : ""}>${esc(m.name)}</option>`).join("")}
+      </select>
+    </div>
+
+    <div class="field">
+      <div class="field-head"><label class="label" for="steps">Steps</label><span class="value ${s.steps === model.steps ? "rec" : ""}" id="stepsVal">${stepsText(s.steps, model.steps)}</span></div>
+      <div class="steps-wrap">
+        <input id="steps" type="range" min="${minSteps}" max="${model.maxSteps}" step="${stepSize}" value="${s.steps}" data-input="steps" aria-describedby="stepsRec">
+        <span class="rec-mark" style="left:calc(${recPct}% + ${(0.5 - recPct / 100) * 16}px)" aria-hidden="true"></span>
+      </div>
+      <div class="field-head steps-foot"><span class="hint" id="stepsRec">Recommended for ${esc(model.name)}: ${model.steps}${stepSize > 1 ? ` · takes ${minSteps}–${model.maxSteps} in steps of ${stepSize}` : ""}</span>
+        <button class="link" data-act="recSteps" id="recBtn" style="visibility:${s.steps === model.steps ? "hidden" : "visible"}">Use ${model.steps}</button></div>
+    </div>
+
+    <div class="field">
+      <label class="label" for="res">Resolution</label>
+      <select class="select" id="res" data-change="res">
+        ${OPT.megapixels.map((mp) => `<option value="${mp}" ${mp === s.res ? "selected" : ""}>${mpText(mp)} (${sizeText(s.aspect, mp)})</option>`).join("")}
+      </select>
+    </div>
+
+    <div class="field">
+      <span class="label">Aspect ratio</span>
+      <div class="aspects">
+        ${Object.keys(OPT.aspects).map((a) => {
+          const [w, h] = OPT.aspects[a];
+          const k = 24 / Math.max(w, h);
+          return `<button class="${a === s.aspect ? "on" : ""}" data-act="aspect" data-id="${a}"><i style="width:${Math.round(w * k)}px;height:${Math.round(h * k)}px"></i>${a}</button>`;
+        }).join("")}
+      </div>
+    </div>
+
+    <div class="field">
+      <div class="field-head"><label class="label" for="len">Length</label><span class="value" id="lenVal">${s.len} s</span></div>
+      <input id="len" type="range" min="${OPT.length.min}" max="${OPT.length.max}" step="1" value="${s.len}" data-input="len">
+    </div>
+
+    <div class="field">
+      <span class="label">Seed</span>
+      <div class="seed-row">
+        <div class="seg">
+          <button class="${s.seedMode === "random" ? "on" : ""}" data-act="seedMode" data-id="random">Random</button>
+          <button class="${s.seedMode === "fixed" ? "on" : ""}" data-act="seedMode" data-id="fixed">Fixed</button>
+        </div>
+        ${s.seedMode === "fixed"
+          ? `<input class="seed-input" inputmode="numeric" aria-label="Seed number" value="${s.seed}" data-change="seed">
+             <button class="icon-btn" data-act="rollSeed" aria-label="New random seed">${ICON.dice}</button>`
+          : `<span class="seed-note">A new seed every run, saved with each clip.</span>`}
+      </div>
+    </div>
+
+    <div class="field">
+      <div class="field-head"><span class="label">LoRAs</span><button class="link" data-act="loraPicker">+ Add LoRA</button></div>
+      ${state.loraPicker ? `<div class="picker">${choices.length
+        ? choices.map((n) => `<button data-act="addLora" data-id="${esc(n)}">${esc(n)}</button>`).join("")
+        : `<span>${OPT.loras.length ? "All your LoRAs are in use." : "No LoRAs found in ComfyUI's loras folder."}</span>`}</div>` : ""}
+      ${s.loras.map((l) => `<div class="lora ${l.on ? "" : "dim"}">
+          <button class="switch ${l.on ? "on" : ""}" data-act="toggleLora" data-id="${esc(l.id)}" aria-label="${l.on ? "Switch off" : "Switch on"} ${esc(l.name)}" aria-pressed="${l.on}"></button>
+          <div class="lora-body">
+            <span class="lora-name">${esc(l.name)}</span>
+            <input type="range" min="0" max="2" step="0.05" value="${l.strength}" data-input="loraStrength" data-id="${esc(l.id)}" aria-label="Strength of ${esc(l.name)}">
+          </div>
+          <span class="lora-val" data-strength="${esc(l.id)}">${Number(l.strength).toFixed(2)}</span>
+          <button class="lora-x" data-act="removeLora" data-id="${esc(l.id)}" aria-label="Remove ${esc(l.name)}">${ICON.x}</button>
+        </div>`).join("")}
+    </div>`;
+}
+
+/* Clip page */
+// Full screen covers the clip page and hides everything but the player, so redrawing keeps it.
+const isFull = () => document.fullscreenElement === $("clipView");
+let shownClip = null;   // which clip (and in which state) the player shows, so it is only rebuilt when that changes
+
+function renderClip() {
+  const c = clipById(state.openId);
+  if (!c) { state.view = "gallery"; render(); return; }
+  $("clipView").classList.toggle("fs", isFull());
+  const key = c.id + ":" + c.status + ":" + (c.file || "") + ":" + Boolean(isBusy(c) && c.preview);
+  if (shownClip !== key) {
+    shownClip = key;
+    $("clipView").innerHTML = `
+      <div class="clip-main">
+        <div class="player" data-clip="${c.id}">
+          <span class="pic" style="${picStyle(c.aspect, toneOf(c.id))}">${isBusy(c) && c.preview ? liveVideo(c) : c.file ? `<video id="pv" src="${clipUrl(c)}" loop playsinline preload="auto"></video>` : ""}</span>
+          ${isBusy(c)
+            ? `<span class="busy ${c.preview ? "has-live" : ""}"><span data-progtext="${c.id}">${progressText(c)}</span><span class="track"><span class="fill" data-prog="${c.id}" style="width:${barWidth(c)}"></span></span>
+                <button class="cancel" data-act="cancel" data-id="${c.id}">Cancel render</button></span>`
+            : c.status === "failed"
+              ? `<span class="busy failed"><span>Render failed</span><span class="fail-why">${esc(c.error || "")}</span></span>`
+              : `<div class="controls">
+                  <button class="play" id="playBtn" data-act="play" aria-label="Play">${ICON.play}</button>
+                  <span class="scrub" id="scrub"><span id="playFill" style="width:0%"></span></span>
+                  <span class="time" id="playTime">0:00 / ${clock(c.len)}</span>
+                  <button class="fs-btn" data-act="fullscreen" aria-label="Full screen">${ICON.expand}</button>
+                </div>`}
+          <span class="badge">${mpText(c.res)} (${c.width}×${c.height})</span>
+        </div>
+        <span class="label takes-label">Takes of this prompt</span>
+        <div class="takes" id="takes"></div>
+      </div>
+      <aside class="clip-side" id="clipSide"></aside>`;
+    wirePlayer();
+  }
+  renderTakes(c);
+  renderClipSide(c);
+  syncFullscreenButton();
+}
+
+function renderTakes(c) {
+  const takes = state.clips.filter((x) => x.prompt === c.prompt);
+  $("takes").innerHTML = takes.map((x) => `<button class="take ${x.id === c.id ? "on" : ""}" data-act="open" data-id="${x.id}">
+      <i style="background:${toneOf(x.id)}">${x.file ? `<video src="${clipUrl(x)}" muted preload="metadata"></video>` : ""}</i>${mpText(x.res)} · Seed ${x.seed}<span data-takeprog="${x.id}">${takeProgress(x)}</span>
+    </button>`).join("");
+}
+
+function renderClipSide(c) {
+  $("clipSide").innerHTML = `
+    <div class="field">
+      <span class="label">Prompt</span>
+      <p class="clip-prompt">${promptHTML(c.prompt)}</p>
+    </div>
+    <dl class="facts">
+      <dt>Model</dt><dd>${esc(c.model)}</dd>
+      <dt>Steps</dt><dd>${c.steps}</dd>
+      <dt>Resolution</dt><dd>${mpText(c.res)} (${c.width}×${c.height})</dd>
+      <dt>Aspect</dt><dd>${c.aspect}</dd>
+      <dt>Length</dt><dd>${c.len} s · ${snapFrames(c.len)} frames</dd>
+      <dt>Seed</dt><dd class="seed-dd">${c.seed}<button class="copy" data-act="copySeed" aria-label="Copy seed">${ICON.copy}</button></dd>
+      <dt>LoRAs</dt><dd>${c.loras.length ? c.loras.map((l) => esc(loraText(l))).join("<br>") : '<span class="label">None</span>'}</dd>
+    </dl>
+    <div class="actions">
+      <button class="btn primary" data-act="reuse">Use this prompt and settings</button>
+      <button class="btn" data-act="keepSeed">Keep this seed</button>
+      <div class="actions-grid">
+        <button class="btn" data-act="download" ${c.file ? "" : "disabled"}>Download</button>
+        <button class="btn danger" data-act="deleteClip">Delete</button>
+      </div>
+    </div>`;
+}
+
+// The player: a looping <video> with our own controls.
+function wirePlayer() {
+  const v = $("pv");
+  if (!v) return;
+  const c = clipById(state.openId);
+  // Hold on to this player's own controls: the video can still fire events after the page has moved on.
+  const btn = $("playBtn"), fill = $("playFill"), time = $("playTime");
+  const update = () => {
+    const d = v.duration || c.len;
+    fill.style.width = (v.currentTime / d) * 100 + "%";
+    time.textContent = clock(v.currentTime) + " / " + clock(d);
+  };
+  v.addEventListener("timeupdate", update);
+  v.addEventListener("loadedmetadata", update);
+  v.addEventListener("play", () => { btn.innerHTML = ICON.pause; btn.setAttribute("aria-label", "Pause"); });
+  v.addEventListener("pause", () => { btn.innerHTML = ICON.play; btn.setAttribute("aria-label", "Play"); });
+  $("scrub").addEventListener("pointerdown", (e) => {
+    const box = e.currentTarget.getBoundingClientRect();
+    if (v.duration) v.currentTime = ((e.clientX - box.left) / box.width) * v.duration;
+  });
+}
+
+function syncFullscreenButton() {
+  const b = document.querySelector(".fs-btn");
+  if (!b) return;
+  b.innerHTML = isFull() ? ICON.shrink : ICON.expand;
+  b.setAttribute("aria-label", isFull() ? "Exit full screen" : "Full screen");
+}
+
+/* ------------------------------------------------------------------
+   Clips from the server: new ones, progress and finished files
+   ------------------------------------------------------------------ */
+function upsertClip(clip) {
+  if (deleted.has(clip.id)) return;
+  const old = clipById(clip.id);
+  if (!old) {
+    state.clips.unshift(clip);
+    render();
+    return;
+  }
+  const changed = old.status !== clip.status || old.file !== clip.file;
+  // The server doesn't keep the live step or preview of a real render; those come straight from ComfyUI.
+  const live = { step: old.step || 0, preview: old.preview };
+  Object.assign(old, clip);
+  if (isBusy(old)) { old.step = Math.max(live.step, clip.step || 0); old.preview = live.preview; } else old.preview = null;
+  if (changed) {
+    if (state.view === "gallery") { renderHeader(); renderFilters(); renderGrid(); } else renderClip();
+    return;
+  }
+  showProgress(old);
+}
+
+// Only the step moved: update the few things that show it, so nothing under the pointer is redrawn.
+function showProgress(clip) {
+  document.querySelectorAll(`[data-prog="${clip.id}"]`).forEach((el) => { el.style.width = barWidth(clip); });
+  document.querySelectorAll(`[data-progtext="${clip.id}"]`).forEach((el) => { el.textContent = progressText(clip); });
+  document.querySelectorAll(`[data-takeprog="${clip.id}"]`).forEach((el) => { el.textContent = takeProgress(clip); });
+}
+
+/* A real render's steps and its moving preview come from ComfyUI as it samples. */
+const SAMPLER_NODE = "15";
+
+function onProgress(d) {
+  const clip = state.clips.find((c) => c.prompt_id && c.prompt_id === d.prompt_id);
+  if (!clip || !isBusy(clip) || String(d.node) !== SAMPLER_NODE) return;
+  const wasQueued = clip.status === "queued";
+  clip.status = "rendering";
+  clip.step = Math.max(clip.step || 0, Number(d.value) || 0);
+  if (wasQueued) redrawClip(); else showProgress(clip);
+}
+
+// The H3 editor's live preview: each step, a short clip of the whole video so far.
+function liveVideo(c) {
+  return `<video data-live="${c.id}" src="${c.preview}" autoplay loop muted playsinline></video>`;
+}
+
+function onPreview(d) {
+  const clip = state.clips.find((c) => c.prompt_id && c.prompt_id === d.prompt_id);
+  if (!clip || !isBusy(clip) || !d.filename) return;
+  const first = !clip.preview;
+  clip.preview = fileUrl(d.subfolder, d.filename);
+  clip.status = "rendering";
+  if (d.step) clip.step = Math.max(clip.step || 0, Math.min(Number(d.step), clip.steps));
+  if (first) { redrawClip(); return; }
+  document.querySelectorAll(`[data-live="${clip.id}"]`).forEach((v) => { v.src = clip.preview; v.play().catch(() => {}); });
+  showProgress(clip);
+}
+
+function redrawClip() {
+  if (state.view === "gallery") { renderHeader(); renderGrid(); } else renderClip();
+}
+
+function connect() {
+  const ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws?clientId=mmflow-" + Math.random().toString(36).slice(2));
+  ws.addEventListener("message", (e) => {
+    if (typeof e.data !== "string") return;   // ComfyUI also sends binary preview images
+    let msg;
+    try { msg = JSON.parse(e.data); } catch { return; }
+    if (msg.type === "mmflow.clip" && msg.data?.clip) upsertClip(msg.data.clip);
+    else if (msg.type === "progress" && msg.data) onProgress(msg.data);
+    else if (msg.type === "h3take_preview" && msg.data) onPreview(msg.data);
+  });
+  // ComfyUI restarted or the connection dropped: reconnect, and reload the state in case something finished meanwhile.
+  ws.addEventListener("close", () => setTimeout(() => { connect(); load(false); }, 2000));
+}
+
+async function generate() {
+  const s = state.settings;
+  const prompt = state.prompt.trim();
+  if (!prompt) { say("Write a prompt first."); return; }
+  const names = new Set(state.refs.map((r) => r.name));
+  const unknown = mentionsIn(prompt).find((n) => !names.has(n));
+  if (unknown) { say("There is no image called @" + unknown + "."); return; }
+  state.settingsOpen = false;
+  state.filter = "all";
+  render();
+  try {
+    const { clip } = await api("POST", "generate", { prompt, settings: s });
+    upsertClip(clip);
+  } catch (error) {
+    say(error.message);
+  }
+}
+
+/* ------------------------------------------------------------------
+   Hover preview in the grid: the clip plays and loops while the pointer is over it,
+   and goes back to its first frame when the pointer leaves.
+   ------------------------------------------------------------------ */
+const hover = { id: null };
+
+function hoverStart(id) {
+  const c = clipById(id);
+  if (!c || !c.file || hover.id === id) return;
+  hoverStop();
+  hover.id = id;
+  requestAnimationFrame(hoverFrame);
+}
+
+function hoverStop() {
+  if (!hover.id) return;
+  const id = hover.id;
+  hover.id = null;
+  const tile = document.querySelector(`.tile[data-clip="${id}"]`);
+  if (!tile) return;
+  const v = tile.querySelector("video");
+  if (v) { v.pause(); v.currentTime = 0; }
+  const bar = tile.querySelector("[data-hoverbar]");
+  if (bar) bar.style.width = "0";
+  const c = clipById(id);
+  if (c) tile.querySelector("[data-len]").textContent = c.len + " s";
+  tile.classList.remove("hovering");
+}
+
+function hoverFrame() {
+  if (!hover.id) return;
+  // Look the tile up each frame, so a redraw of the grid doesn't stop the preview.
+  const tile = document.querySelector(`.tile[data-clip="${hover.id}"]`);
+  const v = tile?.querySelector("video");
+  if (!v) { hover.id = null; return; }
+  tile.classList.add("hovering");
+  if (v.paused) v.play().catch(() => {});
+  const d = v.duration || clipById(hover.id).len;
+  tile.querySelector("[data-hoverbar]").style.width = (v.currentTime / d) * 100 + "%";
+  tile.querySelector("[data-len]").textContent = clock(v.currentTime) + " / " + clock(d);
+  requestAnimationFrame(hoverFrame);
+}
+
+document.addEventListener("mouseover", (e) => {
+  const tile = e.target.closest(".tile[data-clip]");
+  if (tile) hoverStart(tile.dataset.clip);
+  else hoverStop();
+});
+document.addEventListener("mouseleave", hoverStop);
+
+/* ------------------------------------------------------------------
+   Right-click menu on a clip
+   ------------------------------------------------------------------ */
+let menuFor = null;
+
+function openMenu(id, x, y) {
+  const c = clipById(id);
+  if (!c) return;
+  menuFor = id;
+  const m = $("ctx");
+  m.innerHTML = `
+    <button role="menuitem" data-act="menuDownload" ${c.file ? "" : 'aria-disabled="true" class="off"'}>${ICON.download}Download</button>
+    <button role="menuitem" data-act="menuDelete" class="danger">${ICON.trash}${isBusy(c) ? "Cancel and delete" : "Delete"}</button>
+    <span class="ctx-line"></span>
+    <button role="menuitem" data-act="menuReuse">${ICON.reuse}Use this prompt and settings</button>`;
+  m.hidden = false;
+  // Keep the whole menu inside the window.
+  const r = m.getBoundingClientRect();
+  m.style.left = Math.min(x, window.innerWidth - r.width - 8) + "px";
+  m.style.top = Math.min(y, window.innerHeight - r.height - 8) + "px";
+  m.querySelector("button:not(.off)").focus();
+}
+
+function closeMenu() {
+  const id = menuFor;
+  menuFor = null;
+  $("ctx").hidden = true;
+  return id;
+}
+
+document.addEventListener("contextmenu", (e) => {
+  const host = e.target.closest("[data-clip]");
+  if (!host) { closeMenu(); return; }
+  e.preventDefault();
+  // From the keyboard (menu key or Shift+F10) there is no pointer, so open at the clip.
+  const keyboard = e.clientX === 0 && e.clientY === 0;
+  const box = host.getBoundingClientRect();
+  openMenu(host.dataset.clip, keyboard ? box.left + 16 : e.clientX, keyboard ? box.top + 16 : e.clientY);
+});
+document.addEventListener("pointerdown", (e) => { if (menuFor && !e.target.closest("#ctx")) closeMenu(); });
+window.addEventListener("scroll", () => menuFor && closeMenu(), true);
+window.addEventListener("blur", () => menuFor && closeMenu());
+$("ctx").addEventListener("keydown", (e) => {
+  const items = [...$("ctx").querySelectorAll("button:not(.off)")];
+  const i = items.indexOf(document.activeElement);
+  if (e.key === "ArrowDown") { e.preventDefault(); items[(i + 1) % items.length].focus(); }
+  if (e.key === "ArrowUp") { e.preventDefault(); items[(i - 1 + items.length) % items.length].focus(); }
+  if (e.key === "Escape" || e.key === "Tab") { e.preventDefault(); closeMenu(); }
+});
+
+/* ------------------------------------------------------------------
+   Actions. Buttons name one with data-act; inputs with data-change or data-input.
+   ------------------------------------------------------------------ */
+function openClip(id) {
+  hoverStop();
+  state.view = "clip";
+  state.openId = id;
+  state.settingsOpen = false;
+  state.library.open = false;
+  shownClip = null;
+  render();
+  window.scrollTo(0, 0);
+}
+
+async function removeClip(id, message) {
+  deleted.add(id);
+  state.clips = state.clips.filter((x) => x.id !== id);
+  if (state.openId === id) { state.view = "gallery"; state.openId = null; }
+  render();
+  try {
+    await api("DELETE", "clips/" + id);
+    say(message);
+  } catch (error) {
+    say("Couldn't delete: " + error.message);
+  }
+}
+
+const ACT = {
+  filter: (id) => { state.filter = id; render(); },
+  open: (id) => openClip(id),
+  back: () => {
+    if (isFull()) document.exitFullscreen();
+    state.view = "gallery";
+    render();
+  },
+  close: () => window.parent.postMessage("mmflow-close", location.origin),
+  star: (id) => {
+    const c = clipById(id);
+    c.starred = !c.starred;
+    render();
+    api("PATCH", "clips/" + id, { starred: c.starred }).catch((error) => say(error.message));
+  },
+  cancel: (id) => removeClip(id, "Render cancelled."),
+  deleteClip: (id) => removeClip(id || state.openId, "Clip deleted."),
+
+  // The x on a prompt-bar image only takes it out of the bar; it stays in the library.
+  removeRef: (id) => { state.attached = state.attached.filter((x) => x !== id); render(); },
+  pickMention: (id) => insertMention(state.refs.find((r) => r.id === id)),
+  openLibrary: () => {
+    state.library.open = !state.library.open;
+    state.settingsOpen = false;
+    if (!state.refs.some((r) => r.id === state.library.selected)) state.library.selected = state.refs[0]?.id || null;
+    render();
+    if (state.library.open) $("libQuery")?.focus();
+  },
+  libSelect: (id) => {
+    const hadFocus = document.activeElement?.classList.contains("lib-item");
+    state.library.selected = id;
+    renderLibList();
+    renderLibPreview();
+    if (hadFocus) document.querySelector(`.lib-item[data-id="${id}"]`)?.focus();
+  },
+  libToggle: () => {
+    const id = state.library.selected;
+    const name = state.refs.find((r) => r.id === id).name;
+    if (state.attached.includes(id)) { state.attached = state.attached.filter((x) => x !== id); say("@" + name + " taken out of the prompt bar."); }
+    else { attach(id); say("@" + name + " added. Type @" + name + " in the prompt to use it."); }
+    renderRefs(); renderLibList(); renderLibPreview(); saveUi();
+  },
+  closePopups: () => { state.settingsOpen = false; state.loraPicker = false; state.library.open = false; render(); },
+  toggleSettings: () => { state.settingsOpen = !state.settingsOpen; state.loraPicker = false; state.library.open = false; render(); },
+
+  aspect: (id) => { state.settings.aspect = id; render(); },
+  recSteps: () => { state.settings.steps = modelOf(state.settings.model).steps; render(); },
+  seedMode: (id) => { state.settings.seedMode = id; render(); },
+  rollSeed: () => { state.settings.seed = newSeed(); render(); },
+  loraPicker: () => { state.loraPicker = !state.loraPicker; render(); },
+  addLora: (name) => {
+    state.settings.loras.push({ id: name, name, strength: 1, on: true });
+    state.loraPicker = false;
+    render();
+  },
+  toggleLora: (id) => { const l = state.settings.loras.find((x) => x.id === id); l.on = !l.on; render(); },
+  removeLora: (id) => { state.settings.loras = state.settings.loras.filter((x) => x.id !== id); render(); },
+  generate: () => generate(),
+
+  play: () => { const v = $("pv"); if (v) (v.paused ? v.play() : v.pause()); },
+  fullscreen: () => {
+    if (isFull()) document.exitFullscreen();
+    else $("clipView").requestFullscreen?.().catch(() => say("Full screen isn't available here."));
+  },
+  copySeed: () => {
+    const c = clipById(state.openId);
+    navigator.clipboard?.writeText(String(c.seed)).catch(() => {});
+    say("Seed " + c.seed + " copied.");
+  },
+  reuse: (id) => {
+    const c = clipById(id || state.openId);
+    const model = OPT.models.some((m) => m.name === c.model) ? c.model : state.settings.model;
+    Object.assign(state.settings, { model, steps: c.steps, res: c.res, aspect: c.aspect, len: c.len, seedMode: "random",
+      loras: c.loras.map((l) => ({ id: l.name, name: l.name, strength: l.strength, on: true })) });
+    state.prompt = c.prompt; state.caret = c.prompt.length; state.mentionClosed = true;
+    mentionsIn(c.prompt).forEach((n) => { const r = state.refs.find((x) => x.name === n); if (r) attach(r.id); });
+    if (isFull()) document.exitFullscreen();
+    state.view = "gallery";
+    render();
+    say("Prompt and settings are back in the prompt bar, with a random seed.");
+  },
+  keepSeed: () => {
+    const c = clipById(state.openId);
+    state.settings.seedMode = "fixed"; state.settings.seed = c.seed;
+    saveUi();
+    say("New renders now use seed " + c.seed + ".");
+  },
+  download: (id) => {
+    const c = clipById(id || state.openId);
+    if (!c?.file) { say("This clip is still rendering."); return; }
+    const a = document.createElement("a");
+    a.href = clipUrl(c);
+    a.download = "minimax-flow-" + c.seed + ".mp4";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  },
+  menuDownload: () => { const id = closeMenu(); ACT.download(id); },
+  menuDelete: () => { const id = closeMenu(); ACT.deleteClip(id); },
+  menuReuse: () => { const id = closeMenu(); ACT.reuse(id); },
+};
+
+const CHANGE = {
+  renameRef: async (el) => {
+    const r = state.refs.find((x) => x.id === el.dataset.id);
+    const next = el.value.replace(/[^A-Za-z0-9_]/g, "");
+    if (!next || state.refs.some((x) => x !== r && x.name === next)) { el.value = r.name; say("Names need letters, digits or _ and must be unique."); return; }
+    try {
+      await api("PATCH", "images/" + r.id, { name: next });
+    } catch (error) {
+      el.value = r.name; say(error.message); return;
+    }
+    state.prompt = state.prompt.replace(new RegExp("@" + r.name + "(?![A-Za-z0-9_])", "g"), "@" + next);
+    r.name = next;
+    render();
+  },
+  addImages: (el) => { uploadImages([...el.files]); el.value = ""; },
+  libSort: (el) => { state.library.sort = el.value; renderLibList(); },
+  // A new model starts at its recommended steps.
+  model: (el) => { state.settings.model = el.value; state.settings.steps = modelOf(el.value).steps; render(); },
+  res: (el) => { state.settings.res = Number(el.value); render(); },
+  seed: (el) => { const v = el.value.replace(/\D/g, "").slice(0, 10); state.settings.seed = v ? Number(v) : 0; render(); },
+};
+
+const INPUT = {
+  steps: (el) => {
+    const s = state.settings, rec = modelOf(s.model).steps;
+    s.steps = Number(el.value);
+    $("stepsVal").textContent = stepsText(s.steps, rec);
+    $("stepsVal").classList.toggle("rec", s.steps === rec);
+    $("recBtn").style.visibility = s.steps === rec ? "hidden" : "visible";
+    $("pill").textContent = summary();
+    saveUi();
+  },
+  len: (el) => { state.settings.len = Number(el.value); $("lenVal").textContent = el.value + " s"; $("pill").textContent = summary(); saveUi(); },
+  loraStrength: (el) => {
+    const l = state.settings.loras.find((x) => x.id === el.dataset.id);
+    l.strength = Number(el.value);
+    document.querySelector(`[data-strength="${CSS.escape(l.id)}"]`).textContent = l.strength.toFixed(2);
+    $("pill").textContent = summary();
+    saveUi();
+  },
+  libQuery: (el) => { state.library.query = el.value; renderLibList(); },
+  perRow: (el) => {
+    state.perRow = Number(el.value);
+    $("grid").style.setProperty("--per-row", state.perRow);
+    $("perRowVal").textContent = state.perRow;
+    saveUi();
+  },
+};
+
+function fromImage(image) {
+  return { ...image, img: viewUrl("images", image.file), tone: toneOf(image.id) };
+}
+
+async function uploadImages(files) {
+  files = files.filter((f) => f.type.startsWith("image/"));
+  if (!files.length) return;
+  const form = new FormData();
+  files.forEach((f) => form.append("file", f, f.name));
+  say(files.length === 1 ? "Uploading…" : "Uploading " + files.length + " images…");
+  try {
+    const { images } = await api("POST", "images", form);
+    const added = images.map(fromImage);
+    state.refs.push(...added);
+    added.forEach((a) => attach(a.id));
+    state.library.selected = added[0]?.id || state.library.selected;
+    render();
+    document.querySelector(".lib-item.on")?.scrollIntoView({ block: "nearest" });
+    say("Added @" + added.map((a) => a.name).join(", @") + ". Type @ to use it.");
+  } catch (error) {
+    say("Upload failed: " + error.message);
+  }
+}
+
+document.addEventListener("click", (e) => {
+  const el = e.target.closest("[data-act]");
+  if (el && (el.classList.contains("off") || el.disabled)) return;
+  if (el && ACT[el.dataset.act]) ACT[el.dataset.act](el.dataset.id, el, e);
+});
+// Picking from the @ list keeps the cursor in the prompt.
+document.addEventListener("mousedown", (e) => { if (e.target.closest(".mention")) e.preventDefault(); });
+document.addEventListener("change", (e) => {
+  const el = e.target.closest("[data-change]");
+  if (el && CHANGE[el.dataset.change]) CHANGE[el.dataset.change](el);
+});
+document.addEventListener("input", (e) => {
+  const el = e.target.closest("[data-input]");
+  if (el && INPUT[el.dataset.input]) INPUT[el.dataset.input](el);
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && e.target.id !== "prompt" && (state.settingsOpen || state.library.open)) ACT.closePopups();
+});
+document.addEventListener("keydown", (e) => {
+  const item = e.target.closest?.(".lib-item");
+  if (!item || (e.key !== "Enter" && e.key !== " ")) return;
+  e.preventDefault();
+  if (state.library.selected === item.dataset.id && e.key === "Enter") ACT.libToggle();
+  else ACT.libSelect(item.dataset.id);
+});
+document.addEventListener("fullscreenchange", () => { if (state.view === "clip") { $("clipView").classList.toggle("fs", isFull()); syncFullscreenButton(); } });
+// On the clip page: double-click the picture or press F for full screen, Space to play or pause.
+document.addEventListener("dblclick", (e) => { if (e.target.closest(".player") && !e.target.closest("button") && $("pv")) ACT.fullscreen(); });
+document.addEventListener("keydown", (e) => {
+  if (state.view !== "clip" || e.target.closest("input, textarea, select") || !$("pv")) return;
+  if (e.key === "f" || e.key === "F") ACT.fullscreen();
+  if (e.key === " " && !e.target.closest("button")) { e.preventDefault(); ACT.play(); }
+});
+// Double-click an image in the library to add it straight away.
+document.addEventListener("dblclick", (e) => {
+  const item = e.target.closest(".lib-item");
+  if (item && !state.attached.includes(item.dataset.id)) { state.library.selected = item.dataset.id; ACT.libToggle(); }
+});
+window.addEventListener("resize", () => { if (state.settingsOpen) renderSettings(); if (state.library.open) renderLibrary(); });
+
+// Image files can be dropped anywhere on the page, or pasted into the prompt.
+const hasFiles = (e) => [...(e.dataTransfer?.types || [])].includes("Files");
+document.addEventListener("dragover", (e) => { if (state.view === "gallery" && hasFiles(e)) { e.preventDefault(); $("addRef")?.classList.add("drag"); } });
+document.addEventListener("dragleave", (e) => { if (!e.relatedTarget) $("addRef")?.classList.remove("drag"); });
+document.addEventListener("drop", (e) => {
+  if (state.view !== "gallery" || !hasFiles(e)) return;
+  e.preventDefault();
+  $("addRef")?.classList.remove("drag");
+  uploadImages([...e.dataTransfer.files]);
+});
+
+/* ------------------------------------------------------------------
+   Dragging your images into the prompt. The library list, its big preview and the
+   prompt-bar images can all be dragged. Dropped on the text, the @name goes where you
+   let go; dropped elsewhere on the prompt box, it goes at the end.
+   ------------------------------------------------------------------ */
+const REF_MIME = "application/x-minimax-ref";
+const isRefDrag = (e) => [...(e.dataTransfer?.types || [])].includes(REF_MIME);
+const composer = document.querySelector(".composer");
+const ta = $("prompt");
+
+document.addEventListener("dragstart", (e) => {
+  const src = e.target.closest?.("[data-drag-ref]");
+  if (!src) return;
+  const r = state.refs.find((x) => x.id === src.dataset.dragRef);
+  if (!r) return;
+  e.dataTransfer.clearData();
+  e.dataTransfer.setData(REF_MIME, r.id);
+  e.dataTransfer.setData("text/plain", "@" + r.name + " ");
+  e.dataTransfer.effectAllowed = "copy";
+  e.dataTransfer.setDragImage(src.querySelector(".lib-thumb") || src, 24, 24);
+  document.body.classList.add("dragging-ref");
+});
+document.addEventListener("dragend", () => {
+  document.body.classList.remove("dragging-ref");
+  composer.classList.remove("drop-on");
+});
+composer.addEventListener("dragover", (e) => {
+  if (!isRefDrag(e)) return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect = "copy";
+  composer.classList.add("drop-on");
+});
+composer.addEventListener("dragleave", (e) => { if (!composer.contains(e.relatedTarget)) composer.classList.remove("drop-on"); });
+composer.addEventListener("drop", (e) => {
+  if (!isRefDrag(e)) return;
+  e.preventDefault();
+  composer.classList.remove("drop-on");
+  const r = state.refs.find((x) => x.id === e.dataTransfer.getData(REF_MIME));
+  if (!r) return;
+  attach(r.id);
+  const pos = e.target === ta ? wordEdge(state.prompt, textOffsetAt(e.clientX, e.clientY)) : state.prompt.length;
+  const before = state.prompt.slice(0, pos), after = state.prompt.slice(pos);
+  const insert = (before && !/\s$/.test(before) ? " " : "") + "@" + r.name + (/^\s/.test(after) ? "" : " ");
+  state.prompt = before + insert + after;
+  state.caret = before.length + insert.length;
+  state.mentionClosed = true;
+  renderPrompt(); renderRefs();
+  if (state.library.open) { renderLibList(); renderLibPreview(); }
+  saveUi();
+  ta.focus();
+  ta.setSelectionRange(state.caret, state.caret);
+});
+
+// A drop inside a word moves to the nearer end of that word, so words are never split.
+function wordEdge(text, pos) {
+  const word = /[^\s]/;
+  if (!(word.test(text[pos - 1] || "") && word.test(text[pos] || ""))) return pos;
+  let a = pos, b = pos;
+  while (a > 0 && word.test(text[a - 1])) a--;
+  while (b < text.length && word.test(text[b])) b++;
+  return pos - a <= b - pos ? a : b;
+}
+
+// Which character of the prompt is under a point. The coloured copy under the text box
+// has the same layout, so ask the browser for the spot in that copy.
+function textOffsetAt(x, y) {
+  ta.style.pointerEvents = "none";
+  let node = null, offset = 0;
+  if (document.caretPositionFromPoint) {
+    const p = document.caretPositionFromPoint(x, y);
+    if (p) { node = p.offsetNode; offset = p.offset; }
+  } else if (document.caretRangeFromPoint) {
+    const r = document.caretRangeFromPoint(x, y);
+    if (r) { node = r.startContainer; offset = r.startOffset; }
+  }
+  ta.style.pointerEvents = "";
+  const mirror = $("mirror");
+  if (!state.prompt || !node || !mirror.contains(node)) return state.prompt.length;
+  const walk = document.createTreeWalker(mirror, NodeFilter.SHOW_TEXT);
+  let count = 0;
+  while (walk.nextNode()) {
+    if (walk.currentNode === node) return Math.min(count + offset, state.prompt.length);
+    count += walk.currentNode.length;
+  }
+  return state.prompt.length;
+}
+
+/* The prompt box */
+// Clicking into the prompt closes an open pop-up (image library or settings).
+ta.addEventListener("pointerdown", () => { if (state.library.open || state.settingsOpen) ACT.closePopups(); });
+ta.addEventListener("input", () => {
+  state.prompt = ta.value; state.caret = ta.selectionStart;
+  state.mentionClosed = false; state.mentionIndex = 0;
+  renderPrompt();
+  renderRefs();
+  saveUi();
+});
+ta.addEventListener("paste", (e) => {
+  const files = [...(e.clipboardData?.files || [])];
+  if (files.some((f) => f.type.startsWith("image/"))) { e.preventDefault(); uploadImages(files); }
+});
+const syncCaret = () => { if (ta.selectionStart !== state.caret) { state.caret = ta.selectionStart; renderMention(); } };
+ta.addEventListener("click", syncCaret);
+ta.addEventListener("keyup", (e) => { if (!["ArrowDown", "ArrowUp", "Enter", "Tab", "Escape"].includes(e.key)) syncCaret(); });
+ta.addEventListener("keydown", (e) => {
+  const list = mentionMatches();
+  if (list.length) {
+    const n = list.length, i = Math.min(state.mentionIndex, n - 1);
+    if (e.key === "ArrowDown") { e.preventDefault(); state.mentionIndex = (i + 1) % n; renderMention(); return; }
+    if (e.key === "ArrowUp") { e.preventDefault(); state.mentionIndex = (i - 1 + n) % n; renderMention(); return; }
+    if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); insertMention(list[i]); return; }
+  }
+  if (e.key === "Escape") {
+    if (mentionQuery() !== null) { state.mentionClosed = true; renderMention(); }
+    else if (state.settingsOpen || state.library.open) ACT.closePopups();
+  }
+});
+
+/* ------------------------------------------------------------------
+   Start
+   ------------------------------------------------------------------ */
+async function load(first = true) {
+  try {
+    const data = await api("GET", "state");
+    OPT = { ...OPT, ...data.options };
+    state.refs = data.images.map(fromImage);
+    state.clips = data.clips.filter((c) => !deleted.has(c.id));
+    if (first) {
+      const ui = data.ui || {};
+      Object.assign(state.settings, ui.settings || {});
+      if (!OPT.models.some((m) => m.name === state.settings.model)) state.settings.model = OPT.models[0].name;
+      const m = modelOf(state.settings.model), lo = m.minSteps || 1, every = m.stepSize || 1;
+      if (state.settings.steps < lo || state.settings.steps > m.maxSteps || (state.settings.steps - lo) % every) state.settings.steps = m.steps;
+      if (!OPT.megapixels.includes(state.settings.res)) state.settings.res = 0.2;
+      if (!OPT.aspects[state.settings.aspect]) state.settings.aspect = "16:9";
+      state.attached = (ui.attached || []).filter((id) => state.refs.some((r) => r.id === id));
+      state.perRow = ui.perRow || 3;
+      state.prompt = ui.prompt || "";
+      state.caret = state.prompt.length;
+      state.mentionClosed = true;
+    }
+    state.ready = true;
+    shownClip = null;
+    render();
+  } catch (error) {
+    $("grid").innerHTML = `<div class="empty">Couldn't reach the MiniMax Flow server: ${esc(error.message)}</div>`;
+  }
+}
+
+// Only show the Close button when the app runs inside ComfyUI's page.
+if (window.parent !== window) $("closeBtn").hidden = false;
+render();
+load();
+connect();
