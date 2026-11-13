@@ -184,11 +184,13 @@ function renderHeader() {
   $("headLeft").innerHTML = (state.view === "clip"
     ? `<button class="back" data-act="back">${ICON.back}Back to gallery</button>`
     : `<span class="brand">MiniMax Flow</span>`)
-    + (OPT.fake ? `<span class="fake" title="${esc((OPT.why_fake ? OPT.why_fake + " " : "") + "Renders are sample clips until the H3 editor and its models are installed.")}">Fake renders</span>` : "");
+    + (state.ready && OPT.fake ? `<button class="fake" data-act="whyFake" title="${esc(fakeWhy())}">Fake renders</button>` : "");
   const busy = state.clips.filter(isBusy).length;
   $("queueDot").classList.toggle("on", busy > 0);
   $("queueText").textContent = busy ? busy + " rendering" : "Queue empty";
 }
+
+const fakeWhy = () => (OPT.why_fake ? OPT.why_fake + " " : "") + "Renders are sample clips until the H3 editor and its models are installed.";
 
 const filteredClips = () => state.clips.filter((c) => state.filter === "all" || c.starred);
 
@@ -205,7 +207,8 @@ function renderGrid() {
   $("perRowVal").textContent = state.perRow;
   const clips = filteredClips();
   if (!clips.length) {
-    grid.innerHTML = `<div class="empty">${state.ready ? (state.filter === "starred" ? "No starred clips yet." : "Nothing here yet. Write a prompt below and press the arrow button.") : "Loading…"}</div>`;
+    grid.innerHTML = `<div class="empty">${state.ready ? (state.filter === "starred" ? "No starred clips yet." : "Nothing here yet. Write a prompt below and press the arrow button.")
+      : state.loadError ? `The MiniMax Flow server answered with an error, so nothing could be loaded. Trying again…<br><span class="fail-why">${esc(state.loadError.slice(0, 300))}</span>` : "Loading…"}</div>`;
     return;
   }
   grid.innerHTML = clips.map((c) => {
@@ -627,6 +630,7 @@ function connect() {
 }
 
 async function generate() {
+  if (!state.ready) { say("MiniMax Flow hasn't loaded from the server yet."); return; }
   const s = state.settings;
   const prompt = state.prompt.trim();
   if (!prompt) { say("Write a prompt first."); return; }
@@ -780,6 +784,7 @@ const ACT = {
     render();
   },
   close: () => window.parent.postMessage("mmflow-close", location.origin),
+  whyFake: () => say(fakeWhy()),
   star: (id) => {
     const c = clipById(id);
     c.starred = !c.starred;
@@ -1139,10 +1144,14 @@ async function load(first = true) {
       state.mentionClosed = true;
     }
     state.ready = true;
+    state.loadError = null;
     shownClip = null;
     render();
   } catch (error) {
-    $("grid").innerHTML = `<div class="empty">Couldn't reach the MiniMax Flow server: ${esc(error.message)}</div>`;
+    state.loadError = error.message;
+    if (!state.ready) renderGrid();
+    clearTimeout(load.retry);
+    load.retry = setTimeout(() => load(first), 4000);
   }
 }
 

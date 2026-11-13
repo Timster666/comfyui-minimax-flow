@@ -23,16 +23,31 @@ class Missing(Exception):
 _found = {}
 
 
+def _has(module, *names):
+    """Whether a module has these names. Some modules (lazy loaders in transformers and others) raise
+    when a name is looked up, so any error counts as no."""
+    try:
+        return all(hasattr(module, name) for name in names)
+    except Exception:
+        return False
+
+
 def editor():
     """The H3 editor's project module (graphs) and editor_api module (queue, results), found among loaded modules."""
     if not _found:
-        for name, module in list(sys.modules.items()):
-            if module is None:
+        modules = list(sys.modules.items())
+        # ComfyUI loads a pack under its folder's name, so its modules are "<folder>.project" and
+        # "<folder>.editor_api". Look at packs with h3 in the name first, then everything else.
+        modules.sort(key=lambda item: 0 if "h3" in item[0].lower() and "." in item[0] else 1)
+        for name, module in modules:
+            if module is None or not isinstance(name, str):
                 continue
-            if hasattr(module, "render_graph") and hasattr(module, "PROFILES") and hasattr(module, "snap_frames"):
-                _found.setdefault("project", module)
-            if hasattr(module, "queue_prompt") and hasattr(module, "own_nodes") and hasattr(module, "saved_file"):
-                _found.setdefault("api", module)
+            if "project" not in _found and name.endswith("project") and _has(module, "render_graph", "PROFILES", "snap_frames"):
+                _found["project"] = module
+            if "api" not in _found and name.endswith("editor_api") and _has(module, "queue_prompt", "own_nodes", "saved_file"):
+                _found["api"] = module
+            if len(_found) == 2:
+                break
     if "project" not in _found or "api" not in _found:
         _found.clear()
         raise Missing("The H3 editor pack (comfyui-h3-editor) isn't installed in this ComfyUI.")

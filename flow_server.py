@@ -99,6 +99,11 @@ def render_mode():
         models = h3_bridge.models()
     except h3_bridge.Missing as error:
         return ("fake", FAKE_MODELS, str(error)) if mode == "auto" else ("real", [], str(error))
+    except Exception as error:
+        # Never let this break the app: say what went wrong and offer fake renders.
+        LOG.exception("MiniMax Flow couldn't check for the H3 editor")
+        why = "MiniMax Flow couldn't use the H3 editor: %s: %s" % (type(error).__name__, error)
+        return ("fake", FAKE_MODELS, why) if mode == "auto" else ("real", [], why)
     if not models:
         why = "None of the H3 editor's checkpoints are installed."
         return ("fake", FAKE_MODELS, why) if mode == "auto" else ("real", [], why)
