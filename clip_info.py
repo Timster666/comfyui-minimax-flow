@@ -4,7 +4,7 @@ Every render sends its settings to ComfyUI as extra_pnginfo["mmflow"]. ComfyUI's
 that into the PNG's text chunks and SaveVideo into the MP4's metadata, next to the "prompt" (the
 graph) ComfyUI always adds. Reading a file back uses "mmflow" when it is there. Older files have
 only the graph, so their settings are worked out from it: MOSS-Image graphs, and the H3 editor's
-graphs (MiniMax H3 Vision's own older clips and clips from the H3 editor itself).
+graphs (MiniMax H3 Vision's own clips, older ones made through the editor, and the H3 editor's clips).
 """
 
 import json
@@ -114,7 +114,7 @@ def _literal(value):
 
 def from_graph(graph):
     """Settings from a ComfyUI graph: MOSS-Image or the H3 editor's, else None."""
-    if _nodes(graph, "H3EditorTake", "H3Take"):
+    if _nodes(graph, "H3EditorTake", "H3Take", "MiniMaxH3ReferenceToVideo", "MiniMaxH3ImageToVideo"):
         return _from_h3(graph)
     if any(n.get("inputs", {}).get("type") == "moss_image" for _, n in _nodes(graph, "CLIPLoader")):
         return _from_moss(graph)
@@ -123,7 +123,7 @@ def from_graph(graph):
 
 def _loras(graph, skip=()):
     out = []
-    for key, node in sorted(_nodes(graph, "LoraLoaderModelOnly", "H3EditorLora", "H3Lora"), key=lambda kn: int(kn[0]) if kn[0].isdigit() else 0):
+    for key, node in sorted(_nodes(graph, "LoraLoaderModelOnly", "H3EditorLora", "H3Lora", "MMVisionLora"), key=lambda kn: int(kn[0]) if kn[0].isdigit() else 0):
         if key in skip:
             continue
         inputs = node.get("inputs", {})
@@ -146,11 +146,13 @@ def _from_moss(graph):
 
 
 def _from_h3(graph):
-    take = _nodes(graph, "H3EditorTake", "H3Take")[0][1]["inputs"]
+    take = _nodes(graph, "H3EditorTake", "H3Take", "MiniMaxH3ReferenceToVideo", "MiniMaxH3ImageToVideo")[0][1]["inputs"]
     text = _literal(take.get("prompt")) or ""
-    steps = next((n["inputs"].get("steps") for _, n in _nodes(graph, "H3EditorHyperFlowSigmas", "H3HyperFlowSigmas", "BasicScheduler")), None)
+    steps = next((n["inputs"].get("steps") for _, n in _nodes(graph, "H3EditorHyperFlowSigmas", "H3HyperFlowSigmas", "MMVisionHyperFlowSigmas",
+                                                         "BasicScheduler", "BetaSamplingScheduler")), None)
     seed = next((n["inputs"].get("noise_seed") for _, n in _nodes(graph, "RandomNoise")), None)
-    unet = next((n["inputs"].get("unet_name") for _, n in _nodes(graph, "UNETLoader", "H3EditorHyperFlowLoader", "H3HyperFlowLoader")), None)
+    unet = next((n["inputs"].get("unet_name") for _, n in _nodes(graph, "UNETLoader", "H3EditorHyperFlowLoader", "H3HyperFlowLoader",
+                                                                "MMVisionHyperFlowLoader")), None)
     fps = next((n["inputs"].get("fps") for _, n in _nodes(graph, "CreateVideo")), 24) or 24
     frames = _literal(take.get("length"))
     family_lora = (graph.get("94") or {}).get("inputs", {}).get("lora_name")

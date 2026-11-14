@@ -9,29 +9,42 @@ It opens full screen over ComfyUI; the × in the top-right corner brings you bac
 
 The app has two tabs, and it always opens on **Video**.
 
-- **Video** makes clips with MiniMax H3, through the H3 editor pack (comfyui-h3-editor). Every
-  `@image` in the prompt is a reference picture.
-- **Image** makes pictures with MOSS-Image, which ComfyUI supports natively. It's good at words in
-  pictures: put the text you want in quotes. A finished image can be sent to the Video tab with
-  **Use in a video**, and the Video tab's **Add image** pop-up lists all of them under
-  **Generated images**.
+- **Video** makes clips with MiniMax H3. Every `@image` in the prompt is a reference picture.
+- **Image** makes pictures with MOSS-Image. It's good at words in pictures: put the text you want
+  in quotes. A finished image can be sent to the Video tab with **Use in a video**, and the Video
+  tab's **Add image** pop-up lists all of them under **Generated images**.
 
-## Real and fake renders
+It needs no other custom node pack. Videos run on ComfyUI's own MiniMax H3 nodes plus a few of
+this pack's own (in the node menu under **MiniMax H3 Vision**), and images on ComfyUI's own nodes.
+A tab whose models aren't installed shows a **Not installed** badge; click it to see which files
+are missing.
 
-Each tab picks by itself (`"mode": "auto"` in `config.json`):
+While a clip renders you see its steps and a moving live preview (with `taeh3`, below). While an
+image renders you see its steps and ComfyUI's live preview. MOSS-Image follows Comfy-Org's template
+(er_sde / simple, the recommended negative prompt), at 50 steps and guidance 3.0.
 
-- **Video is real** when the H3 editor pack and at least one of its models are installed.
-  MiniMax H3 Vision hands each clip to the H3 editor's own graph builder, so a render is built
-  the way the editor builds one, and then sets the size, steps, LoRAs and file locations to your
-  settings. While a clip renders you see its steps and the H3 editor's moving live preview.
-- **Image is real** when MOSS-Image's three files are installed (below). The graph follows
-  Comfy-Org's MOSS-Image template (er_sde / simple, the recommended
-  negative prompt), at 50 steps and guidance 3.0. While an image renders you see its steps and ComfyUI's live preview.
-- **Fake** otherwise: a fake render counts through its steps and then hands out a sample from
-  `samples/`, so the app can be tried on any machine. The tab shows a "Fake renders" badge;
-  click it to see why.
+## MiniMax H3 files
 
-`"mode"` (both tabs) or `"image_mode"` (Image only) can be `"real"` or `"fake"` to force one.
+The models the Video tab needs, into ComfyUI's `models` folder:
+
+| File | Folder | Where to get it |
+|---|---|---|
+| `qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors` | `models/text_encoders/` | [Comfy-Org/MiniMax-H3](https://huggingface.co/Comfy-Org/MiniMax-H3), `text_encoders/` |
+| `minimax_h3_video_vae_fp16.safetensors` | `models/vae/` | Comfy-Org/MiniMax-H3, `vae/` |
+| `minimax_h3_audio_vae_fp32.safetensors` | `models/vae/` | Comfy-Org/MiniMax-H3, `vae/` |
+
+and at least one model (each model in the Video tab's list is one of these families):
+
+| Model | Files |
+|---|---|
+| HyperFlow H3 Flash | `minimax_h3_ref2va_hyperflow_flash_14b-int8_convrot.safetensors` and `minimax_h3_fl2va_hyperflow_flash_14b-int8_convrot.safetensors` in `models/diffusion_models/hyperflow/`, from [VideoRebirthAI/hyperflow-h3-flash](https://huggingface.co/VideoRebirthAI/hyperflow-h3-flash). Its GGUF files don't load here. |
+| MiniMax H3 | `minimax_h3_ref2va_pruned_int8_convrot.safetensors` and `minimax_h3_fl2va_pruned_int8_convrot.safetensors` in `models/diffusion_models/` |
+| MiniMax H3 Turbo | the same two, and `minimax_h3_turbo_v4_step600_ema.safetensors` in `models/loras/` |
+| Singularity v2, DaSiWa, 10Eros, PRISM | their checkpoint in `models/diffusion_models/` (names in `h3_graph.py`) |
+
+The text encoder and video VAE in other precisions (`..._int8_convrot`, `..._bf16`) work too.
+Optional: `taeh3.safetensors` in `models/vae_approx/`, from [OzzyGT/taeh3](https://huggingface.co/OzzyGT/taeh3),
+for the moving live preview.
 
 ## MOSS-Image files
 
@@ -73,15 +86,23 @@ In ComfyUI's output folder, under `minimax_flow/`:
 - `images/`: uploaded reference images
 - `clips/`: finished videos
 - `stills/`: finished images
-- `preview/`: live previews while rendering (the H3 editor cleans these up)
+- `preview/`: live previews while rendering (cleaned up as it goes)
 
 ## Files
 
-- `__init__.py`: tells ComfyUI about the plugin
-- `flow_server.py`: the plugin's server: its API, storage and fake renderer
-- `h3_bridge.py`: real videos, through the H3 editor pack
+- `__init__.py`: tells ComfyUI about the plugin and its nodes
+- `flow_server.py`: the plugin's server: its API and storage
+- `h3_graph.py`: video graphs: the MiniMax H3 model families and the prompt H3 expects
+- `vision_nodes.py`: the pack's graph nodes, with `h3_lora.py` (LoRAs), `hyperflow.py` (HyperFlow H3 Flash)
+  and `live_preview.py` (the moving preview)
+- `moss_bridge.py`: image graphs, with MOSS-Image
 - `clip_info.py`: the prompt and settings saved in each file, and reading them back on import
-- `moss_bridge.py`: real images, with MOSS-Image
 - `comfy_link.py`: sending jobs to ComfyUI's queue, following and stopping them
 - `web/minimax_flow_launcher.js`: the sidebar button
 - `app/index.html`, `app/app.js`: the app itself
+
+## License
+
+GPL-3.0 (`LICENSE`). The video code is adapted from the
+[H3 Editor](https://github.com/igorls/comfyui-h3-editor) by Igor Lins e Silva, which includes work
+from ComfyUI-HyperFlow-Flash and ComfyUI-MiniMax-H3-Turbo. `NOTICE` lists what came from where.

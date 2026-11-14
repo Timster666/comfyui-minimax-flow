@@ -10,7 +10,7 @@ let OPT = {
   megapixels: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.5, 2.0],
   length: { min: 2, max: 20, fps: 24 },
   loras: [],
-  fake: true,
+  missing: null,             // why no video model can be used, when none can
   root: "minimax_flow",
   // The Image tab's options (MOSS-Image). The server sends the real lists.
   image: {
@@ -20,7 +20,7 @@ let OPT = {
     megapixels: [0.25, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0],
     recommendedMP: [1.0, 1.5, 2.0],
     cfg: { min: 1, max: 10, step: 0.5 },
-    fake: true,
+    missing: null,
   },
 };
 const TONES = ["#2a3a37", "#33302a", "#2b2d3a", "#3b3328", "#26332f", "#30262a", "#222a33", "#2f2a36"];
@@ -65,7 +65,9 @@ const isImage = () => state.tab === "image";
 const kindOf = (c) => c.kind || "video";
 // The options of the tab you're on: models, aspect ratios and sizes.
 const tabOpt = () => (isImage() ? OPT.image : { models: OPT.models, aspects: OPT.aspects, megapixels: OPT.megapixels });
-const modelOf = (name) => tabOpt().models.find((m) => m.name === name) || tabOpt().models[0];
+// With nothing installed, the settings keep the saved model so the pop-up still works.
+const modelOf = (name) => tabOpt().models.find((m) => m.name === name) || tabOpt().models[0]
+  || { name: name || "Not installed", steps: state.settings.steps || 20, minSteps: 1, maxSteps: 80, stepSize: 1, cfg: state.settings.cfg || 3 };
 const aspectOf = (a) => OPT.aspects[a] || OPT.image.aspects[a] || [16, 9];
 const clock = (s) => Math.floor(s / 60) + ":" + String(Math.floor(s % 60)).padStart(2, "0");
 const toneOf = (id) => TONES[[...id].reduce((a, ch) => a + ch.charCodeAt(0), 0) % TONES.length];
@@ -216,15 +218,14 @@ function renderHeader() {
   $("headLeft").innerHTML = (state.view === "clip"
     ? `<button class="back" data-act="back">${ICON.back}Back to gallery</button>`
     : `<span class="brand">MiniMax H3 Vision</span>`)
-    + (state.ready && (isImage() ? OPT.image.fake : OPT.fake) && state.view === "gallery" ? `<button class="fake" data-act="whyFake" title="${esc(fakeWhy())}">Fake renders</button>` : "");
+    + (state.ready && missingWhy() && state.view === "gallery" ? `<button class="missing" data-act="whyMissing" title="${esc(missingWhy())}">Not installed</button>` : "");
   const busy = state.clips.filter(isBusy).length;
   $("queueDot").classList.toggle("on", busy > 0);
   $("queueText").textContent = busy ? busy + " rendering" : "Queue empty";
 }
 
-const fakeWhy = () => isImage()
-  ? (OPT.image.why_fake ? OPT.image.why_fake + " " : "") + "Images are samples until MOSS-Image's files are installed."
-  : (OPT.why_fake ? OPT.why_fake + " " : "") + "Renders are sample clips until the H3 editor and its models are installed.";
+// Why this tab can't render, when its models aren't installed.
+const missingWhy = () => (isImage() ? OPT.image.missing : OPT.missing) || "";
 
 const tabClips = () => state.clips.filter((c) => kindOf(c) === state.tab);
 const filteredClips = () => tabClips().filter((c) => state.filter === "all" || c.starred);
@@ -812,7 +813,7 @@ function onProgress(d) {
   if (wasQueued) redrawClip(); else showProgress(clip);
 }
 
-// The H3 editor's live preview: each step, a short clip of the whole video so far.
+// The live preview of a video: each step, a short clip of the whole video so far (MMVisionLivePreview).
 function liveVideo(c) {
   return `<video data-live="${c.id}" src="${c.preview}" autoplay loop muted playsinline></video>`;
 }
@@ -862,7 +863,7 @@ function onPreviewPicture(buf) {
     bytes = buf.slice(8);
     if (view.getUint32(4) === 2) type = "image/png";
   } else return;
-  // Videos have the H3 editor's own moving preview; these pictures are for images only.
+  // Videos have their own moving preview (mmvision_preview); these pictures are for images only.
   if (!clip || kindOf(clip) !== "image" || !isBusy(clip)) return;
   const old = clip.preview;
   setLivePreview(clip, URL.createObjectURL(new Blob([bytes], { type })));
@@ -885,7 +886,7 @@ function connect() {
     try { msg = JSON.parse(e.data); } catch { return; }
     if (msg.type === "mmflow.clip" && msg.data?.clip) upsertClip(msg.data.clip);
     else if (msg.type === "progress" && msg.data) onProgress(msg.data);
-    else if (msg.type === "h3take_preview" && msg.data) onPreview(msg.data);
+    else if (msg.type === "mmvision_preview" && msg.data) onPreview(msg.data);
   });
   // ComfyUI restarted or the connection dropped: reconnect, and reload the state in case something finished meanwhile.
   ws.addEventListener("close", () => setTimeout(() => { connect(); load(false); }, 2000));
@@ -1090,7 +1091,7 @@ const ACT = {
   },
   closeYes: () => { $("confirm").hidden = true; window.parent.postMessage("mmflow-close", location.origin); },
   closeNo: () => { $("confirm").hidden = true; $("closeBtn").focus(); },
-  whyFake: () => say(fakeWhy()),
+  whyMissing: () => say(missingWhy()),
   star: (id) => {
     const c = clipById(id);
     c.starred = !c.starred;
@@ -1592,7 +1593,7 @@ async function load(first = true) {
       for (const tab of ["video", "image"]) {
         state.tab = tab;
         const T = tabOpt(), s = state.settings;
-        if (!T.models.some((m) => m.name === s.model)) s.model = T.models[0].name;
+        if (T.models.length && !T.models.some((m) => m.name === s.model)) s.model = T.models[0].name;
         const m = modelOf(s.model), lo = m.minSteps || 1, every = m.stepSize || 1;
         if (s.steps < lo || s.steps > m.maxSteps || (s.steps - lo) % every) s.steps = m.steps;
         if (!T.megapixels.includes(s.res)) s.res = tab === "image" ? 1.0 : 0.6;

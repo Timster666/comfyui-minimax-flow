@@ -1,0 +1,36 @@
+MiniMax H3 Vision
+
+MiniMax H3 Vision is licensed under the GNU General Public License v3.0, in LICENSE, because it
+includes code from the H3 Editor, which is under that license. It includes work from these projects:
+
+H3 Editor (comfyui-h3-editor)
+  Author: Igor Lins e Silva
+  Source: https://github.com/igorls/comfyui-h3-editor (version 0.6.1)
+  License: GNU General Public License v3.0, in LICENSE
+  Used in:
+    h3_graph.py     the checkpoint families and file picking (project.py), the prompt H3 expects
+                    (prompting.py), and the one-pass render graph (render_graph)
+    h3_lora.py      h3lora.py, and the LoRA key helpers from policy.py
+    hyperflow.py    hyperflow.py, without its GGUF reading
+    live_preview.py preview.py, writing its clips with PyAV instead of an ffmpeg program
+    vision_nodes.py the H3 Load Still, H3 LoRA, H3 HyperFlow Loader, H3 HyperFlow Sigmas and
+                    H3 Live Preview nodes (nodes.py, preview.py), under new names
+  Each file's header says what was changed.
+
+  The H3 Editor in turn includes work from:
+
+  ComfyUI-MiniMax-H3-Turbo
+    Author: Larryvrh
+    Source: https://github.com/Larryvrh/ComfyUI-MiniMax-H3-Turbo (commit 4274783)
+    License: Apache License 2.0, in LICENSES/Apache-2.0.txt
+    Used in: h3_lora.py, adapted from its LoRA loader (the in-place bypass LoRA, the int8 fused
+    fc2 rule and the adaLN re-injection on pruned bases), and data/h3_silu_temb_grid.safetensors,
+    copied unchanged.
+
+  ComfyUI-HyperFlow-Flash
+    Author: Video Rebirth
+    Source: https://github.com/Video-Rebirth/ComfyUI-HyperFlow-Flash (version 1.1.0, commit c807a89)
+    License: GNU General Public License v3.0, in LICENSE
+    Used in: hyperflow.py, adapted from its safetensors_io.py, model_patch.py and loader_nodes.py
+    (reading HyperFlow INT8 safetensors files, the factorized blocks, the two-time embedder and the
+    step schedules).
