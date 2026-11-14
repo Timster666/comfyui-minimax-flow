@@ -248,8 +248,8 @@ function renderFilters() {
   const starred = tabClips().filter((c) => c.starred).length;
   $("filters").innerHTML = [["all", "All", tabClips().length], ["starred", "Starred", starred]]
     .map(([id, label, n]) => `<button class="chip ${state.filter === id ? "on" : ""}" data-act="filter" data-id="${id}">${label} · ${n}</button>`).join("")
-    + `<label class="chip import" title="Bring in a video or image made earlier. Its prompt and settings are read from the file. You can also drop files on the page.">${ICON.upload}Import
-        <input type="file" accept="video/*,image/png,image/jpeg,image/webp" multiple data-change="importFiles"></label>`;
+    + `<label class="chip import" title="Bring in a video or image made earlier. Its prompt and settings are read from the file. A .zip from Export .zip brings its reference images too. You can also drop files on the page.">${ICON.upload}Import
+        <input type="file" accept="video/*,image/png,image/jpeg,image/webp,.zip,application/zip" multiple data-change="importFiles"></label>`;
 }
 
 function renderGrid() {
@@ -768,7 +768,8 @@ function renderClipSide(c) {
       <button class="btn" data-act="keepSeed">Keep this seed</button>
       <div class="actions-grid">
         <button class="btn" data-act="download" ${c.file ? "" : "disabled"}>Download</button>
-        <button class="btn danger" data-act="deleteClip">Delete</button>
+        <button class="btn" data-act="exportZip" ${c.file && c.status === "done" ? "" : "disabled"} title="The video and its reference images in one .zip. Import it here or in another MiniMax H3 Vision.">Export .zip</button>
+        <button class="btn danger wide" data-act="deleteClip">Delete</button>
       </div>
     </div>`;
 }
@@ -1051,7 +1052,8 @@ function openMenu(id, x, y) {
   menuFor = id;
   const m = $("ctx");
   m.innerHTML = `
-    <button role="menuitem" data-act="menuDownload" ${c.status === "done" ? "" : 'aria-disabled="true" class="off"'}>${ICON.download}Download</button>
+    <button role="menuitem" data-act="menuDownload" ${c.status === "done" ? "" : 'aria-disabled="true" class="off"'}>${ICON.download}Download</button>${kindOf(c) === "video" ? `
+    <button role="menuitem" data-act="menuExportZip" ${c.status === "done" && c.file ? "" : 'aria-disabled="true" class="off"'}>${ICON.download}Export .zip with reference images</button>` : ""}
     <button role="menuitem" data-act="menuDelete" class="danger">${ICON.trash}${isBusy(c) ? "Cancel and delete" : "Delete"}</button>
     <span class="ctx-line"></span>
     <button role="menuitem" data-act="menuReuse">${ICON.reuse}Use this prompt and settings</button>${kindOf(c) === "image" ? `
@@ -1296,6 +1298,19 @@ const ACT = {
     a.remove();
   },
   menuDownload: () => { const id = closeMenu(); ACT.download(id); },
+  menuExportZip: () => { const id = closeMenu(); ACT.exportZip(id); },
+  exportZip: async (id) => {
+    const c = clipById(id || state.openId);
+    if (!c || !c.file) return;
+    say("Saving " + c.file.replace(/\.\w+$/, ".zip") + "…");
+    try {
+      const r = await api("POST", "clips/" + encodeURIComponent(c.id) + "/export", {});
+      const a = document.createElement("a");
+      a.href = fileUrl(r.subfolder, r.file); a.download = r.file;
+      document.body.appendChild(a); a.click(); a.remove();
+      say(`Saved ${r.file}: the video and ${r.images} reference image${r.images === 1 ? "" : "s"}, in ${r.subfolder}.`);
+    } catch (error) { say(error.message); }
+  },
   menuDelete: () => { const id = closeMenu(); ACT.deleteClip(id); },
   menuReuse: () => { const id = closeMenu(); ACT.reuse(id); },
   menuUseInVideo: () => { const id = closeMenu(); ACT.useInVideo(id); },
@@ -1388,21 +1403,53 @@ function downloadName(c) {
 }
 
 // Videos and images made earlier: the server reads the prompt and settings saved inside them.
+const isZip = (f) => /\.zip$/i.test(f.name);
+
+// What a zip import brought in: its videos join the grid, its reference pictures the Add image library.
+function importedZip(r) {
+  for (const c of [...r.clips].reverse()) if (!clipById(c.id)) state.clips.unshift(c);
+  for (const i of r.images || []) if (!state.refs.some((x) => x.id === i.id)) state.refs.push(fromImage(i));
+  return r.clips;
+}
+function zipSummary(r) {
+  const n = r.clips.length, pics = (r.images || []).length;
+  return `${n} video${n === 1 ? "" : "s"} added` + (r.same ? `, ${r.same} already here` : "")
+    + (pics || r.sameImages ? `; ${pics} reference image${pics === 1 ? "" : "s"} added` + (r.sameImages ? `, ${r.sameImages} already here` : "") : "");
+}
+
 async function importFiles(files) {
-  files = files.filter((f) => f.type.startsWith("video/") || f.type.startsWith("image/"));
+  files = files.filter((f) => f.type.startsWith("video/") || f.type.startsWith("image/") || isZip(f));
   if (!files.length) return;
-  const done = [], failed = [];
+  const done = [], failed = [], zips = [];
   for (const [i, f] of files.entries()) {
     say(files.length === 1 ? "Reading " + f.name + "…" : `Importing ${i + 1} of ${files.length}…`);
     const form = new FormData();
     form.append("file", f, f.name);
     try {
+      if (isZip(f)) {
+        const r = await api("POST", "import-zip", form);
+        zips.push(r);
+        const here = r.clips.length ? r.clips : [];
+        importedZip(r);
+        done.push(...here);
+        continue;
+      }
       const { clip } = await api("POST", "import", form);
       if (!clipById(clip.id)) state.clips.unshift(clip);
       done.push(clip);
     } catch (error) {
       failed.push(error.message);
     }
+  }
+  if (zips.length && !failed.length) {
+    const sum = { clips: zips.flatMap((r) => r.clips), images: zips.flatMap((r) => r.images || []),
+      same: zips.reduce((a, r) => a + (r.same || 0), 0), sameImages: zips.reduce((a, r) => a + (r.sameImages || 0), 0) };
+    if (state.tab === "edit") EDIT.clipsChanged();
+    else if (done.length === 1) { if (state.tab !== "video") ACT.tab("video"); openClip(done[0].id); }
+    else { if (state.tab !== "video") ACT.tab("video"); render(); }
+    say((files.length === 1 ? "Imported " + files[0].name + ": " : "Imported: ") + zipSummary(sum) + "."
+      + (zips.some((r) => r.edit) ? " Open a project's timeline from Edit › Project › Import project." : ""));
+    return;
   }
   if (done.length) {
     // In the Edit tab, imported videos just join its media panel.
@@ -1532,7 +1579,7 @@ document.addEventListener("drop", (e) => {
   $("addRef")?.classList.remove("drag");
   const files = [...e.dataTransfer.files];
   // Videos are imports. Pictures are imports in the Image tab, and @images in the Video tab.
-  const imports = files.filter((f) => f.type.startsWith("video/") || (isImage() && f.type.startsWith("image/")));
+  const imports = files.filter((f) => f.type.startsWith("video/") || isZip(f) || (isImage() && f.type.startsWith("image/")));
   if (imports.length) importFiles(imports);
   if (!isImage() && state.tab !== "edit") uploadImages(files.filter((f) => f.type.startsWith("image/")));
 });

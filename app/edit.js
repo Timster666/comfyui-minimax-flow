@@ -191,7 +191,7 @@ const EDIT = (() => {
           <button class="ed-ghost" id="edProjBtn" aria-haspopup="menu" aria-expanded="false">Project ${SVG.caret}</button>
           <div class="ed-menu" id="edProjMenu" role="menu" hidden>
             <button role="menuitem" id="edProjSave">${SVG.zip}<span>Export project<small>The timeline, its videos and their reference images, as a .zip</small></span></button>
-            <label role="menuitem">${SVG.open}<span>Import project<small>Opens a .zip and replaces this timeline</small></span>
+            <label role="menuitem">${SVG.open}<span>Import project<small>A project's .zip replaces this timeline. A single video's .zip joins the media panel</small></span>
               <input type="file" accept=".zip,application/zip" id="edProjOpen" hidden></label>
           </div>
         </div>
@@ -232,28 +232,32 @@ const EDIT = (() => {
     } catch (error) { say(error.message); }
   }
   async function importProject(file) {
-    if (E.pieces.length && !(await ask("Import " + file.name + "?", "Its timeline replaces the one you have now. Your videos stay, and the project's videos are added to them.", "Import"))) return;
     pause();
     say("Opening " + file.name + "…");
     const form = new FormData();
     form.append("file", file, file.name);
-    try {
-      const r = await api("POST", "edit/import-project", form);
-      for (const c of r.clips) if (!state.clips.some((x) => x.id === c.id)) state.clips.unshift(c);
-      // Their reference pictures join the Add image library, under the names the prompts now use.
-      for (const i of r.images || []) if (!state.refs.some((x) => x.id === i.id)) state.refs.push(fromImage(i));
-      E.name = r.edit.name; E.ratio = r.edit.ratio; E.muted = r.edit.muted;
-      E.pieces = r.edit.pieces.map((p) => ({ ...p }));
-      E.past = []; E.future = []; E.selected = null; E.preview = null; E.playhead = 0;
-      ed("Ratio").value = E.ratio;
-      vid("a").muted = vid("b").muted = E.muted;
-      new Set(E.pieces.map((p) => p.clip)).forEach(loadStrip);
-      sizeFrame(); draw();
-      const n = r.clips.length;
-      const pics = (r.images || []).length;
-      say(`Opened ${file.name}: ${E.pieces.length} clip${E.pieces.length === 1 ? "" : "s"}; ${n} video${n === 1 ? "" : "s"} added` + (r.same ? `, ${r.same} already here` : "")
-        + (pics || r.sameImages ? `; ${pics} reference image${pics === 1 ? "" : "s"} added` + (r.sameImages ? `, ${r.sameImages} already here` : "") : "") + ".");
-    } catch (error) { say(error.message); }
+    let r;
+    try { r = await api("POST", "import-zip", form); } catch (error) { say(error.message); return; }
+    // Its videos and reference pictures are added either way.
+    importedZip(r);
+    if (!r.edit) {
+      drawMedia();
+      say(`Opened ${file.name}: ` + zipSummary(r) + ". It's in the media panel.");
+      return;
+    }
+    if (E.pieces.length && !(await ask("Use the timeline in " + file.name + "?", "It replaces the timeline you have now. Its videos are in the media panel either way.", "Replace timeline"))) {
+      drawMedia(); drawTimeline();
+      say(`Kept your timeline. From ${file.name}: ` + zipSummary(r) + ".");
+      return;
+    }
+    E.name = r.edit.name; E.ratio = r.edit.ratio; E.muted = r.edit.muted;
+    E.pieces = r.edit.pieces.map((p) => ({ ...p }));
+    E.past = []; E.future = []; E.selected = null; E.preview = null; E.playhead = 0;
+    ed("Ratio").value = E.ratio;
+    vid("a").muted = vid("b").muted = E.muted;
+    new Set(E.pieces.map((p) => p.clip)).forEach(loadStrip);
+    sizeFrame(); draw(); save();
+    say(`Opened ${file.name}: ${E.pieces.length} clip${E.pieces.length === 1 ? "" : "s"}; ` + zipSummary(r) + ".");
   }
   // A yes/no question in the edit's own dialog.
   function ask(title, text, yes) {
