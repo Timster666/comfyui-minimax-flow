@@ -5,6 +5,21 @@ A simple prompt-and-gallery studio for MiniMax H3 videos and MOSS-Image pictures
 Open it from the **MiniMax H3 Vision** button in ComfyUI's sidebar (or View → Open MiniMax H3 Vision).
 It opens full screen over ComfyUI; the × in the top-right corner brings you back.
 
+## Install
+
+In ComfyUI's `custom_nodes` folder:
+
+```bash
+git clone https://github.com/Timster666/comfyui-minimax-h3-vision
+```
+
+then restart ComfyUI. To update later, run `git pull` in that folder (and restart ComfyUI when
+Python files changed). It needs nothing else installed: no other node pack, and no extra Python
+packages beyond ComfyUI's own.
+
+The repository used to be called `comfyui-minimax-flow`; that address still leads here, and a copy
+cloned under the old name keeps working.
+
 ## Video, Image and Edit
 
 The app has three tabs, and it always opens on **Video**.
