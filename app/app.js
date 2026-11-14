@@ -331,6 +331,7 @@ function renderPrompt() {
     ? promptHTML(state.prompt) + "​"
     : `<span class="ph">${isImage() ? "Describe an image, for example: a neon sign that says \"OPEN ALL NIGHT\" in the rain." : "Describe a shot. Type @ to use one of your images."}</span>`;
   if ($("prompt").value !== state.prompt) $("prompt").value = state.prompt;
+  fitPrompt();
   renderMention();
 }
 
@@ -1643,11 +1644,6 @@ async function load(first = true) {
   }
 }
 
-// Only show the Close button when the app runs inside ComfyUI's page.
-if (window.parent !== window) $("closeBtn").hidden = false;
-render();
-load();
-connect();
 
 // Hovering an image in the prompt bar shows it bigger, above it.
 const peek = document.createElement("div");
@@ -1678,47 +1674,72 @@ document.addEventListener("mouseout", (e) => { if (e.target.closest?.(".ref-pic"
 document.addEventListener("dragstart", hidePeek, true);
 document.addEventListener("pointerdown", hidePeek, true);
 
-// The prompt box can be made bigger or smaller from the handle in its top-right corner: dragging up
-// makes it taller, dragging sideways makes it wider (it stays centred). The size lasts for the session.
+// The prompt box's height. By itself it grows with the text, up to half the window, and longer text
+// scrolls. Dragging the handle in its top-right corner sets a height of your own (up makes it taller)
+// and a width (sideways; it stays centred), smaller than the text if you like. They last for the session.
 const PROMPT_SIZE = "mmvision.prompt-size";
-function applyPromptSize(size) {
-  const root = document.documentElement.style;
-  if (size?.width) root.setProperty("--composer-width", size.width + "px");
-  if (size?.height) root.setProperty("--prompt-height", size.height + "px");
-  requestAnimationFrame(() => root.setProperty("--dock-space", $("dock").offsetHeight + 60 + "px"));
+const PROMPT_MIN = 78;
+let promptSize = null;   // {width, height} you dragged to, or null
+try { promptSize = JSON.parse(sessionStorage.getItem(PROMPT_SIZE) || "null"); } catch {}
+function fitPrompt() {
+  const root = document.documentElement.style, mirror = $("mirror");
+  if (promptSize?.width) root.setProperty("--composer-width", promptSize.width + "px");
+  let height = promptSize?.height;
+  if (!height) {
+    root.setProperty("--prompt-box", PROMPT_MIN + "px");   // measure the text at the smallest box
+    height = Math.min(Math.max(PROMPT_MIN, mirror.scrollHeight), Math.round(innerHeight * 0.5));
+  }
+  root.setProperty("--prompt-box", height + "px");
+  mirror.scrollTop = ta.scrollTop;
 }
-try { applyPromptSize(JSON.parse(sessionStorage.getItem(PROMPT_SIZE) || "null")); } catch { applyPromptSize(null); }
+ta.addEventListener("scroll", () => { $("mirror").scrollTop = ta.scrollTop; });
+addEventListener("resize", () => fitPrompt());
 (function promptResizer() {
   const handle = document.createElement("div");
   handle.className = "prompt-resize";
-  handle.title = "Drag to resize the prompt";
+  handle.title = "Drag to resize the prompt. Double-click to let it fit the text again.";
   handle.setAttribute("aria-hidden", "true");
   handle.innerHTML = '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M1 1h10v10M5 1h6v6"/></svg>';
   document.querySelector(".composer").appendChild(handle);
   handle.addEventListener("pointerdown", (e) => {
     e.preventDefault();
     handle.setPointerCapture(e.pointerId);
-    const inner = document.querySelector(".dock-inner"), mirror = $("mirror");
-    const start = { x: e.clientX, y: e.clientY, w: inner.offsetWidth, h: mirror.offsetHeight };
-    let size = null;
+    const inner = document.querySelector(".dock-inner");
+    const start = { x: e.clientX, y: e.clientY, w: inner.offsetWidth, h: document.querySelector(".prompt-wrap").offsetHeight };
+    let moved = false;
     const move = (ev) => {
-      size = {
+      if (!moved && Math.abs(ev.clientX - start.x) + Math.abs(ev.clientY - start.y) < 3) return;
+      moved = true;
+      promptSize = {
         width: Math.round(Math.max(520, Math.min(innerWidth - 64, start.w + 2 * (ev.clientX - start.x)))),
-        height: Math.round(Math.max(78, Math.min(innerHeight * 0.6, start.h - (ev.clientY - start.y)))),
+        height: Math.round(Math.max(PROMPT_MIN - 40, Math.min(innerHeight * 0.75, start.h - (ev.clientY - start.y)))),
       };
-      applyPromptSize(size);
+      fitPrompt();
       if (state.settingsOpen) renderSettings();
     };
     const up = () => {
       handle.removeEventListener("pointermove", move);
       handle.removeEventListener("pointerup", up);
       handle.removeEventListener("pointercancel", up);
-      if (size) try { sessionStorage.setItem(PROMPT_SIZE, JSON.stringify(size)); } catch {}
+      if (moved) try { sessionStorage.setItem(PROMPT_SIZE, JSON.stringify(promptSize)); } catch {}
     };
     handle.addEventListener("pointermove", move);
     handle.addEventListener("pointerup", up);
     handle.addEventListener("pointercancel", up);
   });
+  // Double-click: back to fitting the text (the width you set stays).
+  handle.addEventListener("dblclick", () => {
+    if (promptSize) delete promptSize.height;
+    try { sessionStorage.setItem(PROMPT_SIZE, JSON.stringify(promptSize)); } catch {}
+    fitPrompt();
+  });
   // A longer prompt makes the dock taller too, so the gallery keeps room below its last row.
   new ResizeObserver(() => document.documentElement.style.setProperty("--dock-space", $("dock").offsetHeight + 60 + "px")).observe($("dock"));
 })();
+
+// Start. Last, so everything above is defined.
+// Only show the Close button when the app runs inside ComfyUI's page.
+if (window.parent !== window) $("closeBtn").hidden = false;
+render();
+load();
+connect();
