@@ -5,6 +5,8 @@ A project zip holds:
                     "edit": {name, ratio, muted, pieces: [{id, clip, in, out}]},
                     "clips": [the clip records (prompt and settings), each with "zip_file"]}
     clips/<file>   each video the timeline uses, whole, so it can be trimmed differently later
+    images/<file>  the reference pictures those videos' prompts name (@name), listed in "images"
+                   with their names, so the prompts still find them after an import
 
 No ComfyUI imports, so it can be tested anywhere.
 """
@@ -20,15 +22,40 @@ KIND = "edit-project"
 VERSION = 1
 # What a clip keeps when it travels in a project.
 CLIP_FIELDS = ("id", "kind", "prompt", "model", "profile", "steps", "cfg", "res", "aspect", "len", "width", "height",
-               "seed", "loras", "starred", "created", "imported", "found")
+               "seed", "loras", "starred", "created", "imported", "found", "refs")
+IMAGE_FIELDS = ("id", "name", "file", "added")
+MENTION = re.compile(r"@([A-Za-z0-9_]+)")
+
+
+def refs_of(clip, images):
+    """The reference pictures a clip used: the ones it recorded, else the @names in its prompt (any case)."""
+    by_id = {i["id"]: i for i in images}
+    found = [by_id[r["id"]] for r in clip.get("refs") or [] if r.get("id") in by_id]
+    if found:
+        return found
+    by_name = {i["name"].lower(): i for i in images}
+    out = []
+    for name in MENTION.findall(clip.get("prompt") or ""):
+        image = by_name.get(name.lower())
+        if image and image not in out:
+            out.append(image)
+    return out
+
+
+def rename_mentions(prompt, names):
+    """A prompt with each @old (any case) as @new, for names = {old lower case: new}."""
+    return MENTION.sub(lambda m: "@" + names.get(m.group(1).lower(), m.group(1)), prompt or "")
 
 
 class Bad(Exception):
     """Not a project zip this app can open; the message says why."""
 
 
-def pack(edit, clips, clip_path, out_path):
-    """Write the edit and the videos it uses to out_path (a .zip). clips: id -> clip record."""
+def pack(edit, clips, clip_path, out_path, images=(), image_path=None):
+    """Write the edit, the videos it uses and their reference pictures to out_path (a .zip).
+
+    clips: id -> clip record. images: every image record; image_path(image) is its file.
+    """
     used = []
     for piece in edit.get("pieces") or []:
         if piece["clip"] in clips and piece["clip"] not in used:
@@ -54,12 +81,29 @@ def pack(edit, clips, clip_path, out_path):
                 record = {k: clip[k] for k in CLIP_FIELDS if k in clip}
                 record["zip_file"] = "clips/" + name
                 records.append(record)
+            # The reference pictures of the videos that went in.
+            pictures, files = [], set()
+            for clip_id in [r["id"] for r in records]:
+                for image in refs_of(clips[clip_id], list(images)):
+                    if image["id"] in {p["id"] for p in pictures} or not image_path or not os.path.exists(image_path(image)):
+                        continue
+                    name = os.path.basename(image["file"])
+                    stem, ext = os.path.splitext(name)
+                    n = 2
+                    while name in files:
+                        name = "%s_%d%s" % (stem, n, ext)
+                        n += 1
+                    files.add(name)
+                    z.write(image_path(image), "images/" + name)
+                    picture = {k: image[k] for k in IMAGE_FIELDS if k in image}
+                    picture["zip_file"] = "images/" + name
+                    pictures.append(picture)
             kept = {r["id"] for r in records}
             project = {"app": "MiniMax H3 Vision", "kind": KIND, "version": VERSION,
                        "edit": {"name": edit.get("name") or "Untitled edit", "ratio": edit.get("ratio") or "16:9",
                                 "muted": bool(edit.get("muted")),
                                 "pieces": [p for p in edit.get("pieces") or [] if p["clip"] in kept]},
-                       "clips": records}
+                       "clips": records, "images": pictures}
             z.writestr("project.json", json.dumps(project, indent=1))
         os.replace(temp, out_path)
     except BaseException:
@@ -68,7 +112,7 @@ def pack(edit, clips, clip_path, out_path):
         except OSError:
             pass
         raise
-    return {"clips": len(records), "pieces": len(project["edit"]["pieces"])}
+    return {"clips": len(records), "pieces": len(project["edit"]["pieces"]), "images": len(pictures)}
 
 
 def read(zip_path):
@@ -88,22 +132,63 @@ def read(zip_path):
         raise Bad("This zip isn't a MiniMax H3 Vision edit project.")
     if int(project.get("version", 0)) > VERSION:
         raise Bad("This project was saved by a newer MiniMax H3 Vision. Update the plugin to open it.")
-    for record in project.get("clips") or []:
+    for record in (project.get("clips") or []) + (project.get("images") or []):
         if record.get("zip_file") not in listed:
             raise Bad("The project lists %s, but it isn't in the zip." % record.get("zip_file"))
     return project
 
 
-def unpack(zip_path, existing, clips_dir, clip_path):
-    """Bring a project's videos in. Returns (edit, new clip records, how many were already here).
+def unpack_images(z, project, images, images_dir, image_path):
+    """Bring a project's reference pictures in. Returns (new image records, {old name lower: name here}, how many were here).
+
+    A picture whose id is already here with a file of the same size is the same picture. Others get
+    a new id, and their name, or the name with a number after it when another picture has it.
+    """
+    added, names, same = [], {}, 0
+    by_id = {i["id"]: i for i in images}
+    taken = {i["name"] for i in images}
+    os.makedirs(images_dir, exist_ok=True)
+    for record in project.get("images") or []:
+        info = z.getinfo(record["zip_file"])
+        mine = by_id.get(record.get("id"))
+        if mine and os.path.exists(image_path(mine)) and os.path.getsize(image_path(mine)) == info.file_size:
+            names[record["name"].lower()] = mine["name"]
+            same += 1
+            continue
+        image_id = record["id"] if record.get("id") and record["id"] not in by_id else "i" + uuid.uuid4().hex[:10]
+        ext = os.path.splitext(record["zip_file"])[1].lower() or ".png"
+        file = image_id + ext
+        with z.open(info) as src, open(os.path.join(images_dir, file), "wb") as dst:
+            shutil.copyfileobj(src, dst, 4 << 20)
+        base = re.sub(r"[^A-Za-z0-9_]+", "_", record.get("name") or "image").strip("_")[:16] or "image"
+        name, n = base, 2
+        while name in taken:
+            name, n = "%s%d" % (base, n), n + 1
+        taken.add(name)
+        image = {"id": image_id, "name": name, "file": file, "added": record.get("added") or 0}
+        by_id[image_id] = image
+        names[record["name"].lower()] = name
+        added.append(image)
+    return added, names, same
+
+
+def unpack(zip_path, existing, clips_dir, clip_path, images=(), images_dir=None, image_path=None):
+    """Bring a project's videos and reference pictures in.
+
+    Returns (edit, new clip records, how many videos were already here, new image records, how many
+    pictures were already here).
 
     existing: id -> clip record already in the app. A video whose id is already here with a file of
     the same size is the same video, so it isn't copied again. Others get a new id if theirs is taken.
+    A picture whose name had to change here has its @name changed in the new videos' prompts too.
     """
     project = read(zip_path)
     os.makedirs(clips_dir, exist_ok=True)
     added, same, ids = [], 0, {}
     with zipfile.ZipFile(zip_path) as z:
+        new_images, names, same_images = ([], {}, 0)
+        if images_dir and image_path:
+            new_images, names, same_images = unpack_images(z, project, list(images), images_dir, image_path)
         for record in project.get("clips") or []:
             info = z.getinfo(record["zip_file"])
             mine = existing.get(record.get("id"))
@@ -122,7 +207,10 @@ def unpack(zip_path, existing, clips_dir, clip_path):
             clip_id = record.get("id") if record.get("id") and record.get("id") not in existing else "c" + uuid.uuid4().hex[:10]
             clip = {k: record[k] for k in CLIP_FIELDS if k in record}
             clip.update({"id": clip_id, "kind": "video", "status": "done", "step": record.get("steps", 0), "file": name})
-            clip.setdefault("prompt", "")
+            clip["prompt"] = rename_mentions(clip.get("prompt"), names)
+            pictures = {i["name"].lower(): i for i in list(images) + new_images}
+            clip["refs"] = [{"id": pictures[n.lower()]["id"], "name": pictures[n.lower()]["name"]}
+                            for n in dict.fromkeys(MENTION.findall(clip["prompt"])) if n.lower() in pictures]
             clip.setdefault("starred", False)
             ids[record["id"]] = clip_id
             existing = dict(existing, **{clip_id: clip})
@@ -132,4 +220,4 @@ def unpack(zip_path, existing, clips_dir, clip_path):
             "muted": bool(edit.get("muted")),
             "pieces": [{"id": str(p["id"])[:40], "clip": ids[p["clip"]], "in": float(p["in"]), "out": float(p["out"])}
                        for p in edit.get("pieces") or [] if p.get("clip") in ids]}
-    return edit, added, same
+    return edit, added, same, new_images, same_images
