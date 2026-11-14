@@ -41,11 +41,11 @@ button { cursor: pointer; }
 svg { display: block; }
 
 /* Header */
-.top { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 32px; border-bottom: 1px solid #24262b; }
-.top-left { display: flex; align-items: center; gap: 16px; min-height: 44px; }
-.brand { font-weight: 600; font-size: 18px; letter-spacing: -0.01em; }
+.top { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px; padding: 6px 32px; border-bottom: 1px solid #24262b; position: sticky; top: 0; z-index: 7; background: var(--bg); }
+.top-left { display: flex; align-items: center; gap: 14px; min-height: 36px; }
+.brand { font-weight: 600; font-size: 16px; letter-spacing: -0.01em; }
 .project { color: var(--faint); }
-.back { background: none; border: 0; display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 0; font-weight: 500; }
+.back { background: none; border: 0; display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 0; font-weight: 500; }
 .queue { display: flex; align-items: center; gap: 8px; color: #c9cbd0; }
 .dot { width: 8px; height: 8px; border-radius: 4px; background: #4a4d55; }
 .dot.on { background: var(--accent); }
@@ -231,7 +231,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .ctx-line { height: 1px; background: var(--line-strong); margin: 4px 6px; }
 
 /* Image library pop-up */
-.library { position: absolute; left: 0; bottom: calc(100% + 12px); width: min(820px, calc(100vw - 48px)); height: 560px; background: var(--surface); border: 1px solid var(--raised-2); border-radius: 20px; padding: 12px; display: flex; flex-direction: column; gap: 12px; z-index: 10; }
+.library { position: absolute; left: 0; bottom: calc(100% + 12px); width: min(980px, calc(100vw - 48px)); height: 560px; background: var(--surface); border: 1px solid var(--raised-2); border-radius: 20px; padding: 12px; display: flex; flex-direction: column; gap: 12px; z-index: 10; }
 .lib-top { display: flex; gap: 10px; }
 .lib-search { flex: 1; display: flex; align-items: center; gap: 10px; background: var(--raised); border-radius: 14px; padding: 0 16px; min-height: 48px; color: var(--muted); }
 .lib-search input { flex: 1; min-width: 0; background: transparent; border: 0; outline: none; font-size: 15px; color: var(--text); }
@@ -281,10 +281,38 @@ body.dragging-ref .composer { border-color: var(--line-strong); }
 .confirm-actions { display: flex; justify-content: flex-end; gap: 10px; }
 .confirm-actions .btn { min-width: 110px; padding: 0 18px; }
 
+/* Image library: where the images come from */
+.lib-nav { width: 210px; flex-shrink: 0; display: flex; flex-direction: column; gap: 4px; padding-right: 12px; border-right: 1px solid var(--line); }
+.lib-src { display: flex; align-items: center; gap: 10px; background: transparent; color: var(--muted); border: 0; border-radius: 10px; padding: 0 12px; min-height: 44px; text-align: left; font-weight: 500; }
+.lib-src span:first-of-type { flex: 1; white-space: nowrap; }
+.lib-src:hover { background: var(--raised); color: var(--text); }
+.lib-src.on { background: var(--raised-2); color: var(--text); }
+.lib-count { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.lib-list { width: 280px; }
+.lib-caption { margin: 0; font-size: 13px; line-height: 1.45; color: var(--muted); max-height: 3.2em; overflow: hidden; }
+.link.inline { min-height: 0; font-size: inherit; text-decoration: underline; }
+@media (max-width: 760px) { .lib-nav { width: auto; flex-direction: row; border-right: 0; padding: 0; } }
+
+/* Video / Image tabs */
+.tabs { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); display: flex; gap: 2px; background: #151619; padding: 3px; border-radius: 11px; }
+.tab { display: flex; align-items: center; gap: 8px; background: transparent; color: var(--muted); border: 0; border-radius: 8px; padding: 0 16px; min-height: 30px; font-weight: 500; font-size: 13px; }
+.tab:hover { color: var(--text); }
+.tab.on { background: var(--raised-2); color: var(--text); }
+.tab-busy { min-width: 18px; height: 18px; border-radius: 9px; background: var(--accent); color: var(--bg); font-size: 11px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; padding: 0 5px; }
+@media (max-width: 900px) { .tabs { position: static; transform: none; order: 3; width: 100%; justify-content: center; } }
+
+/* Images */
+.pic img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.take i img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.player.still .pic img { object-fit: contain; }
+.still-fs { position: absolute; right: 14px; bottom: 14px; background: rgba(10,11,13,.78); }
+.aspects.five { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; }
+
 /* App additions */
 .top-right { display: flex; align-items: center; gap: 12px; }
 .fake { font-size: 12px; font-weight: 600; color: var(--accent-text); background: transparent; border: 1px solid rgba(224,162,74,.5); border-radius: 999px; padding: 4px 10px; cursor: pointer; }
-.close-btn { width: 40px; height: 40px; border-radius: 20px; border: 0; background: var(--raised); display: flex; align-items: center; justify-content: center; }
+.close-btn { width: 32px; height: 32px; border-radius: 16px; border: 0; background: var(--raised); display: flex; align-items: center; justify-content: center; }
 .close-btn:hover { background: var(--raised-2); }
 /* A render with a live preview: the moving picture shows, with its progress along the bottom. */
 .busy.has-live { background: linear-gradient(to top, rgba(10,11,13,.88), rgba(10,11,13,0) 60%); justify-content: flex-end; padding-bottom: 14px; }
@@ -298,6 +326,7 @@ body.dragging-ref .composer { border-color: var(--line-strong); }
 
 <header class="top">
   <div class="top-left" id="headLeft"></div>
+  <nav class="tabs" id="tabs" role="tablist" aria-label="What to make"></nav>
   <div class="top-right">
     <div class="queue"><span class="dot" id="queueDot"></span><span id="queueText"></span></div>
     <button class="close-btn" id="closeBtn" data-act="close" aria-label="Close MiniMax H3 Vision" title="Back to ComfyUI" hidden>
@@ -309,7 +338,7 @@ body.dragging-ref .composer { border-color: var(--line-strong); }
 <main class="gallery" id="gallery">
   <div class="gallery-head">
     <div class="filters" id="filters"></div>
-    <label class="per-row">Videos per row
+    <label class="per-row"><span id="perRowLabel">Videos per row</span>
       <input type="range" id="perRow" min="1" max="8" step="1" value="3" data-input="perRow">
       <output id="perRowVal">3</output>
     </label>
@@ -332,7 +361,7 @@ body.dragging-ref .composer { border-color: var(--line-strong); }
         <textarea id="prompt" aria-label="Prompt" spellcheck="false"></textarea>
       </div>
       <div class="bar">
-        <span class="hint">Type @ to use an image</span>
+        <span class="hint" id="hint">Type @ to use an image</span>
         <div class="bar-right">
           <div class="settings" id="settings" hidden></div>
           <button class="pill" id="pill" data-act="toggleSettings" aria-expanded="false"></button>
