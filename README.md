@@ -22,6 +22,10 @@ The app has three tabs, and it always opens on **Video**.
   of another shape get black bars. It downloads by itself when done. Quality is visually lossless:
   CRF 16, and clips already at the export size are passed to the encoder without any conversion.
   The edit is saved as you go.
+  **Project → Export project** saves the timeline and the videos it uses as one `.zip` (in
+  `minimax_flow/exports/`, and it downloads). **Import project** opens such a zip on any machine: its
+  videos join your Video gallery and the Edit tab, and its timeline replaces the current one. Videos
+  that are already there aren't copied twice.
 
 It needs no other custom node pack. Videos run on ComfyUI's own MiniMax H3 nodes plus a few of
 this pack's own (in the node menu under **MiniMax H3 Vision**), and images on ComfyUI's own nodes.
@@ -108,6 +112,7 @@ In ComfyUI's output folder, under `minimax_flow/`:
   and `live_preview.py` (the moving preview)
 - `moss_bridge.py`: image graphs, with MOSS-Image
 - `edit_media.py`: the Edit tab's filmstrips, waveforms and export, with PyAV
+- `edit_project.py`: edit projects as zip files (export and import)
 - `clip_info.py`: the prompt and settings saved in each file, and reading them back on import
 - `comfy_link.py`: sending jobs to ComfyUI's queue, following and stopping them
 - `web/minimax_flow_launcher.js`: the sidebar button

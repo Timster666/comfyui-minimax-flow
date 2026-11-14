@@ -25,7 +25,7 @@ import uuid
 
 from aiohttp import web
 
-from . import clip_info, comfy_link, edit_media, h3_graph, moss_bridge
+from . import clip_info, comfy_link, edit_media, edit_project, h3_graph, moss_bridge
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 APP_DIR = os.path.join(HERE, "app")
@@ -677,6 +677,73 @@ async def start_export(request):
     return web.json_response({"job": job, "file": file, "subfolder": ROOT + "/exports"})
 
 
+def free_name(folder, stem, ext):
+    file, n = stem + ext, 2
+    while os.path.exists(os.path.join(folder, file)):
+        file = "%s_%d%s" % (stem, n, ext)
+        n += 1
+    return file
+
+
+async def export_project(request):
+    """The edit and the videos it uses as one zip in minimax_flow/exports, to keep or to open elsewhere."""
+    async with _lock:
+        data = read_project()
+    if not data["edit"]["pieces"]:
+        raise web.HTTPBadRequest(text="The edit is empty.")
+    stem = re.sub(r"[^a-z0-9]+", "_", data["edit"]["name"].lower()).strip("_")[:60] or "edit"
+    folder = root_dir("exports")
+    file = free_name(folder, stem + "_project", ".zip")
+    clips = {c["id"]: c for c in data["clips"] if c.get("kind", "video") == "video" and c.get("file")}
+    try:
+        counts = await asyncio.to_thread(edit_project.pack, data["edit"], clips, clip_path, os.path.join(folder, file))
+    except Exception as error:
+        LOG.exception("MiniMax H3 Vision couldn't save the edit project")
+        raise web.HTTPBadRequest(text="Couldn't save the project: %s" % error)
+    return web.json_response(dict(counts, file=file, subfolder=ROOT + "/exports"))
+
+
+async def import_project(request):
+    """Open a project zip: its videos join the app (Video gallery and Edit tab), and its timeline replaces the edit."""
+    reader = await request.multipart()
+    part = await reader.next()
+    while part is not None and not part.filename:
+        part = await reader.next()
+    if part is None:
+        raise web.HTTPBadRequest(text="No file came with the import.")
+    temp = root_dir("exports", ".project_%s.zip" % uuid.uuid4().hex[:8])
+    try:
+        with open(temp, "wb") as f:
+            while True:
+                chunk = await part.read_chunk(4 << 20)
+                if not chunk:
+                    break
+                f.write(chunk)
+        async with _lock:
+            data = read_project()
+            existing = {c["id"]: c for c in data["clips"]}
+            try:
+                edit, added, same = await asyncio.to_thread(edit_project.unpack, temp, existing, root_dir("clips"), clip_path)
+            except edit_project.Bad as error:
+                raise web.HTTPBadRequest(text=str(error))
+            now = time.time()
+            for i, clip in enumerate(added):
+                clip["subfolder"] = ROOT + "/clips"
+                clip["imported"] = part.filename
+                clip["created"] = now - i * 0.001   # newest first, so they are easy to find
+            data["clips"] = added + data["clips"]
+            data["edit"] = edit
+            write_project(data)
+    finally:
+        try:
+            os.remove(temp)
+        except OSError:
+            pass
+    for clip in added:
+        broadcast(clip)
+    return web.json_response({"edit": edit, "clips": added, "same": same})
+
+
 async def cancel_export(request):
     job = _exports.get(request.match_info["job"])
     if job:
@@ -699,6 +766,8 @@ ROUTES = (
     ("GET", "/mmflow/api/strips/{id}", clip_strip),
     ("POST", "/mmflow/api/export", start_export),
     ("DELETE", "/mmflow/api/export/{job}", cancel_export),
+    ("POST", "/mmflow/api/edit/export-project", export_project),
+    ("POST", "/mmflow/api/edit/import-project", import_project),
 )
 
 
