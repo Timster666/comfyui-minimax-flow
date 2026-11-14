@@ -699,7 +699,8 @@ function renderClipSide(c) {
   $("clipSide").innerHTML = `
     <div class="field">
       <span class="label">Prompt</span>
-      <p class="clip-prompt">${promptHTML(c.prompt)}</p>
+      <div class="prompt-box"><p class="clip-prompt">${promptHTML(c.prompt)}</p>
+        <button class="copy prompt-copy" data-act="copyPrompt" aria-label="Copy the prompt" title="Copy the prompt">${ICON.copy}</button></div>
     </div>
     <dl class="facts">
       <dt>Model</dt><dd>${esc(c.model)}</dd>
@@ -725,7 +726,8 @@ function renderImageSide(c) {
   $("clipSide").innerHTML = `
     <div class="field">
       <span class="label">Prompt</span>
-      <p class="clip-prompt">${esc(c.prompt)}</p>
+      <div class="prompt-box"><p class="clip-prompt">${esc(c.prompt)}</p>
+        <button class="copy prompt-copy" data-act="copyPrompt" aria-label="Copy the prompt" title="Copy the prompt">${ICON.copy}</button></div>
     </div>
     <dl class="facts">
       <dt>Model</dt><dd>${esc(c.model)}</dd>
@@ -1181,6 +1183,11 @@ const ACT = {
     if (isFull()) document.exitFullscreen();
     else $("clipView").requestFullscreen?.().catch(() => say("Full screen isn't available here."));
   },
+  copyPrompt: () => {
+    const c = clipById(state.openId);
+    navigator.clipboard?.writeText(c.prompt || "").catch(() => {});
+    say("Prompt copied.");
+  },
   copySeed: () => {
     const c = clipById(state.openId);
     navigator.clipboard?.writeText(String(c.seed)).catch(() => {});
@@ -1618,11 +1625,17 @@ async function load(first = true) {
         if (!T.aspects[s.aspect]) s.aspect = tab === "image" ? "1:1" : "16:9";
         if (tab === "image" && !(s.cfg >= OPT.image.cfg.min && s.cfg <= OPT.image.cfg.max)) s.cfg = m.cfg;
       }
-      // Every time the app opens, the Video tab starts on HyperFlow (when installed), 5 seconds and 0.6 MP.
-      const v = state.videoSettings, flow = OPT.models.find((m) => m.id === "hyperflow");
-      if (flow) { v.model = flow.name; v.steps = flow.steps; }
-      v.len = 5;
-      v.res = 0.6;
+      // The first time the app opens in this browser tab, the Video tab starts on HyperFlow (when
+      // installed), 5 seconds and 0.6 MP. After that (a reload, closing and opening it again) it keeps
+      // the settings you had.
+      let opened = false;
+      try { opened = sessionStorage.getItem("mmvision.opened") === "1"; sessionStorage.setItem("mmvision.opened", "1"); } catch {}
+      if (!opened) {
+        const v = state.videoSettings, flow = OPT.models.find((m) => m.id === "hyperflow");
+        if (flow) { v.model = flow.name; v.steps = flow.steps; }
+        v.len = 5;
+        v.res = 0.6;
+      }
       EDIT.load(data.edit);
       state.tab = "video";   // the app always opens on the Video tab
       state.drafts = { video: ui.prompt || "", image: ui.imagePrompt || "" };

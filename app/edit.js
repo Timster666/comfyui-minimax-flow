@@ -213,6 +213,30 @@ const EDIT = (() => {
     ed("Hide").title = E.hideAdded ? "Show the videos that are already in the edit" : "Hide the videos that are already in the edit";
   }
 
+  // Pick a video in the media pool: it plays on its own in the player. null goes back to the edit.
+  function pickMedia(id) {
+    pause();
+    E.preview = id;
+    E.previewTime = 0;
+    // The highlight changes in place: redrawing the tiles here would swallow a double-click.
+    const grid = ed("Media");
+    grid.querySelectorAll(".ed-mtile").forEach((t) => t.classList.toggle("on", t.dataset.clip === id));
+    grid.querySelector(".ed-mtile.on")?.scrollIntoView({ block: "nearest" });
+    showFrame();
+    if (id) play();
+  }
+  // Arrow keys move through the media pool (up and down by a row); Enter adds the video; Esc lets go.
+  function mediaKey(k) {
+    const ids = [...ed("Media").querySelectorAll(".ed-mtile")].map((t) => t.dataset.clip);
+    const at = ids.indexOf(E.preview);
+    if (at < 0) return false;
+    const step = { arrowleft: -1, arrowright: 1, arrowup: -E.perRow, arrowdown: E.perRow }[k];
+    if (step) { const next = ids[Math.max(0, Math.min(ids.length - 1, at + step))]; if (next !== E.preview) pickMedia(next); return true; }
+    if (k === "enter") { const id = E.preview; pickMedia(null); addClip(id, E.pieces.length); return true; }
+    if (k === "escape") { pickMedia(null); return true; }
+    return false;
+  }
+
   function addClip(id, index) {
     const c = mediaById(id);
     if (!c) return;
@@ -481,13 +505,8 @@ const EDIT = (() => {
       if (add) { addClip(add.dataset.edadd, E.pieces.length); return; }
       const tile = e.target.closest(".ed-mtile");
       if (!tile) return;
-      // A click shows the video on its own in the player; click it again (or the timeline) to go back to the edit.
-      pause();
-      E.preview = E.preview === tile.dataset.clip ? null : tile.dataset.clip;
-      E.previewTime = 0;
-      // The highlight changes in place: redrawing the tiles here would swallow a double-click.
-      grid.querySelectorAll(".ed-mtile").forEach((t) => t.classList.toggle("on", t.dataset.clip === E.preview));
-      showFrame();
+      // A click plays the video on its own in the player; click it again (or the timeline) to go back to the edit.
+      pickMedia(E.preview === tile.dataset.clip ? null : tile.dataset.clip);
     });
     grid.addEventListener("dblclick", (e) => { const tile = e.target.closest(".ed-mtile"); if (tile) addClip(tile.dataset.clip, E.pieces.length); });
     grid.addEventListener("dragstart", (e) => {
@@ -612,6 +631,7 @@ const EDIT = (() => {
   function onKey(e) {
     if (!E.visible || state.view !== "gallery" || e.target.closest("input, select, textarea") || !ed("Export").hidden) return;
     const k = e.key.toLowerCase();
+    if (E.preview && !e.metaKey && !e.ctrlKey && !e.altKey && mediaKey(k)) { e.preventDefault(); return; }
     if (k === " ") { e.preventDefault(); toggle(); }
     else if (k === "s" && !e.metaKey && !e.ctrlKey) split();
     else if (k === "backspace" || k === "delete") { e.preventDefault(); del(); }
