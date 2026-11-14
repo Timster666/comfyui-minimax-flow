@@ -202,7 +202,7 @@ const EDIT = (() => {
         <div class="ed-thumb"><video src="${clipUrl(c)}#t=0.5" muted playsinline preload="metadata"></video></div>
         ${used.has(c.id) ? '<span class="ed-added">Added</span>' : ""}
         <span class="ed-dur">${short(durOf(c))}</span>
-        <button class="ed-add" data-edadd="${c.id}" title="Add to the end of the edit" aria-label="Add to the edit">${SVG.plus}</button>
+        <button class="ed-add" data-edadd="${c.id}" title="Add at the playhead (between the clips nearest it)" aria-label="Add to the edit">${SVG.plus}</button>
         <div class="ed-mname">${esc(c.prompt || c.file)}</div>
       </div>`).join("")
       : `<div class="ed-media-empty">${!all.length ? "No videos yet. Make some in the Video tab."
@@ -232,7 +232,7 @@ const EDIT = (() => {
     if (at < 0) return false;
     const step = { arrowleft: -1, arrowright: 1, arrowup: -E.perRow, arrowdown: E.perRow }[k];
     if (step) { const next = ids[Math.max(0, Math.min(ids.length - 1, at + step))]; if (next !== E.preview) pickMedia(next); return true; }
-    if (k === "enter") { const id = E.preview; pickMedia(null); addClip(id, E.pieces.length); return true; }
+    if (k === "enter") { const id = E.preview; pickMedia(null); addClip(id, gapAtHead()); return true; }
     if (k === "escape") { pickMedia(null); return true; }
     return false;
   }
@@ -455,6 +455,9 @@ const EDIT = (() => {
     if (E.preview) { E.preview = null; drawMedia(); }
     placeHead(); showFrame();
   }
+  // A new clip goes into the gap between clips nearest the playhead (by +, double-click or Enter),
+  // or nearest the pointer (by dragging).
+  const gapAtHead = () => dropIndex(E.playhead);
   const dropIndex = (t) => { let s = 0; for (let i = 0; i < E.pieces.length; i++) { const l = len(E.pieces[i]); if (t < s + l / 2) return i; s += l; } return E.pieces.length; };
   function showInsert(index) {
     let line = ed("Insert");
@@ -502,13 +505,16 @@ const EDIT = (() => {
     });
     grid.addEventListener("click", (e) => {
       const add = e.target.closest("[data-edadd]");
-      if (add) { addClip(add.dataset.edadd, E.pieces.length); return; }
+      if (add) { hideInsert(); addClip(add.dataset.edadd, gapAtHead()); return; }
       const tile = e.target.closest(".ed-mtile");
       if (!tile) return;
       // A click plays the video on its own in the player; click it again (or the timeline) to go back to the edit.
       pickMedia(E.preview === tile.dataset.clip ? null : tile.dataset.clip);
     });
-    grid.addEventListener("dblclick", (e) => { const tile = e.target.closest(".ed-mtile"); if (tile) addClip(tile.dataset.clip, E.pieces.length); });
+    grid.addEventListener("dblclick", (e) => { const tile = e.target.closest(".ed-mtile"); if (tile) addClip(tile.dataset.clip, gapAtHead()); });
+    // Hovering + shows where the video will go.
+    grid.addEventListener("pointerover", (e) => { if (e.target.closest(".ed-add") && E.pieces.length) showInsert(gapAtHead()); });
+    grid.addEventListener("pointerout", (e) => { if (e.target.closest(".ed-add")) hideInsert(); });
     grid.addEventListener("dragstart", (e) => {
       const tile = e.target.closest(".ed-mtile");
       if (!tile) return;

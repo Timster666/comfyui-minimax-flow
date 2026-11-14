@@ -15,7 +15,8 @@ The app has three tabs, and it always opens on **Video**.
   tab's **Add image** pop-up lists all of them under **Generated images**.
 - **Edit** puts your videos together, like a very simple CapCut: your videos on the left, a player
   on the right and one timeline track below. Add a video with its **+**, by double-clicking it or
-  by dragging it onto the timeline; drag clips to move them and their edges to trim them. **S**
+  with Enter (it goes into the gap between clips nearest the playhead), or drag it onto the timeline
+  (it goes into the gap nearest where you drop it); drag clips to move them and their edges to trim them. **S**
   splits at the playhead, **⌫** deletes, **⌘Z** undoes, Space plays. **Export** saves one MP4
   (H.264 and AAC, 24 fps) in `minimax_flow/exports/`, at the videos' own size, 720p or 1080p; videos
   of another shape get black bars. It downloads by itself when done. Quality is visually lossless:
