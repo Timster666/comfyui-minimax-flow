@@ -104,7 +104,7 @@ def models():
     return rows
 
 
-def build_graph(clip):
+def build_graph(clip, name=None):
     """The ComfyUI graph for one MiniMax H3 Vision image.
 
     clip: the image as the app keeps it (prompt, profile = checkpoint file, steps, cfg, width, height, seed, loras).
@@ -130,7 +130,7 @@ def build_graph(clip):
         "sampler_name": p["sampler"], "scheduler": p["scheduler"], "positive": ["4", 0], "negative": ["5", 0],
         "latent_image": ["6", 0], "denoise": 1.0}}
     graph["8"] = {"class_type": "VAEDecode", "inputs": {"samples": [SAMPLER_NODE, 0], "vae": ["3", 0]}}
-    graph[SAVE_NODE] = {"class_type": "SaveImage", "inputs": {"images": ["8", 0], "filename_prefix": "%s/stills/%s" % (ROOT, clip["id"])}}
+    graph[SAVE_NODE] = {"class_type": "SaveImage", "inputs": {"images": ["8", 0], "filename_prefix": "%s/stills/%s" % (ROOT, name or clip["id"])}}
     return graph
 
 

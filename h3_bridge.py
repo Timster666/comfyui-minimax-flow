@@ -9,6 +9,8 @@ Images in the prompt become cast members: "@detective" is a picture named detect
 editor writes the prompt H3 expects for references (<Subject 1> in <Picture 1>, and so on).
 """
 
+import fnmatch
+import os
 import sys
 
 ROOT = "minimax_flow"
@@ -78,13 +80,30 @@ def models(files=None):
     return rows
 
 
+def profile_for(unet, lora=None):
+    """The checkpoint family (a model id) that uses this checkpoint file, and this family LoRA (the turbo one) or none."""
+    project, _ = editor()
+    base = lambda f: os.path.basename(str(f or "")).lower()
+    rows = []
+    for name, profile in getattr(project, "PROFILES", {}).items():
+        files = []
+        for key in ("unet", "unet_text"):   # the ref2va checkpoint, and the fl2va one for text-only clips
+            names = profile.get(key) or []
+            files += [names] if isinstance(names, str) else names
+        if any(fnmatch.fnmatch(base(unet), base(f)) for f in files):
+            rows.append((name, (profile.get("lora") or [None])[0]))
+    match = next((r for r in rows if lora and base(r[1]) == base(lora)), None)
+    match = match or next((r for r in rows if not r[1]), None) or (rows[0] if rows else None)
+    return match[0] if match else None
+
+
 def frames(seconds):
     """How many frames a clip of this length really gets: H3 takes lengths in steps of 17 frames."""
     project, _ = editor()
     return project.snap_frames(seconds)
 
 
-def build_graph(clip, images, files=None):
+def build_graph(clip, images, files=None, name=None):
     """The ComfyUI graph for one MiniMax H3 Vision clip.
 
     clip: the clip as MiniMax H3 Vision keeps it (prompt, profile, steps, width, height, len, seed, loras).
@@ -116,7 +135,7 @@ def build_graph(clip, images, files=None):
         raise Missing("This version of the H3 editor builds its steps differently; MiniMax H3 Vision needs an update.")
     steps_node["steps"] = int(clip["steps"])
     graph["9"]["inputs"]["folder"] = ROOT + "/preview"
-    graph[SAVE_NODE]["inputs"]["filename_prefix"] = "%s/clips/%s" % (ROOT, clip["id"])
+    graph[SAVE_NODE]["inputs"]["filename_prefix"] = "%s/clips/%s" % (ROOT, name or clip["id"])
     # The editor keeps a take's first and last frames for extending it later; MiniMax H3 Vision doesn't extend yet.
     graph.pop("20", None)
     return api.own_nodes(graph)
@@ -127,10 +146,23 @@ def _mentions(text):
     return re.findall(r"@([A-Za-z0-9_]+)", text)
 
 
-async def queue(graph, client_id=None):
-    """Send a graph to ComfyUI's queue. Returns its prompt id; raises with ComfyUI's reason when refused."""
+async def queue(graph, client_id=None, extra_data=None):
+    """Send a graph to ComfyUI's queue. Returns its prompt id; raises with ComfyUI's reason when refused.
+
+    extra_data (ComfyUI's, such as extra_pnginfo for the saved file's metadata) needs our own call to
+    /prompt, since the editor's queue_prompt doesn't pass it on; it keeps the editor's GGUF check.
+    """
     _, api = editor()
-    return await api.queue_prompt(graph, client_id)
+    if not extra_data:
+        return await api.queue_prompt(graph, client_id)
+    import sys
+    from . import comfy_link
+
+    nodes = sys.modules.get(api.__name__.rsplit(".", 1)[0] + ".nodes")
+    missing = getattr(nodes, "HYPERFLOW_MISSING", None)
+    if missing and any(str(n.get("inputs", {}).get("unet_name", "")).endswith(".gguf") for n in graph.values()):
+        raise RuntimeError(missing)
+    return await comfy_link.queue_prompt(graph, extra_data, client_id)
 
 
 def queue_state():
