@@ -105,6 +105,8 @@ PROFILES = {
 # A scheduler the editor makes itself: the beta schedule with these two numbers, built with ComfyUI's own node.
 BETA57 = "beta57"
 BETA57_SHAPE = (0.5, 0.7)
+# HyperFlow samples on its own two-time schedule; there's no scheduler to choose for it.
+HYPERFLOW_SCHEDULE = "hyperflow"
 
 
 class Missing(Exception):
@@ -174,9 +176,11 @@ def models(files=None):
         steps = int(profile["steps"])
         if is_hyperflow(unet):
             # HyperFlow has a schedule for 4, 6 and 8 steps only.
-            rows.append({"id": name, "name": profile["title"], "steps": steps, "minSteps": 4, "maxSteps": 8, "stepSize": 2})
+            rows.append({"id": name, "name": profile["title"], "steps": steps, "minSteps": 4, "maxSteps": 8, "stepSize": 2,
+                         "sampler": profile["sampler"], "scheduler": HYPERFLOW_SCHEDULE})
         else:
             rows.append({"id": name, "name": profile["title"], "steps": steps, "minSteps": 1,
+                         "sampler": profile["sampler"], "scheduler": profile.get("scheduler") or "simple",
                          "maxSteps": 40 if steps >= 12 else 16, "stepSize": 1})
     return rows
 
@@ -266,8 +270,8 @@ def build_graph(clip, images, files=None, name=None):
         "4": {"class_type": "VAELoader", "inputs": {"vae_name": found["audio_vae"]}},
         "5": {"class_type": "MiniMaxH3SigmaShift", "inputs": {"model": ["1", 0], "shift_video": SHIFT_VIDEO, "shift_audio": SHIFT_AUDIO}},
         "9": {"class_type": "MMVisionLivePreview", "inputs": {"model": ["5", 0], "audio_vae": ["4", 0], "folder": ROOT + "/preview"}},
-        "11": {"class_type": "KSamplerSelect", "inputs": {"sampler_name": profile["sampler"]}},
-        "12": sigmas_node(profile.get("scheduler"), steps),
+        "11": {"class_type": "KSamplerSelect", "inputs": {"sampler_name": clip.get("sampler") or profile["sampler"]}},
+        "12": sigmas_node(clip.get("scheduler") or profile.get("scheduler"), steps),
         "13": {"class_type": "BasicGuider", "inputs": {"model": ["9", 0], "conditioning": ["10", 0]}},
         "14": {"class_type": "RandomNoise", "inputs": {"noise_seed": int(clip["seed"])}},
         "15": {"class_type": "SamplerCustomAdvanced", "inputs": {

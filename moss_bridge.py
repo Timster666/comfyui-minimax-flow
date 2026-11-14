@@ -100,6 +100,7 @@ def models():
             name += " (turbo)"
         p = preset(file)
         rows.append({"id": file, "name": name, "file": file, "steps": p["steps"], "minSteps": 1, "maxSteps": 80,
+                     "sampler": p["sampler"], "scheduler": p["scheduler"], "negative": p["negative"],
                      "stepSize": 1, "cfg": p["cfg"]})
     return rows
 
@@ -116,7 +117,7 @@ def build_graph(clip, name=None):
         "2": {"class_type": "CLIPLoader", "inputs": {"clip_name": encoder, "type": "moss_image", "device": "default"}},
         "3": {"class_type": "VAELoader", "inputs": {"vae_name": vae}},
         "4": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["2", 0], "text": clip["prompt"]}},
-        "5": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["2", 0], "text": p["negative"]}},
+        "5": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["2", 0], "text": p["negative"] if clip.get("negative") is None else clip["negative"]}},
         "6": {"class_type": "EmptyFlux2LatentImage", "inputs": {"width": int(clip["width"]), "height": int(clip["height"]), "batch_size": 1}},
     }
     model = ["1", 0]
@@ -127,7 +128,7 @@ def build_graph(clip, name=None):
         model = [key, 0]
     graph[SAMPLER_NODE] = {"class_type": "KSampler", "inputs": {
         "model": model, "seed": int(clip["seed"]), "steps": int(clip["steps"]), "cfg": float(clip["cfg"]),
-        "sampler_name": p["sampler"], "scheduler": p["scheduler"], "positive": ["4", 0], "negative": ["5", 0],
+        "sampler_name": clip.get("sampler") or p["sampler"], "scheduler": clip.get("scheduler") or p["scheduler"], "positive": ["4", 0], "negative": ["5", 0],
         "latent_image": ["6", 0], "denoise": 1.0}}
     graph["8"] = {"class_type": "VAEDecode", "inputs": {"samples": [SAMPLER_NODE, 0], "vae": ["3", 0]}}
     graph[SAVE_NODE] = {"class_type": "SaveImage", "inputs": {"images": ["8", 0], "filename_prefix": "%s/stills/%s" % (ROOT, name or clip["id"])}}
