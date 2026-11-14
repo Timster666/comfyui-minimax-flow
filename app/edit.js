@@ -88,6 +88,9 @@ const EDIT = (() => {
     zoomIn: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M8 11h6M11 8v6M20 20l-3.5-3.5"/></svg>',
     sound: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 9v6h4l5 4V5L8 9z"/><path d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"/></svg>',
     mute: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 9v6h4l5 4V5L8 9z"/><path d="m17 9 5 6M22 9l-5 6"/></svg>',
+    caret: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m6 9 6 6 6-6"/></svg>',
+    zip: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M12 12v6M9 15l3 3 3-3"/></svg>',
+    open: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M12 16v-5M9.5 13.5 12 11l2.5 2.5"/></svg>',
     exp: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 3v12M7 8l5-5 5 5M5 21h14"/></svg>',
   };
 
@@ -147,6 +150,11 @@ const EDIT = (() => {
       </section>
       <div class="ed-scrim" id="edExport" hidden>
         <div class="ed-dialog" role="dialog" aria-label="Export">
+          <div id="edAsk" hidden>
+            <h2 id="edAskTitle"></h2>
+            <div class="ed-summary" id="edAskText"></div>
+            <div class="ed-row"><button class="ed-btn" id="edAskNo">Cancel</button><button class="ed-btn primary" id="edAskYes"></button></div>
+          </div>
           <div id="edExForm">
             <h2>Export</h2>
             <div class="ed-field"><label for="edExName">File name</label><input type="text" id="edExName" spellcheck="false"></div>
@@ -179,12 +187,81 @@ const EDIT = (() => {
     if (!E.visible) return;
     if (!box.firstChild) {
       box.innerHTML = `<input class="ed-name" id="edName" aria-label="Name of the edit" spellcheck="false">
+        <div class="ed-proj">
+          <button class="ed-ghost" id="edProjBtn" aria-haspopup="menu" aria-expanded="false">Project ${SVG.caret}</button>
+          <div class="ed-menu" id="edProjMenu" role="menu" hidden>
+            <button role="menuitem" id="edProjSave">${SVG.zip}<span>Export project<small>The timeline and its videos, as a .zip</small></span></button>
+            <label role="menuitem">${SVG.open}<span>Import project<small>Opens a .zip and replaces this timeline</small></span>
+              <input type="file" accept=".zip,application/zip" id="edProjOpen" hidden></label>
+          </div>
+        </div>
         <button class="ed-export" id="edExportBtn">${SVG.exp}Export</button>`;
       ed("Name").addEventListener("input", (e) => { E.name = e.target.value; save(); });
       ed("ExportBtn").addEventListener("click", openExport);
+      ed("ProjBtn").addEventListener("click", (e) => { e.stopPropagation(); projectMenu(ed("ProjMenu").hidden); });
+      ed("ProjSave").addEventListener("click", () => { projectMenu(false); exportProject(); });
+      ed("ProjOpen").addEventListener("change", (e) => { projectMenu(false); const f = e.target.files[0]; e.target.value = ""; if (f) importProject(f); });
+      document.addEventListener("pointerdown", (e) => { if (!e.target.closest(".ed-proj")) projectMenu(false); });
     }
     if (document.activeElement !== ed("Name")) ed("Name").value = E.name;
     ed("ExportBtn").disabled = !E.pieces.length;
+    ed("ProjSave").disabled = !E.pieces.length;
+  }
+  function projectMenu(open) {
+    if (!ed("ProjMenu")) return;
+    ed("ProjMenu").hidden = !open;
+    ed("ProjBtn").setAttribute("aria-expanded", open);
+  }
+
+  /* ---------------- projects: the timeline and its videos as one zip ---------------- */
+  function download(url, name) {
+    const a = document.createElement("a");
+    a.href = url; a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+  }
+  async function exportProject() {
+    if (!E.pieces.length) return;
+    pause();
+    clearTimeout(saveTimer);
+    try { await api("PUT", "edit", { name: E.name, pieces: E.pieces, ratio: E.ratio, muted: E.muted }); } catch {}
+    say("Saving the project…");
+    try {
+      const r = await api("POST", "edit/export-project", {});
+      download(fileUrl(r.subfolder, r.file), r.file);
+      say(`Project saved: ${r.pieces} clip${r.pieces === 1 ? "" : "s"} and ${r.clips} video${r.clips === 1 ? "" : "s"}, in ${r.subfolder}/${r.file}.`);
+    } catch (error) { say(error.message); }
+  }
+  async function importProject(file) {
+    if (E.pieces.length && !(await ask("Import " + file.name + "?", "Its timeline replaces the one you have now. Your videos stay, and the project's videos are added to them.", "Import"))) return;
+    pause();
+    say("Opening " + file.name + "…");
+    const form = new FormData();
+    form.append("file", file, file.name);
+    try {
+      const r = await api("POST", "edit/import-project", form);
+      for (const c of r.clips) if (!state.clips.some((x) => x.id === c.id)) state.clips.unshift(c);
+      E.name = r.edit.name; E.ratio = r.edit.ratio; E.muted = r.edit.muted;
+      E.pieces = r.edit.pieces.map((p) => ({ ...p }));
+      E.past = []; E.future = []; E.selected = null; E.preview = null; E.playhead = 0;
+      ed("Ratio").value = E.ratio;
+      vid("a").muted = vid("b").muted = E.muted;
+      new Set(E.pieces.map((p) => p.clip)).forEach(loadStrip);
+      sizeFrame(); draw();
+      const n = r.clips.length;
+      say(`Opened ${file.name}: ${E.pieces.length} clip${E.pieces.length === 1 ? "" : "s"}; ${n} video${n === 1 ? "" : "s"} added` + (r.same ? `, ${r.same} already here` : "") + ".");
+    } catch (error) { say(error.message); }
+  }
+  // A yes/no question in the edit's own dialog.
+  function ask(title, text, yes) {
+    return new Promise((done) => {
+      ed("AskTitle").textContent = title; ed("AskText").textContent = text; ed("AskYes").textContent = yes;
+      ed("ExForm").hidden = ed("ExRun").hidden = ed("ExDone").hidden = true;
+      ed("Ask").hidden = false; ed("Export").hidden = false;
+      const finish = (answer) => { ed("Ask").hidden = true; ed("Export").hidden = true; ed("AskYes").onclick = ed("AskNo").onclick = null; done(answer); };
+      ed("AskYes").onclick = () => finish(true);
+      ed("AskNo").onclick = () => finish(false);
+      ed("AskYes").focus();
+    });
   }
 
   /* ---------------- media panel ---------------- */
@@ -576,6 +653,7 @@ const EDIT = (() => {
     ed("ExName").addEventListener("keydown", (e) => { if (e.key === "Enter") runExport(); });
     ed("ExCancel").addEventListener("click", () => { if (E.exportJob) api("DELETE", "export/" + E.exportJob).catch(() => {}); });
     ed("Export").addEventListener("click", (e) => {
+      if (!ed("Ask").hidden) return;
       if (e.target.closest("[data-edclose]") || (e.target === ed("Export") && !E.exportJob)) ed("Export").hidden = true;
     });
 

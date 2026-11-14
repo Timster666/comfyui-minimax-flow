@@ -344,6 +344,15 @@ body.dragging-ref .composer { border-color: var(--line-strong); }
 .edit-head { display: flex; align-items: center; gap: 10px; }
 .ed-name { background: transparent; border: 1px solid transparent; border-radius: 8px; padding: 4px 8px; color: var(--text-soft); width: 180px; text-align: right; }
 .ed-name:hover, .ed-name:focus { border-color: var(--line-strong); outline: none; text-align: left; }
+.ed-proj { position: relative; }
+.ed-ghost { display: flex; align-items: center; gap: 6px; background: transparent; border: 1px solid var(--line-strong); border-radius: 9px; padding: 0 12px; min-height: 34px; font-weight: 500; color: var(--text-soft); }
+.ed-ghost:hover { background: var(--raised); }
+.ed-menu { position: absolute; right: 0; top: calc(100% + 6px); width: 290px; background: var(--raised); border: 1px solid var(--line-strong); border-radius: 12px; padding: 6px; z-index: 30; box-shadow: 0 16px 40px rgba(0,0,0,.45); }
+.ed-menu button, .ed-menu label { display: flex; align-items: flex-start; gap: 10px; width: 100%; background: transparent; border: 0; border-radius: 8px; padding: 9px 10px; text-align: left; font-weight: 500; cursor: pointer; color: var(--text); }
+.ed-menu button:hover:not(:disabled), .ed-menu label:hover { background: var(--raised-2); }
+.ed-menu button:disabled { opacity: .45; cursor: default; }
+.ed-menu svg { flex: none; margin-top: 1px; color: var(--muted); }
+.ed-menu small { display: block; font-weight: 400; font-size: 12px; color: var(--faint); margin-top: 2px; }
 .ed-export { display: flex; align-items: center; gap: 8px; background: var(--accent); color: #1a1408; border: 0; border-radius: 9px; padding: 0 16px; min-height: 34px; font-weight: 600; }
 .ed-export:disabled { opacity: .45; cursor: default; }
 .ed-upper { display: grid; grid-template-columns: minmax(340px, 40%) 1fr; min-height: 0; border-bottom: 1px solid #24262b; }
