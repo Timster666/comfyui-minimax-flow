@@ -42,8 +42,8 @@ const state = {
   attached: [],              // ids of the images in the prompt bar
   library: { open: false, source: "uploads", selected: null, selectedGen: null, query: "", sort: "newest" },
   clips: [],
-  tab: "video",              // "video" | "image": which tab the gallery, prompt and settings show
-  drafts: { video: "", image: "" },   // each tab keeps its own prompt
+  tab: "video",              // "video" | "image" | "edit": "edit" is the editor (edit.js), the others the gallery and prompt
+  drafts: { video: "", image: "", edit: "" },   // each tab keeps its own prompt
   videoSettings: { model: "HyperFlow H3 Flash", steps: 6, res: 0.6, aspect: "16:9", len: 5, seedMode: "random", seed: 48213, loras: [] },
   imageSettings: { model: "MOSS-Image SFT (INT8)", steps: 50, cfg: 3.0, res: 1.0, aspect: "1:1", seedMode: "random", seed: 48213, loras: [] },
   settingsOpen: false,
@@ -120,6 +120,7 @@ const ICON = {
   reuse: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 12a8 8 0 0 1 14-5.3L20 9M20 4v5h-5M20 12a8 8 0 0 1-14 5.3L4 15M4 20v-5h5"/></svg>',
   video: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3"/></svg>',
   image: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-9 9"/></svg>',
+  edit: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 15h18M8 15v4M14 15v4"/></svg>',
   copy: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a1 1 0 0 1 1-1h10"/></svg>',
 };
 
@@ -189,10 +190,20 @@ function saveUi() {
    Drawing
    ------------------------------------------------------------------ */
 function render() {
-  const inGallery = state.view === "gallery";
-  if (inGallery) { $("pv")?.pause(); shownClip = null; }
+  const editing = state.view === "gallery" && state.tab === "edit";
+  const inGallery = state.view === "gallery" && !editing;
+  if (state.view === "gallery") { $("pv")?.pause(); shownClip = null; }
   $("gallery").hidden = !inGallery;
   $("dock").hidden = !inGallery;
+  if (editing) {
+    $("clipView").hidden = true;
+    $("scrim").hidden = true;
+    renderHeader();
+    EDIT.show();
+    saveUi();
+    return;
+  }
+  EDIT.hide();
   $("clipView").hidden = inGallery;
   $("scrim").hidden = !(inGallery && (state.settingsOpen || state.library.open));
   renderHeader();
@@ -211,14 +222,14 @@ function render() {
 
 function renderHeader() {
   $("tabs").hidden = state.view !== "gallery";
-  $("tabs").innerHTML = [["video", "Video", ICON.video], ["image", "Image", ICON.image]].map(([id, label, icon]) => {
+  $("tabs").innerHTML = [["video", "Video", ICON.video], ["image", "Image", ICON.image], ["edit", "Edit", ICON.edit]].map(([id, label, icon]) => {
     const busy = state.clips.filter((c) => kindOf(c) === id && isBusy(c)).length;
     return `<button class="tab ${state.tab === id ? "on" : ""}" data-act="tab" data-id="${id}" role="tab" aria-selected="${state.tab === id}">${icon}${label}${busy ? `<span class="tab-busy" title="${busy} rendering">${busy}</span>` : ""}</button>`;
   }).join("");
   $("headLeft").innerHTML = (state.view === "clip"
     ? `<button class="back" data-act="back">${ICON.back}Back to gallery</button>`
     : `<span class="brand">MiniMax H3 Vision</span>`)
-    + (state.ready && missingWhy() && state.view === "gallery" ? `<button class="missing" data-act="whyMissing" title="${esc(missingWhy())}">Not installed</button>` : "");
+    + (state.ready && missingWhy() && state.view === "gallery" && state.tab !== "edit" ? `<button class="missing" data-act="whyMissing" title="${esc(missingWhy())}">Not installed</button>` : "");
   const busy = state.clips.filter(isBusy).length;
   $("queueDot").classList.toggle("on", busy > 0);
   $("queueText").textContent = busy ? busy + " rendering" : "Queue empty";
@@ -788,7 +799,8 @@ function upsertClip(clip) {
     if (live.preview && live.preview.startsWith("blob:")) setTimeout(() => URL.revokeObjectURL(live.preview), 3000);
   }
   if (changed) {
-    if (state.view === "gallery") { renderHeader(); renderFilters(); renderGrid(); } else renderClip();
+    if (state.view === "gallery" && state.tab === "edit") { renderHeader(); EDIT.clipsChanged(); }
+    else if (state.view === "gallery") { renderHeader(); renderFilters(); renderGrid(); } else renderClip();
     return;
   }
   showProgress(old);
@@ -887,6 +899,7 @@ function connect() {
     if (msg.type === "mmflow.clip" && msg.data?.clip) upsertClip(msg.data.clip);
     else if (msg.type === "progress" && msg.data) onProgress(msg.data);
     else if (msg.type === "mmvision_preview" && msg.data) onPreview(msg.data);
+    else if (msg.type === "mmvision_export" && msg.data) EDIT.onExport(msg.data);
   });
   // ComfyUI restarted or the connection dropped: reconnect, and reload the state in case something finished meanwhile.
   ws.addEventListener("close", () => setTimeout(() => { connect(); load(false); }, 2000));
@@ -1311,8 +1324,12 @@ async function importFiles(files) {
     }
   }
   if (done.length) {
-    if (kindOf(done[done.length - 1]) !== state.tab) ACT.tab(kindOf(done[done.length - 1]));
-    if (done.length === 1) openClip(done[0].id); else render();
+    // In the Edit tab, imported videos just join its media panel.
+    if (state.tab === "edit" && done.every((c) => kindOf(c) === "video")) EDIT.clipsChanged();
+    else {
+      if (kindOf(done[done.length - 1]) !== state.tab) ACT.tab(kindOf(done[done.length - 1]));
+      if (done.length === 1) openClip(done[0].id); else render();
+    }
   }
   if (failed.length) say(failed.length === 1 ? failed[0] : `${failed.length} files had no prompt or settings inside them. ${failed[0]}`);
   else if (done.length === 1) say(done[0].found === "graph" ? "Imported. The settings were worked out from the file's ComfyUI workflow." : "Imported with its prompt and settings.");
@@ -1436,7 +1453,7 @@ document.addEventListener("drop", (e) => {
   // Videos are imports. Pictures are imports in the Image tab, and @images in the Video tab.
   const imports = files.filter((f) => f.type.startsWith("video/") || (isImage() && f.type.startsWith("image/")));
   if (imports.length) importFiles(imports);
-  if (!isImage()) uploadImages(files.filter((f) => f.type.startsWith("image/")));
+  if (!isImage() && state.tab !== "edit") uploadImages(files.filter((f) => f.type.startsWith("image/")));
 });
 
 /* ------------------------------------------------------------------
@@ -1605,6 +1622,7 @@ async function load(first = true) {
       if (flow) { v.model = flow.name; v.steps = flow.steps; }
       v.len = 5;
       v.res = 0.6;
+      EDIT.load(data.edit);
       state.tab = "video";   // the app always opens on the Video tab
       state.drafts = { video: ui.prompt || "", image: ui.imagePrompt || "" };
       state.attached = (ui.attached || []).filter((id) => state.refs.some((r) => r.id === id));

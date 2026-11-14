@@ -5,14 +5,20 @@ A simple prompt-and-gallery studio for MiniMax H3 videos and MOSS-Image pictures
 Open it from the **MiniMax H3 Vision** button in ComfyUI's sidebar (or View → Open MiniMax H3 Vision).
 It opens full screen over ComfyUI; the × in the top-right corner brings you back.
 
-## Video and Image
+## Video, Image and Edit
 
-The app has two tabs, and it always opens on **Video**.
+The app has three tabs, and it always opens on **Video**.
 
 - **Video** makes clips with MiniMax H3. Every `@image` in the prompt is a reference picture.
 - **Image** makes pictures with MOSS-Image. It's good at words in pictures: put the text you want
   in quotes. A finished image can be sent to the Video tab with **Use in a video**, and the Video
   tab's **Add image** pop-up lists all of them under **Generated images**.
+- **Edit** puts your videos together, like a very simple CapCut: your videos on the left, a player
+  on the right and one timeline track below. Add a video with its **+**, by double-clicking it or
+  by dragging it onto the timeline; drag clips to move them and their edges to trim them. **S**
+  splits at the playhead, **⌫** deletes, **⌘Z** undoes, Space plays. **Export** saves one MP4
+  (H.264 and AAC, 24 fps) in `minimax_flow/exports/`, at the videos' own size, 720p or 1080p; videos
+  of another shape get black bars. The edit is saved as you go.
 
 It needs no other custom node pack. Videos run on ComfyUI's own MiniMax H3 nodes plus a few of
 this pack's own (in the node menu under **MiniMax H3 Vision**), and images on ComfyUI's own nodes.
@@ -86,6 +92,8 @@ In ComfyUI's output folder, under `minimax_flow/`:
 - `images/`: uploaded reference images
 - `clips/`: finished videos
 - `stills/`: finished images
+- `exports/`: exported edits
+- `strips/`: the timeline's filmstrips and waveforms (made again when deleted)
 - `preview/`: live previews while rendering (cleaned up as it goes)
 
 ## Files
@@ -96,10 +104,11 @@ In ComfyUI's output folder, under `minimax_flow/`:
 - `vision_nodes.py`: the pack's graph nodes, with `h3_lora.py` (LoRAs), `hyperflow.py` (HyperFlow H3 Flash)
   and `live_preview.py` (the moving preview)
 - `moss_bridge.py`: image graphs, with MOSS-Image
+- `edit_media.py`: the Edit tab's filmstrips, waveforms and export, with PyAV
 - `clip_info.py`: the prompt and settings saved in each file, and reading them back on import
 - `comfy_link.py`: sending jobs to ComfyUI's queue, following and stopping them
 - `web/minimax_flow_launcher.js`: the sidebar button
-- `app/index.html`, `app/app.js`: the app itself
+- `app/index.html`, `app/app.js`: the app itself, and `app/edit.js`: its Edit tab
 
 ## License
 
