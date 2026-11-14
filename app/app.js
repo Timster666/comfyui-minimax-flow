@@ -328,6 +328,9 @@ function renderNegative() {
 
 function renderRefs() {
   renderNegative();
+  // Reset (top right of the prompt) shows when there is something to clear.
+  $("resetPrompt").hidden = !(state.prompt.trim() || (!isImage() && state.attached.length));
+  document.querySelector(".composer").classList.toggle("no-refs", isImage());
   // MOSS-Image takes no reference pictures, so the Image tab has no image strip.
   $("refs").hidden = isImage();
   $("hint").textContent = isImage() ? "MOSS-Image is good at words in pictures: put the text you want in quotes" : "Type @ to use an image";
@@ -1285,6 +1288,13 @@ const ACT = {
   deleteClip: (id) => { id = id || state.openId; removeClip(id, kindOf(clipById(id) || {}) === "image" ? "Image deleted." : "Clip deleted."); },
 
   // The x on a prompt-bar image only takes it out of the bar; it stays in the library.
+  resetPrompt: () => {
+    state.prompt = ""; state.caret = 0; state.mentionClosed = true;
+    if (!isImage()) state.attached = [];
+    render(); saveUi();
+    $("prompt").focus();
+    say(isImage() ? "Prompt cleared." : "Prompt and images cleared.");
+  },
   removeRef: (id) => { state.attached = state.attached.filter((x) => x !== id); render(); },
   pickMention: (id) => insertMention(state.refs.find((r) => r.id === id)),
   openLibrary: () => {
@@ -1373,7 +1383,12 @@ const ACT = {
       kindOf(c) === "image" ? { cfg: c.cfg } : { len: c.len }, { sampler: c.sampler || "", scheduler: c.scheduler || "" });
     if (kindOf(c) === "image") state.negative = c.negative != null ? c.negative : negativeDefault(c.model);
     state.prompt = c.prompt; state.caret = c.prompt.length; state.mentionClosed = true;
-    mentionsIn(c.prompt).forEach((n) => { const r = state.refs.find((x) => x.name === n); if (r) attach(r.id); });
+    // Only this clip's reference images: the ones it recorded, else the @names in its prompt.
+    if (kindOf(c) === "video") {
+      state.attached = [];
+      (c.refs || []).forEach((r) => { if (state.refs.some((x) => x.id === r.id)) attach(r.id); });
+      mentionsIn(c.prompt).forEach((n) => { const r = state.refs.find((x) => x.name === n); if (r) attach(r.id); });
+    }
     if (isFull()) document.exitFullscreen();
     state.view = "gallery";
     render();
