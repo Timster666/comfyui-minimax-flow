@@ -14,7 +14,7 @@ let OPT = {
   root: "minimax_flow",
   // The Image tab's options (MOSS-Image). The server sends the real lists.
   image: {
-    models: [{ id: "moss_image_sft_int8_convrot.safetensors", name: "MOSS-Image SFT (INT8)", steps: 25, minSteps: 1, maxSteps: 80, stepSize: 1, cfg: 2.5 }],
+    models: [{ id: "moss_image_sft_int8_convrot.safetensors", name: "MOSS-Image SFT (INT8)", steps: 50, minSteps: 1, maxSteps: 80, stepSize: 1, cfg: 3.0 }],
     aspects: { "1:1": [1, 1], "4:5": [4, 5], "3:4": [3, 4], "2:3": [2, 3], "9:16": [9, 16], "16:9": [16, 9], "3:2": [3, 2], "4:3": [4, 3], "5:4": [5, 4], "21:9": [21, 9] },
     megapixels: [0.25, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0],
     recommendedMP: [1.0, 1.5, 2.0],
@@ -44,7 +44,7 @@ const state = {
   tab: "video",              // "video" | "image": which tab the gallery, prompt and settings show
   drafts: { video: "", image: "" },   // each tab keeps its own prompt
   videoSettings: { model: "MiniMax H3", steps: 20, res: 0.6, aspect: "16:9", len: 6, seedMode: "random", seed: 48213, loras: [] },
-  imageSettings: { model: "MOSS-Image SFT (INT8)", steps: 25, cfg: 2.5, res: 1.0, aspect: "1:1", seedMode: "random", seed: 48213, loras: [] },
+  imageSettings: { model: "MOSS-Image SFT (INT8)", steps: 50, cfg: 3.0, res: 1.0, aspect: "1:1", seedMode: "random", seed: 48213, loras: [] },
   settingsOpen: false,
   loraPicker: false,
 };

@@ -17,7 +17,7 @@ SAMPLER_NODE = "15"     # its progress is the render's steps (the app listens fo
 SAVE_NODE = "9"
 NEGATIVE = "nsfw, worst quality, bad anatomy, watermark, jpeg artifact"
 SAMPLER, SCHEDULER = "er_sde", "simple"
-DEFAULT_STEPS, DEFAULT_CFG = 25, 2.5
+DEFAULT_STEPS, DEFAULT_CFG = 50, 3.0
 
 # Names for the checkpoints Comfy-Org publishes; anything else is named after its file.
 KNOWN = {
