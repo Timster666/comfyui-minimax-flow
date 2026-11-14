@@ -61,8 +61,9 @@ DEFAULT_UI = {
     "perRow": 3,
     "prompt": "",
     "imagePrompt": "",
-    "imageNegative": "",
+    "imageNegative": moss_bridge.NEGATIVE,   # the Image tab's negative prompt box starts with this text
     "negativeOpen": False,
+    "negativeShown": True,
 }
 
 _lock = asyncio.Lock()
@@ -141,6 +142,9 @@ def read_project():
     data.setdefault("clips", [])
     data.setdefault("edit", dict(DEFAULT_EDIT))
     ui = data.setdefault("ui", {})
+    # Before the negative prompt box showed its text, an empty box meant "the recommended one".
+    if "negativeShown" not in ui and not ui.get("imageNegative"):
+        ui["imageNegative"] = moss_bridge.NEGATIVE
     for key, value in DEFAULT_UI.items():
         ui.setdefault(key, json.loads(json.dumps(value)))
     return data
@@ -356,16 +360,18 @@ async def generate_image(prompt, s, negative=None):
     seed = int(s.get("seed", 0)) if s.get("seedMode") == "fixed" else random.randrange(2 ** 31)
     loras = [{"name": str(l["name"]), "strength": float(l["strength"])} for l in s.get("loras", []) if l.get("on", True)]
     sampler, scheduler = pick_sampling(s, model, False)
-    # An empty negative prompt means the model's recommended one.
-    negative = str(negative).strip()[:2000] if negative and str(negative).strip() else None
+    # The negative prompt is exactly what the box holds; empty means none.
+    negative = str(negative).strip()[:2000] if negative is not None else None
     w, h = dims(aspect, res, 16, IMAGE_ASPECTS)
     clip = {"id": "s" + uuid.uuid4().hex[:10], "kind": "image", "prompt": prompt, "model": model["name"], "profile": model["id"],
             "steps": steps, "cfg": cfg, "res": res, "aspect": aspect, "width": w, "height": h, "seed": seed, "loras": loras,
             "status": "queued", "step": 0, "file": None, "subfolder": ROOT + "/stills", "starred": False,
             "created": time.time()}
-    for key, value in (("sampler", sampler), ("scheduler", scheduler), ("negative", negative)):
+    for key, value in (("sampler", sampler), ("scheduler", scheduler)):
         if value:
             clip[key] = value
+    if negative is not None:
+        clip["negative"] = negative
     try:
         clip["prompt_id"] = await comfy_link.queue_prompt(moss_bridge.build_graph(clip, name=clip_info.file_stem(clip)),
                                                           clip_info.extra_data(clip, moss_bridge.EXTRA_DATA))

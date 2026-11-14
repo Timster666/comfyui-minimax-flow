@@ -18,6 +18,8 @@ import re
 ROOT = "minimax_flow"
 SAMPLER_NODE = "15"     # its progress is the render's steps (the app listens for this id)
 SAVE_NODE = "9"
+# The Image tab's negative prompt box starts with this text, and what the box holds is what's used.
+# The graph only falls back to it for images saved before the box existed (they have no "negative").
 NEGATIVE = "worst quality, bad anatomy, watermark, jpeg artifact"
 SAMPLER, SCHEDULER = "er_sde", "simple"
 DEFAULT_STEPS, DEFAULT_CFG = 50, 3.0
