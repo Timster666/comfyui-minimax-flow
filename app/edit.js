@@ -815,6 +815,23 @@ const EDIT = (() => {
       header();
     },
     clipsChanged() { if (E.visible) { prune(); drawMedia(); drawTimeline(); } },
+    // For the gallery's right-click menu: is a video in the edit, and put it at the end.
+    has: (id) => E.pieces.some((p) => p.clip === id),
+    append(id) {
+      const c = mediaById(id);
+      if (!c || E.pieces.some((p) => p.clip === id)) return false;
+      if (E.visible) { addClip(id, E.pieces.length); return true; }
+      remember();
+      const p = newPiece(c.id, 0, durOf(c));
+      if (!E.strips[c.id]?.duration) p.toEnd = true;
+      if (!E.pieces.length) E.ratio = shapeOf(c);
+      E.pieces.push(p);
+      E.playhead = startOf(E.pieces.length - 1);
+      E.selected = p.id;
+      loadStrip(c.id);
+      save();
+      return true;
+    },
     onExport,
   };
 })();

@@ -122,6 +122,7 @@ const ICON = {
   reuse: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 12a8 8 0 0 1 14-5.3L20 9M20 4v5h-5M20 12a8 8 0 0 1-14 5.3L4 15M4 20v-5h5"/></svg>',
   video: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3"/></svg>',
   image: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-9 9"/></svg>',
+  check: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M5 12l5 5 9-10"/></svg>',
   edit: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 15h18M8 15v4M14 15v4"/></svg>',
   copy: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a1 1 0 0 1 1-1h10"/></svg>',
 };
@@ -1055,7 +1056,9 @@ function openMenu(id, x, y) {
     <button role="menuitem" data-act="menuDownload" ${c.status === "done" ? "" : 'aria-disabled="true" class="off"'}>${ICON.download}Download</button>${kindOf(c) === "video" ? `
     <button role="menuitem" data-act="menuExportZip" ${c.status === "done" && c.file ? "" : 'aria-disabled="true" class="off"'}>${ICON.download}Export .zip with reference images</button>` : ""}
     <button role="menuitem" data-act="menuDelete" class="danger">${ICON.trash}${isBusy(c) ? "Cancel and delete" : "Delete"}</button>
-    <span class="ctx-line"></span>
+    <span class="ctx-line"></span>${kindOf(c) === "video" ? (EDIT.has(c.id)
+      ? `<button role="menuitem" aria-disabled="true" class="off" title="This video is on the edit's timeline already.">${ICON.check}Already in the edit</button>`
+      : `<button role="menuitem" data-act="menuAddToEdit" ${c.status === "done" && c.file ? "" : 'aria-disabled="true" class="off"'}>${ICON.edit}Add to edit</button>`) : ""}
     <button role="menuitem" data-act="menuReuse">${ICON.reuse}Use this prompt and settings</button>${kindOf(c) === "image" ? `
     <button role="menuitem" data-act="menuUseInVideo" ${c.status === "done" ? "" : 'aria-disabled="true" class="off"'}>${ICON.video}Use in a video</button>` : ""}`;
   m.hidden = false;
@@ -1298,6 +1301,12 @@ const ACT = {
     a.remove();
   },
   menuDownload: () => { const id = closeMenu(); ACT.download(id); },
+  menuAddToEdit: () => {
+    const id = closeMenu(), c = clipById(id);
+    if (!c || c.status !== "done") return;
+    if (EDIT.append(id)) say("Added to the end of the edit.");
+    else say("It's in the edit already.");
+  },
   menuExportZip: () => { const id = closeMenu(); ACT.exportZip(id); },
   exportZip: async (id) => {
     const c = clipById(id || state.openId);
