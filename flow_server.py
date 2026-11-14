@@ -194,11 +194,7 @@ async def get_state(request):
             recover(data)
             write_project(data)
             get_state.recovered = True
-    try:
-        import folder_paths
-        loras = sorted(folder_paths.get_filename_list("loras"), key=str.lower)
-    except Exception:
-        loras = []
+    loras = lora_list()
     models, why = video_models()
     imodels, iwhy = image_models()
     if any(c.get("status") in ("queued", "rendering") and c.get("prompt_id") for c in data["clips"]):
@@ -212,6 +208,39 @@ async def get_state(request):
                               "recommendedMP": IMAGE_RECOMMENDED_MP, "cfg": CFG,
                               "missing": iwhy}},
     })
+
+
+def lora_list(refresh=False):
+    """The LoRA files in ComfyUI's loras folders. refresh: look again instead of using ComfyUI's cached list,
+    which only notices a change in the top folder, not a file added in a subfolder."""
+    try:
+        import folder_paths
+        if refresh:
+            getattr(folder_paths, "filename_list_cache", {}).pop("loras", None)
+        return sorted(folder_paths.get_filename_list("loras"), key=str.lower)
+    except Exception:
+        LOG.exception("MiniMax H3 Vision couldn't list the LoRAs")
+        return []
+
+
+async def get_loras(request):
+    """The LoRAs and their sizes, for the Add LoRA window. ?refresh=1 looks in the folders again."""
+    names = await asyncio.to_thread(lora_list, request.query.get("refresh") == "1")
+
+    def sizes():
+        import folder_paths
+        out = {}
+        for name in names:
+            try:
+                out[name] = os.path.getsize(folder_paths.get_full_path("loras", name))
+            except Exception:
+                pass
+        return out
+    try:
+        found = await asyncio.to_thread(sizes)
+    except Exception:
+        found = {}
+    return web.json_response({"loras": names, "sizes": found})
 
 
 async def put_ui(request):
@@ -833,6 +862,7 @@ ROUTES = (
     ("GET", "/mmflow/app", page),
     ("GET", "/mmflow/api/state", get_state),
     ("PUT", "/mmflow/api/ui", put_ui),
+    ("GET", "/mmflow/api/loras", get_loras),
     ("POST", "/mmflow/api/images", upload_images),
     ("POST", "/mmflow/api/images/from-clip", image_from_clip),
     ("PATCH", "/mmflow/api/images/{id}", rename_image),
