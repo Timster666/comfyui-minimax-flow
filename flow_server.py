@@ -46,8 +46,8 @@ FAKE_MODELS = [
 ASPECTS = {"16:9": [16, 9], "9:16": [9, 16], "1:1": [1, 1], "4:3": [4, 3], "3:4": [3, 4], "21:9": [21, 9]}
 
 # The Image tab (MOSS-Image): any aspect ratio, sides in steps of 16, about 0.25 to 4 MP, best at 1 to 2 MP.
-FAKE_IMAGE_MODELS = [{"id": "moss_image_sft_int8_convrot.safetensors", "name": "MOSS-Image SFT (INT8)", "steps": 25,
-                      "minSteps": 1, "maxSteps": 80, "stepSize": 1, "cfg": 2.5}]
+FAKE_IMAGE_MODELS = [{"id": "moss_image_sft_int8_convrot.safetensors", "name": "MOSS-Image SFT (INT8)", "steps": 50,
+                      "minSteps": 1, "maxSteps": 80, "stepSize": 1, "cfg": 3.0}]
 IMAGE_ASPECTS = {"1:1": [1, 1], "4:5": [4, 5], "3:4": [3, 4], "2:3": [2, 3], "9:16": [9, 16],
                  "16:9": [16, 9], "3:2": [3, 2], "4:3": [4, 3], "5:4": [5, 4], "21:9": [21, 9]}
 IMAGE_MEGAPIXELS = [0.25, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0]
@@ -62,7 +62,7 @@ MENTION_RE = re.compile(r"@([A-Za-z0-9_]+)")
 DEFAULT_UI = {
     "settings": {"model": "MiniMax H3", "steps": 20, "res": 0.6, "aspect": "16:9", "len": 6,
                  "seedMode": "random", "seed": 48213, "loras": []},
-    "imageSettings": {"model": "MOSS-Image SFT (INT8)", "steps": 25, "cfg": 2.5, "res": 1.0, "aspect": "1:1",
+    "imageSettings": {"model": "MOSS-Image SFT (INT8)", "steps": 50, "cfg": 3.0, "res": 1.0, "aspect": "1:1",
                       "seedMode": "random", "seed": 48213, "loras": []},
     "attached": [],
     "perRow": 3,

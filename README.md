@@ -25,7 +25,7 @@ Each tab picks by itself (`"mode": "auto"` in `config.json`):
   the way the editor builds one, and then sets the size, steps, LoRAs and file locations to your
   settings. While a clip renders you see its steps and the H3 editor's moving live preview.
 - **Image is real** when MOSS-Image's three files are installed (below). The graph follows
-  Comfy-Org's MOSS-Image template (er_sde / simple, 25 steps, guidance 2.5, the recommended
+  Comfy-Org's MOSS-Image template (er_sde / simple, 50 steps, guidance 3.0, the recommended
   negative prompt). While an image renders you see its steps and ComfyUI's live preview.
 - **Fake** otherwise: a fake render counts through its steps and then hands out a sample from
   `samples/`, so the app can be tried on any machine. The tab shows a "Fake renders" badge;
