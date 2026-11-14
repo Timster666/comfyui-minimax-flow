@@ -285,6 +285,8 @@ async def generate(request):
                 "loras": loras, "status": "queued", "step": 0, "file": None, "subfolder": ROOT + "/clips",
                 "starred": False, "created": time.time(), "kind": "video"}
         images = list(data["images"])
+        # The pictures it uses, so a project export finds them even after a rename.
+        clip["refs"] = [{"id": i["id"], "name": i["name"]} for i in edit_project.refs_of(clip, images)]
 
     try:
         graph = h3_graph.build_graph(clip, images, name=clip_info.file_stem(clip))
@@ -600,6 +602,10 @@ async def put_edit(request):
     return web.json_response({"edit": edit})
 
 
+def image_path(image):
+    return root_dir("images", image["file"])
+
+
 def clip_path(clip):
     folder = clip.get("subfolder") or ROOT + "/clips"
     return os.path.join(output_dir(), folder, clip["file"])
@@ -696,7 +702,8 @@ async def export_project(request):
     file = free_name(folder, stem + "_project", ".zip")
     clips = {c["id"]: c for c in data["clips"] if c.get("kind", "video") == "video" and c.get("file")}
     try:
-        counts = await asyncio.to_thread(edit_project.pack, data["edit"], clips, clip_path, os.path.join(folder, file))
+        counts = await asyncio.to_thread(edit_project.pack, data["edit"], clips, clip_path, os.path.join(folder, file),
+                                         data["images"], image_path)
     except Exception as error:
         LOG.exception("MiniMax H3 Vision couldn't save the edit project")
         raise web.HTTPBadRequest(text="Couldn't save the project: %s" % error)
@@ -723,7 +730,8 @@ async def import_project(request):
             data = read_project()
             existing = {c["id"]: c for c in data["clips"]}
             try:
-                edit, added, same = await asyncio.to_thread(edit_project.unpack, temp, existing, root_dir("clips"), clip_path)
+                edit, added, same, new_images, same_images = await asyncio.to_thread(
+                    edit_project.unpack, temp, existing, root_dir("clips"), clip_path, data["images"], root_dir("images"), image_path)
             except edit_project.Bad as error:
                 raise web.HTTPBadRequest(text=str(error))
             now = time.time()
@@ -732,6 +740,9 @@ async def import_project(request):
                 clip["imported"] = part.filename
                 clip["created"] = now - i * 0.001   # newest first, so they are easy to find
             data["clips"] = added + data["clips"]
+            for image in new_images:
+                image["added"] = now
+            data["images"].extend(new_images)
             data["edit"] = edit
             write_project(data)
     finally:
@@ -741,7 +752,7 @@ async def import_project(request):
             pass
     for clip in added:
         broadcast(clip)
-    return web.json_response({"edit": edit, "clips": added, "same": same})
+    return web.json_response({"edit": edit, "clips": added, "same": same, "images": new_images, "sameImages": same_images})
 
 
 async def cancel_export(request):

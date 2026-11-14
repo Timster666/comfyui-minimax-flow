@@ -37,9 +37,12 @@ The app has three tabs, and it always opens on **Video**.
   of another shape get black bars. It downloads by itself when done. Quality is visually lossless:
   CRF 16, and clips already at the export size are passed to the encoder without any conversion.
   The edit is saved as you go.
-  **Project → Export project** saves the timeline and the videos it uses as one `.zip` (in
+  **Project → Export project** saves the timeline, the videos it uses and their reference images
+  (the `@images` in their prompts) as one `.zip` (in
   `minimax_flow/exports/`, and it downloads). **Import project** opens such a zip on any machine: its
-  videos join your Video gallery and the Edit tab, and its timeline replaces the current one. Videos
+  videos join your Video gallery and the Edit tab, its reference images join **Add image**, and its
+  timeline replaces the current one. If an image's name is taken, it gets a number (`detective2`) and
+  the videos' prompts are changed to match, so **Use this prompt and settings** finds the right picture. Videos
   that are already there aren't copied twice.
 
 It needs no other custom node pack. Videos run on ComfyUI's own MiniMax H3 nodes plus a few of

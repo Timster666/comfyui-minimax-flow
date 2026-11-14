@@ -190,7 +190,7 @@ const EDIT = (() => {
         <div class="ed-proj">
           <button class="ed-ghost" id="edProjBtn" aria-haspopup="menu" aria-expanded="false">Project ${SVG.caret}</button>
           <div class="ed-menu" id="edProjMenu" role="menu" hidden>
-            <button role="menuitem" id="edProjSave">${SVG.zip}<span>Export project<small>The timeline and its videos, as a .zip</small></span></button>
+            <button role="menuitem" id="edProjSave">${SVG.zip}<span>Export project<small>The timeline, its videos and their reference images, as a .zip</small></span></button>
             <label role="menuitem">${SVG.open}<span>Import project<small>Opens a .zip and replaces this timeline</small></span>
               <input type="file" accept=".zip,application/zip" id="edProjOpen" hidden></label>
           </div>
@@ -228,7 +228,7 @@ const EDIT = (() => {
     try {
       const r = await api("POST", "edit/export-project", {});
       download(fileUrl(r.subfolder, r.file), r.file);
-      say(`Project saved: ${r.pieces} clip${r.pieces === 1 ? "" : "s"} and ${r.clips} video${r.clips === 1 ? "" : "s"}, in ${r.subfolder}/${r.file}.`);
+      say(`Project saved: ${r.pieces} clip${r.pieces === 1 ? "" : "s"}, ${r.clips} video${r.clips === 1 ? "" : "s"} and ${r.images || 0} reference image${r.images === 1 ? "" : "s"}, in ${r.subfolder}/${r.file}.`);
     } catch (error) { say(error.message); }
   }
   async function importProject(file) {
@@ -240,6 +240,8 @@ const EDIT = (() => {
     try {
       const r = await api("POST", "edit/import-project", form);
       for (const c of r.clips) if (!state.clips.some((x) => x.id === c.id)) state.clips.unshift(c);
+      // Their reference pictures join the Add image library, under the names the prompts now use.
+      for (const i of r.images || []) if (!state.refs.some((x) => x.id === i.id)) state.refs.push(fromImage(i));
       E.name = r.edit.name; E.ratio = r.edit.ratio; E.muted = r.edit.muted;
       E.pieces = r.edit.pieces.map((p) => ({ ...p }));
       E.past = []; E.future = []; E.selected = null; E.preview = null; E.playhead = 0;
@@ -248,7 +250,9 @@ const EDIT = (() => {
       new Set(E.pieces.map((p) => p.clip)).forEach(loadStrip);
       sizeFrame(); draw();
       const n = r.clips.length;
-      say(`Opened ${file.name}: ${E.pieces.length} clip${E.pieces.length === 1 ? "" : "s"}; ${n} video${n === 1 ? "" : "s"} added` + (r.same ? `, ${r.same} already here` : "") + ".");
+      const pics = (r.images || []).length;
+      say(`Opened ${file.name}: ${E.pieces.length} clip${E.pieces.length === 1 ? "" : "s"}; ${n} video${n === 1 ? "" : "s"} added` + (r.same ? `, ${r.same} already here` : "")
+        + (pics || r.sameImages ? `; ${pics} reference image${pics === 1 ? "" : "s"} added` + (r.sameImages ? `, ${r.sameImages} already here` : "") : "") + ".");
     } catch (error) { say(error.message); }
   }
   // A yes/no question in the edit's own dialog.
