@@ -61,6 +61,8 @@ DEFAULT_UI = {
     "perRow": 3,
     "prompt": "",
     "imagePrompt": "",
+    "imageNegative": "",
+    "negativeOpen": False,
 }
 
 _lock = asyncio.Lock()
@@ -81,6 +83,30 @@ def root_dir(*parts):
 
 def project_file():
     return os.path.join(root_dir(), "project.json")
+
+
+def sampling_choices():
+    """ComfyUI's samplers and schedulers, as its KSampler lists them."""
+    try:
+        import comfy.samplers
+        return list(comfy.samplers.KSampler.SAMPLERS), list(comfy.samplers.KSampler.SCHEDULERS)
+    except Exception:
+        return (["euler", "euler_ancestral", "heun", "dpmpp_2m", "dpmpp_2m_sde", "er_sde", "res_multistep", "uni_pc"],
+                ["simple", "normal", "karras", "exponential", "sgm_uniform", "beta"])
+
+
+def pick_sampling(s, model, video):
+    """The sampler and scheduler a render asked for: None means the model's own."""
+    samplers, schedulers = sampling_choices()
+    if video:
+        schedulers = schedulers + [h3_graph.BETA57]
+    sampler = s.get("sampler") or None
+    scheduler = s.get("scheduler") or None
+    if sampler and sampler not in samplers:
+        raise web.HTTPBadRequest(text="ComfyUI has no sampler called %s." % sampler)
+    if scheduler and (scheduler not in schedulers or model.get("scheduler") == h3_graph.HYPERFLOW_SCHEDULE):
+        raise web.HTTPBadRequest(text="%s can't use the %s scheduler." % (model["name"], scheduler))
+    return sampler, scheduler
 
 
 def video_models():
@@ -175,7 +201,8 @@ async def get_state(request):
         ensure_watcher()
     return web.json_response({
         **data,
-        "options": {"editSizes": EDIT_SIZES, "models": models, "aspects": ASPECTS, "megapixels": MEGAPIXELS, "length": LENGTH,
+        "options": {"editSizes": EDIT_SIZES, "samplers": sampling_choices()[0], "schedulers": sampling_choices()[1],
+                    "beta57": h3_graph.BETA57, "models": models, "aspects": ASPECTS, "megapixels": MEGAPIXELS, "length": LENGTH,
                     "loras": loras, "missing": why, "root": ROOT,
                     "image": {"models": imodels, "aspects": IMAGE_ASPECTS, "megapixels": IMAGE_MEGAPIXELS,
                               "recommendedMP": IMAGE_RECOMMENDED_MP, "cfg": CFG,
@@ -253,7 +280,7 @@ async def generate(request):
     if not prompt:
         raise web.HTTPBadRequest(text="Write a prompt first.")
     if body.get("kind") == "image":
-        return await generate_image(prompt, s)
+        return await generate_image(prompt, s, body.get("negative"))
     models, why = video_models()
     model = next((m for m in models if m["name"] == s.get("model")), None)
     if not model:
@@ -267,6 +294,7 @@ async def generate(request):
     if not (low <= steps <= high and (steps - low) % every == 0):
         raise web.HTTPBadRequest(text="%s takes %s steps." % (model["name"], ", ".join(map(str, range(low, high + 1, every)))
                                                                 if every > 1 else "%d to %d" % (low, high)))
+    sampler, scheduler = pick_sampling(s, model, True)
     length = int(s.get("len", 6))
     if not LENGTH["min"] <= length <= LENGTH["max"]:
         raise web.HTTPBadRequest(text="Length must be %d to %d seconds." % (LENGTH["min"], LENGTH["max"]))
@@ -284,6 +312,10 @@ async def generate(request):
                 "steps": steps, "res": res, "aspect": aspect, "len": length, "width": w, "height": h, "seed": seed,
                 "loras": loras, "status": "queued", "step": 0, "file": None, "subfolder": ROOT + "/clips",
                 "starred": False, "created": time.time(), "kind": "video"}
+        if sampler:
+            clip["sampler"] = sampler
+        if scheduler:
+            clip["scheduler"] = scheduler
         images = list(data["images"])
         # The pictures it uses, so a project export finds them even after a rename.
         clip["refs"] = [{"id": i["id"], "name": i["name"]} for i in edit_project.refs_of(clip, images)]
@@ -306,7 +338,7 @@ async def generate(request):
     return web.json_response({"clip": clip})
 
 
-async def generate_image(prompt, s):
+async def generate_image(prompt, s, negative=None):
     models, why = image_models()
     model = next((m for m in models if m["name"] == s.get("model")), None)
     if not model:
@@ -323,11 +355,17 @@ async def generate_image(prompt, s):
         raise web.HTTPBadRequest(text="Guidance must be %s to %s." % (CFG["min"], CFG["max"]))
     seed = int(s.get("seed", 0)) if s.get("seedMode") == "fixed" else random.randrange(2 ** 31)
     loras = [{"name": str(l["name"]), "strength": float(l["strength"])} for l in s.get("loras", []) if l.get("on", True)]
+    sampler, scheduler = pick_sampling(s, model, False)
+    # An empty negative prompt means the model's recommended one.
+    negative = str(negative).strip()[:2000] if negative and str(negative).strip() else None
     w, h = dims(aspect, res, 16, IMAGE_ASPECTS)
     clip = {"id": "s" + uuid.uuid4().hex[:10], "kind": "image", "prompt": prompt, "model": model["name"], "profile": model["id"],
             "steps": steps, "cfg": cfg, "res": res, "aspect": aspect, "width": w, "height": h, "seed": seed, "loras": loras,
             "status": "queued", "step": 0, "file": None, "subfolder": ROOT + "/stills", "starred": False,
             "created": time.time()}
+    for key, value in (("sampler", sampler), ("scheduler", scheduler), ("negative", negative)):
+        if value:
+            clip[key] = value
     try:
         clip["prompt_id"] = await comfy_link.queue_prompt(moss_bridge.build_graph(clip, name=clip_info.file_stem(clip)),
                                                           clip_info.extra_data(clip, moss_bridge.EXTRA_DATA))

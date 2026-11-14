@@ -43,6 +43,8 @@ const state = {
   library: { open: false, source: "uploads", selected: null, selectedGen: null, query: "", sort: "newest" },
   clips: [],
   tab: "video",              // "video" | "image" | "edit": "edit" is the editor (edit.js), the others the gallery and prompt
+  negative: "",              // the Image tab's negative prompt (empty: the model's recommended one)
+  negativeOpen: false,
   drafts: { video: "", image: "", edit: "" },   // each tab keeps its own prompt
   videoSettings: { model: "HyperFlow H3 Flash", steps: 6, res: 0.6, aspect: "16:9", len: 5, seedMode: "random", seed: 48213, loras: [] },
   imageSettings: { model: "MOSS-Image SFT (INT8)", steps: 50, cfg: 3.0, res: 1.0, aspect: "1:1", seedMode: "random", seed: 48213, loras: [] },
@@ -182,7 +184,8 @@ function saveUi() {
   saveTimer = setTimeout(() => {
     state.drafts[state.tab] = state.prompt;
     api("PUT", "ui", { settings: state.videoSettings, imageSettings: state.imageSettings, attached: state.attached, perRow: state.perRow,
-      prompt: state.drafts.video, imagePrompt: state.drafts.image, tab: state.tab }).catch(() => {});
+      prompt: state.drafts.video, imagePrompt: state.drafts.image, imageNegative: state.negative, negativeOpen: state.negativeOpen,
+      tab: state.tab }).catch(() => {});
   }, 400);
 }
 
@@ -309,7 +312,22 @@ function imageTile(c) {
     </div>`;
 }
 
+// The Image tab's negative prompt: a second, smaller box under the prompt, opened from the bar.
+function renderNegative() {
+  const on = isImage();
+  $("negToggle").hidden = !on;
+  $("negBox").hidden = !(on && state.negativeOpen);
+  if (!on) return;
+  const rec = negativeDefault(state.settings.model);
+  $("negToggle").innerHTML = (state.negativeOpen ? "− " : "+ ") + "Negative prompt" + (state.negative.trim() ? " ·  custom" : "");
+  $("negToggle").setAttribute("aria-expanded", state.negativeOpen);
+  const box = $("negative");
+  if (box.value !== state.negative) box.value = state.negative;
+  box.placeholder = rec ? "Empty uses the recommended one: " + rec : "This model uses no negative prompt unless you write one";
+}
+
 function renderRefs() {
+  renderNegative();
   // MOSS-Image takes no reference pictures, so the Image tab has no image strip.
   $("refs").hidden = isImage();
   $("hint").textContent = isImage() ? "MOSS-Image is good at words in pictures: put the text you want in quotes" : "Type @ to use an image";
@@ -618,6 +636,30 @@ function renderSettings() {
           <span class="lora-val" data-strength="${esc(l.id)}">${Number(l.strength).toFixed(2)}</span>
           <button class="lora-x" data-act="removeLora" data-id="${esc(l.id)}" aria-label="Remove ${esc(l.name)}">${ICON.x}</button>
         </div>`).join("")}
+    </div>
+
+    ${samplingFields(s, model)}`;
+}
+
+// Sampler and scheduler. "Model default" (the empty choice) uses what the model is tuned for.
+function samplingFields(s, model) {
+  const hyperflow = model.scheduler === "hyperflow";
+  const schedulers = (OPT.schedulers || []).concat(isImage() || !OPT.beta57 ? [] : [OPT.beta57]);
+  const opt = (value, current, label) => `<option value="${esc(value)}" ${value === current ? "selected" : ""}>${esc(label || value)}</option>`;
+  return `<div class="field sampling">
+      <div class="sampling-row">
+        <div><label class="label" for="sampler">Sampler</label>
+          <select class="select" id="sampler" data-change="sampler">
+            ${opt("", s.sampler || "", "Model default (" + (model.sampler || "?") + ")")}
+            ${(OPT.samplers || []).map((n) => opt(n, s.sampler || "")).join("")}
+          </select></div>
+        <div><label class="label" for="scheduler">Scheduler</label>
+          <select class="select" id="scheduler" data-change="scheduler" ${hyperflow ? "disabled" : ""}>
+            ${hyperflow ? opt("", "", "HyperFlow's own")
+              : opt("", s.scheduler || "", "Model default (" + (model.scheduler || "?") + ")") + schedulers.map((n) => opt(n, s.scheduler || "")).join("")}
+          </select></div>
+      </div>
+      ${hyperflow ? `<span class="hint">HyperFlow samples on its own 4, 6 or 8-step schedule.</span>` : ""}
     </div>`;
 }
 
@@ -719,6 +761,7 @@ function renderClipSide(c) {
       <dt>Length</dt><dd>${c.len} s · ${snapFrames(c.len)} frames</dd>
       <dt>Seed</dt><dd class="seed-dd">${c.seed}<button class="copy" data-act="copySeed" aria-label="Copy seed">${ICON.copy}</button></dd>
       <dt>LoRAs</dt><dd>${c.loras.length ? c.loras.map((l) => esc(loraText(l))).join("<br>") : '<span class="label">None</span>'}</dd>
+      ${samplingFacts(c)}
     </dl>
     ${c.imported ? `<p class="hint imported">Imported from ${esc(c.imported)}${c.found === "graph" ? ". Settings worked out from its ComfyUI workflow" : ""}.</p>` : ""}
     <div class="actions">
@@ -730,6 +773,15 @@ function renderClipSide(c) {
       </div>
     </div>`;
 }
+
+// A clip's sampler and scheduler: its own choice, or (in grey) its model's.
+function samplingFacts(c) {
+  const models = kindOf(c) === "image" ? OPT.image.models : OPT.models;
+  const m = models.find((x) => x.name === c.model) || {};
+  const one = (own, dflt) => own ? esc(own) : dflt ? `${esc(dflt === "hyperflow" ? "HyperFlow's own" : dflt)} <span class="label">· model default</span>` : '<span class="label">Model default</span>';
+  return `<dt>Sampler</dt><dd>${one(c.sampler, m.sampler)}</dd><dt>Scheduler</dt><dd>${one(c.scheduler, m.scheduler)}</dd>`;
+}
+const negativeDefault = (modelName) => (OPT.image.models.find((m) => m.name === modelName) || OPT.image.models[0] || {}).negative || "";
 
 function renderImageSide(c) {
   $("clipSide").innerHTML = `
@@ -746,6 +798,8 @@ function renderImageSide(c) {
       <dt>Aspect</dt><dd>${c.aspect}</dd>
       <dt>Seed</dt><dd class="seed-dd">${c.seed}<button class="copy" data-act="copySeed" aria-label="Copy seed">${ICON.copy}</button></dd>
       <dt>LoRAs</dt><dd>${c.loras.length ? c.loras.map((l) => esc(loraText(l))).join("<br>") : '<span class="label">None</span>'}</dd>
+      ${samplingFacts(c)}
+      <dt>Negative</dt><dd>${c.negative ? esc(c.negative) : '<span class="label">' + esc(negativeDefault(c.model) ? "Recommended" : "None") + "</span>"}</dd>
     </dl>
     ${c.imported ? `<p class="hint imported">Imported from ${esc(c.imported)}${c.found === "graph" ? ". Settings worked out from its ComfyUI workflow" : ""}.</p>` : ""}
     <div class="actions">
@@ -929,7 +983,7 @@ async function generate() {
   state.filter = "all";
   render();
   try {
-    const { clip } = await api("POST", "generate", { prompt, settings: s, kind: state.tab });
+    const { clip } = await api("POST", "generate", { prompt, settings: s, kind: state.tab, negative: isImage() ? state.negative : undefined });
     upsertClip(clip);
   } catch (error) {
     say(error.message);
@@ -1171,6 +1225,12 @@ const ACT = {
     if (hadFocus) document.querySelector(".lib-item.on")?.focus();
   },
   closePopups: () => { state.settingsOpen = false; state.loraPicker = false; state.library.open = false; render(); },
+  toggleNegative: () => {
+    state.negativeOpen = !state.negativeOpen;
+    renderNegative();
+    if (state.negativeOpen) $("negative").focus();
+    saveUi();
+  },
   toggleSettings: () => { state.settingsOpen = !state.settingsOpen; state.loraPicker = false; state.library.open = false; render(); },
 
   aspect: (id) => { state.settings.aspect = id; render(); },
@@ -1208,7 +1268,8 @@ const ACT = {
     const model = tabOpt().models.some((m) => m.name === c.model) ? c.model : state.settings.model;
     Object.assign(state.settings, { model, steps: c.steps, res: c.res, aspect: c.aspect, seedMode: "random",
       loras: c.loras.map((l) => ({ id: l.name, name: l.name, strength: l.strength, on: true })) },
-      kindOf(c) === "image" ? { cfg: c.cfg } : { len: c.len });
+      kindOf(c) === "image" ? { cfg: c.cfg } : { len: c.len }, { sampler: c.sampler || "", scheduler: c.scheduler || "" });
+    if (kindOf(c) === "image") { state.negative = c.negative || ""; if (c.negative) state.negativeOpen = true; }
     state.prompt = c.prompt; state.caret = c.prompt.length; state.mentionClosed = true;
     mentionsIn(c.prompt).forEach((n) => { const r = state.refs.find((x) => x.name === n); if (r) attach(r.id); });
     if (isFull()) document.exitFullscreen();
@@ -1261,10 +1322,13 @@ const CHANGE = {
   model: (el) => {
     const m = modelOf(el.value);
     state.settings.model = el.value; state.settings.steps = m.steps;
+    state.settings.sampler = ""; state.settings.scheduler = "";   // back to what the new model is tuned for
     if (isImage()) state.settings.cfg = m.cfg;
     render();
   },
   res: (el) => { state.settings.res = Number(el.value); render(); },
+  sampler: (el) => { state.settings.sampler = el.value; render(); },
+  scheduler: (el) => { state.settings.scheduler = el.value; render(); },
   seed: (el) => { const v = el.value.replace(/\D/g, "").slice(0, 10); state.settings.seed = v ? Number(v) : 0; render(); },
 };
 
@@ -1682,6 +1746,8 @@ async function load(first = true) {
       EDIT.load(data.edit);
       state.tab = "video";   // the app always opens on the Video tab
       state.drafts = { video: ui.prompt || "", image: ui.imagePrompt || "" };
+      state.negative = ui.imageNegative || "";
+      state.negativeOpen = !!ui.negativeOpen;
       state.attached = (ui.attached || []).filter((id) => state.refs.some((r) => r.id === id));
       state.perRow = ui.perRow || 3;
       state.prompt = state.drafts[state.tab];
@@ -1792,6 +1858,9 @@ addEventListener("resize", () => fitPrompt());
   // A longer prompt makes the dock taller too, so the gallery keeps room below its last row.
   new ResizeObserver(() => document.documentElement.style.setProperty("--dock-space", $("dock").offsetHeight + 60 + "px")).observe($("dock"));
 })();
+
+
+$("negative").addEventListener("input", (e) => { state.negative = e.target.value; renderNegative(); saveUi(); });
 
 // Start. Last, so everything above is defined.
 // Only show the Close button when the app runs inside ComfyUI's page.

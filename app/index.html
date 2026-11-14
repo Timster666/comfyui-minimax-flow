@@ -141,6 +141,15 @@ button.add-ref { background: transparent; font: inherit; font-size: 11px; }
 .mention-thumb img { width: 100%; height: 100%; object-fit: cover; }
 .mention-sub { display: block; font-size: 12px; color: var(--muted); font-weight: 400; }
 
+.neg { margin: 6px 0 4px; border-top: 1px solid var(--line); padding-top: 8px; }
+.neg label { display: block; font-size: 12px; color: var(--faint); margin: 0 4px 4px; }
+.neg textarea { width: 100%; resize: vertical; min-height: 44px; max-height: 30vh; background: transparent; border: 0; outline: none; color: var(--text-soft); font: 400 14px/1.5 var(--font); padding: 2px 4px; }
+.neg textarea::placeholder { color: var(--faint); }
+.neg-toggle { background: transparent; border: 1px solid var(--line-strong); border-radius: 999px; color: var(--muted); padding: 4px 12px; font-size: 13px; font-weight: 500; white-space: nowrap; }
+.neg-toggle:hover, .neg-toggle[aria-expanded="true"] { color: var(--text); border-color: var(--accent); }
+.sampling-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.sampling-row .select { width: 100%; margin-top: 6px; }
+.sampling .hint { display: block; margin-top: 6px; }
 .bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; }
 .hint { font-size: 12px; color: var(--faint); }
 .bar .hint { flex: 1 1 200px; }
@@ -493,7 +502,12 @@ body.dragging-ref .composer { border-color: var(--line-strong); }
         <div class="mirror" id="mirror" aria-hidden="true"></div>
         <textarea id="prompt" aria-label="Prompt" spellcheck="false"></textarea>
       </div>
+      <div class="neg" id="negBox" hidden>
+        <label for="negative">Negative prompt</label>
+        <textarea id="negative" rows="2" spellcheck="false"></textarea>
+      </div>
       <div class="bar">
+        <button class="neg-toggle" id="negToggle" data-act="toggleNegative" aria-controls="negBox" hidden></button>
         <span class="hint" id="hint">Type @ to use an image</span>
         <div class="bar-right">
           <div class="settings" id="settings" hidden></div>
