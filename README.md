@@ -41,7 +41,7 @@ The app has three tabs, and it always opens on **Video**.
   (the `@images` in their prompts) as one `.zip` (in
   `minimax_flow/exports/`, and it downloads). **Import project** opens such a zip on any machine: its
   videos join your Video gallery and the Edit tab, its reference images join **Add image**, and its
-  timeline replaces the current one. If an image's name is taken, it gets a number (`detective2`) and
+  timeline replaces the current one (it asks first). If an image's name is taken, it gets a number (`detective2`) and
   the videos' prompts are changed to match, so **Use this prompt and settings** finds the right picture. Videos
   that are already there aren't copied twice.
 
@@ -108,6 +108,12 @@ anywhere, images in the Image tab. Older files without `mmflow` work too when Co
 workflow in them: clips from earlier versions of this app or from the H3 editor, and MOSS-Image
 images. Their settings are worked out from that workflow. Files saved with ComfyUI's
 `--disable-metadata` have nothing to read.
+
+To move a video together with its reference images, open it and click **Export .zip** (or
+right-click it). The `.zip` holds the video and the pictures its `@images` name, and downloads. Import it
+with **Import** or by dropping it on the page, here or on another machine: the video joins the grid and
+its pictures join **Add image**, renamed with a number if the name is taken, just like a project. The
+Edit tab's **Import project** takes these zips too, and adds the video to the media panel.
 
 ## Where things are kept
 

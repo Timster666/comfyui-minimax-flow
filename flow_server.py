@@ -754,8 +754,30 @@ async def export_project(request):
     return web.json_response(dict(counts, file=file, subfolder=ROOT + "/exports"))
 
 
+async def export_clip(request):
+    """One video and its reference pictures as a zip in minimax_flow/exports."""
+    async with _lock:
+        data = read_project()
+    clip = next((c for c in data["clips"] if c["id"] == request.match_info["id"]), None)
+    if not clip or clip.get("kind", "video") != "video" or not clip.get("file"):
+        raise web.HTTPBadRequest(text="Only a finished video can be saved as a zip.")
+    folder = root_dir("exports")
+    file = free_name(folder, os.path.splitext(clip["file"])[0], ".zip")
+    try:
+        counts = await asyncio.to_thread(edit_project.pack_clip, clip, clip_path, os.path.join(folder, file),
+                                         data["images"], image_path)
+    except edit_project.Bad as error:
+        raise web.HTTPBadRequest(text=str(error))
+    except Exception as error:
+        LOG.exception("MiniMax H3 Vision couldn't save the video as a zip")
+        raise web.HTTPBadRequest(text="Couldn't save the zip: %s" % error)
+    return web.json_response(dict(counts, file=file, subfolder=ROOT + "/exports"))
+
+
 async def import_project(request):
-    """Open a project zip: its videos join the app (Video gallery and Edit tab), and its timeline replaces the edit."""
+    """Open a zip: a single video's or an edit project's. Its videos join the app (Video gallery and Edit
+    tab) and its reference pictures the Add image library. A project's timeline comes back as "edit",
+    for the Edit tab to use; the edit kept here only changes when it asks (?timeline=1)."""
     reader = await request.multipart()
     part = await reader.next()
     while part is not None and not part.filename:
@@ -787,7 +809,8 @@ async def import_project(request):
             for image in new_images:
                 image["added"] = now
             data["images"].extend(new_images)
-            data["edit"] = edit
+            if edit is not None and request.query.get("timeline") == "1":
+                data["edit"] = edit
             write_project(data)
     finally:
         try:
@@ -823,6 +846,8 @@ ROUTES = (
     ("DELETE", "/mmflow/api/export/{job}", cancel_export),
     ("POST", "/mmflow/api/edit/export-project", export_project),
     ("POST", "/mmflow/api/edit/import-project", import_project),
+    ("POST", "/mmflow/api/clips/{id}/export", export_clip),
+    ("POST", "/mmflow/api/import-zip", import_project),
 )
 
 
