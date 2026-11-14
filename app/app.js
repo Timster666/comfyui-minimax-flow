@@ -316,9 +316,18 @@ function renderRefs() {
   if (isImage()) return;
   const used = new Set(mentionsIn(state.prompt));
   const strip = state.attached.map((id) => state.refs.find((r) => r.id === id)).filter(Boolean);
-  $("refs").innerHTML = strip.map((r) => `
+  // @names in the prompt with no image (from an old clip, or a deleted image): drop an image on one to fill it in.
+  const known = new Set(state.refs.map((r) => r.name));
+  const missing = [...new Set(mentionsIn(state.prompt))].filter((n) => !known.has(n));
+  $("refs").innerHTML = missing.map((n) => `
+    <div class="ref used ref-gone">
+      <span class="ref-pic ref-missing" data-replace-name="${esc(n)}" title="No image is called @${esc(n)}. Drag an image here from Add image to use it instead.">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 10a3 3 0 1 1 4 2.8c-.6.3-1 .8-1 1.5M12 17h.01"/></svg>
+        <small>Missing</small></span>
+      <span class="ref-name bad-name">@${esc(n)}</span>
+    </div>`).join("") + strip.map((r) => `
     <div class="ref ${used.has(r.name) ? "used" : ""}">
-      <span class="ref-pic" style="background:${r.tone}" draggable="true" data-drag-ref="${r.id}" title="Drag into the prompt"><img src="${r.img}" alt="" draggable="false">
+      <span class="ref-pic" style="background:${r.tone}" draggable="true" data-drag-ref="${r.id}" data-replace-ref="${r.id}" title="Drag into the prompt. Drop another image here to replace this one."><img src="${r.img}" alt="" draggable="false">
         <button class="ref-x" data-act="removeRef" data-id="${r.id}" aria-label="Take @${esc(r.name)} out of the prompt bar">${ICON.x}</button>
       </span>
       <label class="ref-name">@<input value="${esc(r.name)}" data-change="renameRef" data-id="${r.id}" aria-label="Name of @${esc(r.name)}"></label>
@@ -1503,14 +1512,22 @@ document.addEventListener("dragstart", (e) => {
 document.addEventListener("dragend", () => {
   document.body.classList.remove("dragging-ref");
   composer.classList.remove("drop-on");
+  markReplace(null);
 });
+// An image dropped on an image in the strip (or on a missing one) replaces it, in the strip and in the prompt.
+const replaceTarget = (e) => e.target.closest?.("[data-replace-ref], [data-replace-name]");
+function markReplace(el) {
+  document.querySelectorAll(".ref-pic.replace-on").forEach((x) => { if (x !== el) x.classList.remove("replace-on"); });
+  el?.classList.add("replace-on");
+}
 composer.addEventListener("dragover", (e) => {
   if (!isRefDrag(e)) return;
   e.preventDefault();
   e.dataTransfer.dropEffect = "copy";
   composer.classList.add("drop-on");
+  markReplace(replaceTarget(e));
 });
-composer.addEventListener("dragleave", (e) => { if (!composer.contains(e.relatedTarget)) composer.classList.remove("drop-on"); });
+composer.addEventListener("dragleave", (e) => { if (!composer.contains(e.relatedTarget)) { composer.classList.remove("drop-on"); markReplace(null); } });
 composer.addEventListener("drop", async (e) => {
   if (!isRefDrag(e)) return;
   e.preventDefault();
@@ -1518,10 +1535,14 @@ composer.addEventListener("drop", async (e) => {
   const genId = e.dataTransfer.getData(GEN_MIME);
   // Work out where it was dropped now: the drop event's position is only valid during it.
   const dropAt = e.target === ta ? textOffsetAt(e.clientX, e.clientY) : null;
+  const target = replaceTarget(e);
+  const oldId = target?.dataset.replaceRef, oldName = target?.dataset.replaceName;
+  markReplace(null);
   let r;
   if (genId) { try { r = await refFromClip(genId); } catch (error) { say(error.message); return; } }
   else r = state.refs.find((x) => x.id === e.dataTransfer.getData(REF_MIME));
   if (!r) return;
+  if (target) { replaceRef(oldId, oldName, r); return; }
   attach(r.id);
   const pos = dropAt !== null ? wordEdge(state.prompt, dropAt) : state.prompt.length;
   const before = state.prompt.slice(0, pos), after = state.prompt.slice(pos);
@@ -1535,6 +1556,28 @@ composer.addEventListener("drop", async (e) => {
   ta.focus();
   ta.setSelectionRange(state.caret, state.caret);
 });
+
+// Put image r where another was: in the strip at its place, and as @r.name wherever the prompt named the old one.
+function replaceRef(oldId, oldName, r) {
+  const old = oldId ? state.refs.find((x) => x.id === oldId) : null;
+  const name = old ? old.name : oldName;
+  if (old && old.id === r.id) return;
+  if (old) {
+    const at = state.attached.indexOf(old.id);
+    state.attached = state.attached.filter((x) => x !== r.id);
+    const i = state.attached.indexOf(old.id);
+    if (i >= 0) state.attached.splice(i, 1, r.id); else state.attached.splice(Math.max(0, at), 0, r.id);
+  } else attach(r.id);
+  const re = new RegExp("@" + name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "(?![A-Za-z0-9_])", "g");
+  const count = (state.prompt.match(re) || []).length;
+  state.prompt = state.prompt.replace(re, "@" + r.name);
+  state.caret = Math.min(state.caret, state.prompt.length);
+  state.mentionClosed = true;
+  renderPrompt(); renderRefs();
+  if (state.library.open) { renderLibNav(); renderLibList(); renderLibPreview(); }
+  saveUi();
+  say(`@${name} is now @${r.name}` + (count ? (count > 1 ? ` (${count} places in the prompt).` : " in the prompt.") : "."));
+}
 
 // A drop inside a word moves to the nearer end of that word, so words are never split.
 function wordEdge(text, pos) {
