@@ -232,7 +232,9 @@ const filteredClips = () => tabClips().filter((c) => state.filter === "all" || c
 function renderFilters() {
   const starred = tabClips().filter((c) => c.starred).length;
   $("filters").innerHTML = [["all", "All", tabClips().length], ["starred", "Starred", starred]]
-    .map(([id, label, n]) => `<button class="chip ${state.filter === id ? "on" : ""}" data-act="filter" data-id="${id}">${label} · ${n}</button>`).join("");
+    .map(([id, label, n]) => `<button class="chip ${state.filter === id ? "on" : ""}" data-act="filter" data-id="${id}">${label} · ${n}</button>`).join("")
+    + `<label class="chip import" title="Bring in a video or image made earlier. Its prompt and settings are read from the file. You can also drop files on the page.">${ICON.upload}Import
+        <input type="file" accept="video/*,image/png,image/jpeg,image/webp" multiple data-change="importFiles"></label>`;
 }
 
 function renderGrid() {
@@ -695,6 +697,7 @@ function renderClipSide(c) {
       <dt>Seed</dt><dd class="seed-dd">${c.seed}<button class="copy" data-act="copySeed" aria-label="Copy seed">${ICON.copy}</button></dd>
       <dt>LoRAs</dt><dd>${c.loras.length ? c.loras.map((l) => esc(loraText(l))).join("<br>") : '<span class="label">None</span>'}</dd>
     </dl>
+    ${c.imported ? `<p class="hint imported">Imported from ${esc(c.imported)}${c.found === "graph" ? ". Settings worked out from its ComfyUI workflow" : ""}.</p>` : ""}
     <div class="actions">
       <button class="btn primary" data-act="reuse">Use this prompt and settings</button>
       <button class="btn" data-act="keepSeed">Keep this seed</button>
@@ -720,6 +723,7 @@ function renderImageSide(c) {
       <dt>Seed</dt><dd class="seed-dd">${c.seed}<button class="copy" data-act="copySeed" aria-label="Copy seed">${ICON.copy}</button></dd>
       <dt>LoRAs</dt><dd>${c.loras.length ? c.loras.map((l) => esc(loraText(l))).join("<br>") : '<span class="label">None</span>'}</dd>
     </dl>
+    ${c.imported ? `<p class="hint imported">Imported from ${esc(c.imported)}${c.found === "graph" ? ". Settings worked out from its ComfyUI workflow" : ""}.</p>` : ""}
     <div class="actions">
       <button class="btn accent" data-act="useInVideo" ${c.status === "done" ? "" : "disabled"}>${ICON.video}Use in a video</button>
       <button class="btn primary" data-act="reuse">Use this prompt and settings</button>
@@ -1192,7 +1196,7 @@ const ACT = {
     if (!c || c.status !== "done") { say("This is still rendering."); return; }
     const a = document.createElement("a");
     a.href = clipUrl(c);
-    a.download = "minimax-h3-vision-" + c.seed + (kindOf(c) === "image" ? ".png" : ".mp4");
+    a.download = downloadName(c);
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -1218,6 +1222,7 @@ const CHANGE = {
     render();
   },
   addImages: (el) => { uploadImages([...el.files]); el.value = ""; },
+  importFiles: (el) => { importFiles([...el.files]); el.value = ""; },
   libSort: (el) => { state.library.sort = el.value; renderLibList(); },
   // A new model starts at its recommended steps (and, for images, its recommended guidance).
   model: (el) => {
@@ -1268,6 +1273,47 @@ const INPUT = {
 
 function fromImage(image) {
   return { ...image, img: image.url || viewUrl("images", image.file), tone: toneOf(image.id) };
+}
+
+// Saved files are named vision_<start of the prompt>; older ones get that name when downloaded.
+const slugOf = (text) => {
+  let out = "";
+  for (const w of (text || "").toLowerCase().replace(/'/g, "").match(/[a-z0-9]+/g) || []) {
+    if (out && out.length + 1 + w.length > 40) break;
+    out = out ? out + "_" + w : w.slice(0, 40);
+  }
+  return out || "untitled";
+};
+function downloadName(c) {
+  if (c.file && c.file.startsWith("vision_")) return c.file.replace(/_(\d{5})_(\.\w+)$/, "_$1$2");
+  const ext = (c.file && c.file.match(/\.\w+$/)?.[0]) || (kindOf(c) === "image" ? ".png" : ".mp4");
+  return "vision_" + slugOf(c.prompt) + "_" + c.seed + ext;
+}
+
+// Videos and images made earlier: the server reads the prompt and settings saved inside them.
+async function importFiles(files) {
+  files = files.filter((f) => f.type.startsWith("video/") || f.type.startsWith("image/"));
+  if (!files.length) return;
+  const done = [], failed = [];
+  for (const [i, f] of files.entries()) {
+    say(files.length === 1 ? "Reading " + f.name + "…" : `Importing ${i + 1} of ${files.length}…`);
+    const form = new FormData();
+    form.append("file", f, f.name);
+    try {
+      const { clip } = await api("POST", "import", form);
+      if (!clipById(clip.id)) state.clips.unshift(clip);
+      done.push(clip);
+    } catch (error) {
+      failed.push(error.message);
+    }
+  }
+  if (done.length) {
+    if (kindOf(done[done.length - 1]) !== state.tab) ACT.tab(kindOf(done[done.length - 1]));
+    if (done.length === 1) openClip(done[0].id); else render();
+  }
+  if (failed.length) say(failed.length === 1 ? failed[0] : `${failed.length} files had no prompt or settings inside them. ${failed[0]}`);
+  else if (done.length === 1) say(done[0].found === "graph" ? "Imported. The settings were worked out from the file's ComfyUI workflow." : "Imported with its prompt and settings.");
+  else if (done.length) say("Imported " + done.length + " files.");
 }
 
 async function uploadImages(files) {
@@ -1365,14 +1411,21 @@ window.addEventListener("resize", () => { if (state.settingsOpen) renderSettings
 
 // Image files can be dropped anywhere on the page, or pasted into the prompt.
 const hasFiles = (e) => [...(e.dataTransfer?.types || [])].includes("Files");
-document.addEventListener("dragover", (e) => { if (state.view === "gallery" && hasFiles(e) && !isImage()) { e.preventDefault(); $("addRef")?.classList.add("drag"); } });
+document.addEventListener("dragover", (e) => {
+  if (state.view !== "gallery" || !hasFiles(e)) return;
+  e.preventDefault();
+  if (!isImage()) $("addRef")?.classList.add("drag");
+});
 document.addEventListener("dragleave", (e) => { if (!e.relatedTarget) $("addRef")?.classList.remove("drag"); });
 document.addEventListener("drop", (e) => {
   if (state.view !== "gallery" || !hasFiles(e)) return;
   e.preventDefault();
-  if (isImage()) { say("Pictures are used in the Video tab. MOSS-Image works from your words alone."); return; }
   $("addRef")?.classList.remove("drag");
-  uploadImages([...e.dataTransfer.files]);
+  const files = [...e.dataTransfer.files];
+  // Videos are imports. Pictures are imports in the Image tab, and @images in the Video tab.
+  const imports = files.filter((f) => f.type.startsWith("video/") || (isImage() && f.type.startsWith("image/")));
+  if (imports.length) importFiles(imports);
+  if (!isImage()) uploadImages(files.filter((f) => f.type.startsWith("image/")));
 });
 
 /* ------------------------------------------------------------------

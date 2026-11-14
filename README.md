@@ -52,6 +52,19 @@ and uses the same text encoder and VAE. It shows up as "MOSS-Image SFT Turbo 8-s
 renders with 8 steps, guidance 1, Euler and no negative prompt. Any checkpoint whose file name
 has "dmd", "turbo" or "8step" gets these turbo settings.
 
+## File names and importing
+
+Finished files are named after the start of their prompt, like
+`vision_a_detective_in_a_long_coat_walks_00001_.mp4`, and downloads keep that name.
+
+Each file also carries its prompt and settings inside it (ComfyUI's metadata, under `mmflow`).
+**Import**, next to the All and Starred filters, brings a video or image back into the grid with
+them, ready for **Use this prompt and settings**. You can also drop files on the page: videos
+anywhere, images in the Image tab. Older files without `mmflow` work too when ComfyUI saved its
+workflow in them: clips from earlier versions of this app or from the H3 editor, and MOSS-Image
+images. Their settings are worked out from that workflow. Files saved with ComfyUI's
+`--disable-metadata` have nothing to read.
+
 ## Where things are kept
 
 In ComfyUI's output folder, under `minimax_flow/`:
@@ -67,6 +80,7 @@ In ComfyUI's output folder, under `minimax_flow/`:
 - `__init__.py`: tells ComfyUI about the plugin
 - `flow_server.py`: the plugin's server: its API, storage and fake renderer
 - `h3_bridge.py`: real videos, through the H3 editor pack
+- `clip_info.py`: the prompt and settings saved in each file, and reading them back on import
 - `moss_bridge.py`: real images, with MOSS-Image
 - `comfy_link.py`: sending jobs to ComfyUI's queue, following and stopping them
 - `web/minimax_flow_launcher.js`: the sidebar button

@@ -26,7 +26,7 @@ import uuid
 
 from aiohttp import web
 
-from . import comfy_link, h3_bridge, moss_bridge
+from . import clip_info, comfy_link, h3_bridge, moss_bridge
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 APP_DIR = os.path.join(HERE, "app")
@@ -325,8 +325,8 @@ async def generate(request):
 
     if mode == "real":
         try:
-            graph = h3_bridge.build_graph(clip, images)
-            clip["prompt_id"] = await h3_bridge.queue(graph, body.get("client_id"))
+            graph = h3_bridge.build_graph(clip, images, name=clip_info.file_stem(clip))
+            clip["prompt_id"] = await h3_bridge.queue(graph, body.get("client_id"), clip_info.extra_data(clip))
         except Exception as error:
             LOG.exception("MiniMax H3 Vision couldn't queue a render")
             raise web.HTTPBadRequest(text="ComfyUI refused the render: %s" % error)
@@ -368,7 +368,8 @@ async def generate_image(prompt, s):
             "created": time.time(), "mode": mode}
     if mode == "real":
         try:
-            clip["prompt_id"] = await comfy_link.queue_prompt(moss_bridge.build_graph(clip), moss_bridge.EXTRA_DATA)
+            clip["prompt_id"] = await comfy_link.queue_prompt(moss_bridge.build_graph(clip, name=clip_info.file_stem(clip)),
+                                                              clip_info.extra_data(clip, moss_bridge.EXTRA_DATA))
         except Exception as error:
             LOG.exception("MiniMax H3 Vision couldn't queue an image")
             raise web.HTTPBadRequest(text="ComfyUI refused the image: %s" % error)
@@ -421,6 +422,92 @@ async def image_from_clip(request):
         data["images"].append(image)
         write_project(data)
     return web.json_response({"image": image})
+
+
+def nearest(value, options):
+    return min(options, key=lambda o: abs(o - value))
+
+
+def nearest_aspect(w, h, table):
+    return min(table, key=lambda k: abs(math.log((w / h) / (table[k][0] / table[k][1]))))
+
+
+async def import_clip(request):
+    """A video or image made earlier (here, in the H3 editor or by MiniMax H3 Vision elsewhere): it joins the
+    grid with the prompt and settings found inside it."""
+    reader = await request.multipart()
+    part = await reader.next()
+    while part is not None and not part.filename:
+        part = await reader.next()
+    if part is None:
+        raise web.HTTPBadRequest(text="No file came with the import.")
+    ext = os.path.splitext(part.filename)[1].lower()
+    kind = "video" if ext in clip_info.VIDEO_TYPES else "image" if ext in clip_info.IMAGE_TYPES else None
+    if not kind:
+        raise web.HTTPBadRequest(text="Import takes a video (.mp4, .mov, .webm) or an image (.png, .jpg, .webp).")
+    folder = "clips" if kind == "video" else "stills"
+    temp = root_dir(folder, ".import_%s%s" % (uuid.uuid4().hex[:8], ext))
+    with open(temp, "wb") as f:
+        while True:
+            chunk = await part.read_chunk()
+            if not chunk:
+                break
+            f.write(chunk)
+    try:
+        found = clip_info.settings(temp)
+    except Exception:
+        LOG.exception("MiniMax H3 Vision couldn't read an imported file")
+        found = None
+    if not found or not found.get("prompt"):
+        os.remove(temp)
+        raise web.HTTPBadRequest(text="%s has no prompt or settings inside it. Only files saved by ComfyUI with its "
+                                      "metadata (from MiniMax H3 Vision, the H3 editor or a MOSS-Image workflow) have them."
+                                      % part.filename)
+    if (found.get("kind") or kind) != kind:
+        found["kind"] = kind
+    clip = clip_from_settings(found, kind)
+    file = numbered(root_dir(folder), clip_info.file_stem(clip), ext)
+    os.replace(temp, root_dir(folder, file))
+    clip.update({"id": ("c" if kind == "video" else "s") + uuid.uuid4().hex[:10], "status": "done", "step": clip["steps"],
+                 "file": file, "subfolder": ROOT + "/" + folder, "starred": False, "created": time.time(),
+                 "mode": "imported", "imported": part.filename, "found": found["from"]})
+    async with _lock:
+        data = read_project()
+        data["clips"].insert(0, clip)
+        write_project(data)
+    broadcast(clip)
+    return web.json_response({"clip": clip})
+
+
+def clip_from_settings(found, kind):
+    """A clip record from what a file says, filled in to match this app's settings."""
+    if kind == "image":
+        _, models, _ = image_mode()
+        table, sizes, default_aspect = IMAGE_ASPECTS, IMAGE_MEGAPIXELS, "1:1"
+    else:
+        _, models, _ = render_mode()
+        table, sizes, default_aspect = ASPECTS, MEGAPIXELS, "16:9"
+    model = next((m for m in models if m["id"] == found.get("profile") or m["name"] == found.get("model")), None)
+    if not model and found.get("unet"):
+        # An H3 editor graph names a checkpoint file: find the model family that uses it.
+        try:
+            model = next((m for m in models if m["id"] == h3_bridge.profile_for(found["unet"], found.get("unet_lora"))), None)
+        except Exception:
+            model = None
+    w, h = found.get("width") or 0, found.get("height") or 0
+    aspect = found.get("aspect") if found.get("aspect") in table else nearest_aspect(w, h, table) if w and h else default_aspect
+    res = found.get("res") if found.get("res") in sizes else nearest((w * h) / (1024 * 1024), sizes) if w and h else sizes[0]
+    clip = {"kind": kind, "prompt": found["prompt"],
+            "model": model["name"] if model else found.get("model") or os.path.splitext(os.path.basename(found.get("profile") or found.get("unet") or "Unknown model"))[0],
+            "profile": model["id"] if model else found.get("profile"),
+            "steps": int(found.get("steps") or (model or {}).get("steps") or 0), "res": res, "aspect": aspect,
+            "width": w or None, "height": h or None, "seed": int(found.get("seed") or 0),
+            "loras": [{"name": str(l["name"]), "strength": float(l.get("strength", 1.0))} for l in found.get("loras") or []]}
+    if kind == "image":
+        clip["cfg"] = float(found.get("cfg") or (model or {}).get("cfg") or 3.0)
+    else:
+        clip["len"] = int(min(LENGTH["max"], max(LENGTH["min"], found.get("len") or 6)))
+    return clip
 
 
 async def update_clip(request):
@@ -546,6 +633,27 @@ def sample_for(aspect, kind="video"):
     return os.path.join(SAMPLES_DIR, ("sample_image_%s.png" if kind == "image" else "sample_%s.mp4") % shape)
 
 
+def numbered(folder, stem, ext):
+    """A free file name the way ComfyUI numbers its outputs: stem_00001_.ext, stem_00002_.ext, ..."""
+    n = 1
+    while os.path.exists(os.path.join(folder, "%s_%05d_%s" % (stem, n, ext))):
+        n += 1
+    return "%s_%05d_%s" % (stem, n, ext)
+
+
+def save_sample_image(source, target, clip):
+    """A fake image, with its prompt and settings inside like a real one (so importing can be tried)."""
+    try:
+        from PIL import Image, PngImagePlugin
+
+        info = PngImagePlugin.PngInfo()
+        info.add_text(clip_info.KEY, json.dumps(clip_info.record(clip)))
+        with Image.open(source) as image:
+            image.save(target, pnginfo=info)
+    except Exception:
+        shutil.copyfile(source, target)
+
+
 async def fake_render(clip_id):
     """Stands in for a real render: model loading, then one step at a time, then a finished file."""
     config = load_config()
@@ -570,11 +678,11 @@ async def fake_render(clip_id):
         if not await set_clip(clip_id, step=step):
             return
     if clip.get("kind") == "image":
-        file = clip_id + ".png"
-        shutil.copyfile(sample_for(clip["aspect"], "image"), root_dir("stills", file))
+        file = numbered(root_dir("stills"), clip_info.file_stem(clip), ".png")
+        save_sample_image(sample_for(clip["aspect"], "image"), root_dir("stills", file), clip)
         await set_clip(clip_id, status="done", step=clip["steps"], file=file, subfolder=ROOT + "/stills")
         return
-    file = clip_id + ".mp4"
+    file = numbered(root_dir("clips"), clip_info.file_stem(clip), ".mp4")
     shutil.copyfile(sample_for(clip["aspect"]), root_dir("clips", file))
     await set_clip(clip_id, status="done", step=clip["steps"], file=file)
 
@@ -589,6 +697,7 @@ ROUTES = (
     ("POST", "/mmflow/api/images/from-clip", image_from_clip),
     ("PATCH", "/mmflow/api/images/{id}", rename_image),
     ("POST", "/mmflow/api/generate", generate),
+    ("POST", "/mmflow/api/import", import_clip),
     ("PATCH", "/mmflow/api/clips/{id}", update_clip),
     ("DELETE", "/mmflow/api/clips/{id}", delete_clip),
 )

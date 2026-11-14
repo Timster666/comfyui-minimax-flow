@@ -43,9 +43,12 @@ def _why(data):
     return " ".join(parts)
 
 
-async def queue_prompt(graph, extra_data=None):
+async def queue_prompt(graph, extra_data=None, client_id=None):
     """Put a graph in ComfyUI's queue. Returns the prompt id."""
-    status, data = await comfy("POST", "/prompt", {"prompt": graph, "extra_data": extra_data or {}})
+    payload = {"prompt": graph, "extra_data": extra_data or {}}
+    if client_id:
+        payload["client_id"] = client_id
+    status, data = await comfy("POST", "/prompt", payload)
     if status != 200 or not (data or {}).get("prompt_id"):
         raise Refused(_why(data))
     return data["prompt_id"]
