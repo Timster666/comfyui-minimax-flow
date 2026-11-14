@@ -48,7 +48,7 @@ NAME_RE = re.compile(r"^[A-Za-z0-9_]{1,40}$")
 MENTION_RE = re.compile(r"@([A-Za-z0-9_]+)")
 
 DEFAULT_UI = {
-    "settings": {"model": "MiniMax H3", "steps": 20, "res": 0.6, "aspect": "16:9", "len": 6,
+    "settings": {"model": "HyperFlow H3 Flash", "steps": 6, "res": 0.6, "aspect": "16:9", "len": 5,
                  "seedMode": "random", "seed": 48213, "loras": []},
     "imageSettings": {"model": "MOSS-Image SFT (INT8)", "steps": 50, "cfg": 3.0, "res": 1.0, "aspect": "1:1",
                       "seedMode": "random", "seed": 48213, "loras": []},

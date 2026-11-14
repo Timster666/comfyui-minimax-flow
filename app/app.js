@@ -44,7 +44,7 @@ const state = {
   clips: [],
   tab: "video",              // "video" | "image": which tab the gallery, prompt and settings show
   drafts: { video: "", image: "" },   // each tab keeps its own prompt
-  videoSettings: { model: "MiniMax H3", steps: 20, res: 0.6, aspect: "16:9", len: 6, seedMode: "random", seed: 48213, loras: [] },
+  videoSettings: { model: "HyperFlow H3 Flash", steps: 6, res: 0.6, aspect: "16:9", len: 5, seedMode: "random", seed: 48213, loras: [] },
   imageSettings: { model: "MOSS-Image SFT (INT8)", steps: 50, cfg: 3.0, res: 1.0, aspect: "1:1", seedMode: "random", seed: 48213, loras: [] },
   settingsOpen: false,
   loraPicker: false,
@@ -1600,6 +1600,11 @@ async function load(first = true) {
         if (!T.aspects[s.aspect]) s.aspect = tab === "image" ? "1:1" : "16:9";
         if (tab === "image" && !(s.cfg >= OPT.image.cfg.min && s.cfg <= OPT.image.cfg.max)) s.cfg = m.cfg;
       }
+      // Every time the app opens, the Video tab starts on HyperFlow (when installed), 5 seconds and 0.6 MP.
+      const v = state.videoSettings, flow = OPT.models.find((m) => m.id === "hyperflow");
+      if (flow) { v.model = flow.name; v.steps = flow.steps; }
+      v.len = 5;
+      v.res = 0.6;
       state.tab = "video";   // the app always opens on the Video tab
       state.drafts = { video: ui.prompt || "", image: ui.imagePrompt || "" };
       state.attached = (ui.attached || []).filter((id) => state.refs.some((r) => r.id === id));
@@ -1654,3 +1659,48 @@ document.addEventListener("mouseover", (e) => {
 document.addEventListener("mouseout", (e) => { if (e.target.closest?.(".ref-pic") && !e.relatedTarget?.closest?.(".ref-pic")) hidePeek(); });
 document.addEventListener("dragstart", hidePeek, true);
 document.addEventListener("pointerdown", hidePeek, true);
+
+// The prompt box can be made bigger or smaller from the handle in its top-right corner: dragging up
+// makes it taller, dragging sideways makes it wider (it stays centred). The size lasts for the session.
+const PROMPT_SIZE = "mmvision.prompt-size";
+function applyPromptSize(size) {
+  const root = document.documentElement.style;
+  if (size?.width) root.setProperty("--composer-width", size.width + "px");
+  if (size?.height) root.setProperty("--prompt-height", size.height + "px");
+  requestAnimationFrame(() => root.setProperty("--dock-space", $("dock").offsetHeight + 60 + "px"));
+}
+try { applyPromptSize(JSON.parse(sessionStorage.getItem(PROMPT_SIZE) || "null")); } catch { applyPromptSize(null); }
+(function promptResizer() {
+  const handle = document.createElement("div");
+  handle.className = "prompt-resize";
+  handle.title = "Drag to resize the prompt";
+  handle.setAttribute("aria-hidden", "true");
+  handle.innerHTML = '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M1 1h10v10M5 1h6v6"/></svg>';
+  document.querySelector(".composer").appendChild(handle);
+  handle.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    handle.setPointerCapture(e.pointerId);
+    const inner = document.querySelector(".dock-inner"), mirror = $("mirror");
+    const start = { x: e.clientX, y: e.clientY, w: inner.offsetWidth, h: mirror.offsetHeight };
+    let size = null;
+    const move = (ev) => {
+      size = {
+        width: Math.round(Math.max(520, Math.min(innerWidth - 64, start.w + 2 * (ev.clientX - start.x)))),
+        height: Math.round(Math.max(78, Math.min(innerHeight * 0.6, start.h - (ev.clientY - start.y)))),
+      };
+      applyPromptSize(size);
+      if (state.settingsOpen) renderSettings();
+    };
+    const up = () => {
+      handle.removeEventListener("pointermove", move);
+      handle.removeEventListener("pointerup", up);
+      handle.removeEventListener("pointercancel", up);
+      if (size) try { sessionStorage.setItem(PROMPT_SIZE, JSON.stringify(size)); } catch {}
+    };
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", up);
+    handle.addEventListener("pointercancel", up);
+  });
+  // A longer prompt makes the dock taller too, so the gallery keeps room below its last row.
+  new ResizeObserver(() => document.documentElement.style.setProperty("--dock-space", $("dock").offsetHeight + 60 + "px")).observe($("dock"));
+})();
