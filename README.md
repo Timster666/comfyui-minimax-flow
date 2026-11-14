@@ -18,7 +18,9 @@ The app has three tabs, and it always opens on **Video**.
   by dragging it onto the timeline; drag clips to move them and their edges to trim them. **S**
   splits at the playhead, **⌫** deletes, **⌘Z** undoes, Space plays. **Export** saves one MP4
   (H.264 and AAC, 24 fps) in `minimax_flow/exports/`, at the videos' own size, 720p or 1080p; videos
-  of another shape get black bars. The edit is saved as you go.
+  of another shape get black bars. It downloads by itself when done. Quality is visually lossless:
+  CRF 16, and clips already at the export size are passed to the encoder without any conversion.
+  The edit is saved as you go.
 
 It needs no other custom node pack. Videos run on ComfyUI's own MiniMax H3 nodes plus a few of
 this pack's own (in the node menu under **MiniMax H3 Vision**), and images on ComfyUI's own nodes.

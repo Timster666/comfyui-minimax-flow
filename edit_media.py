@@ -5,11 +5,17 @@
 - export(): the edit as one MP4: each piece trimmed, fitted into the frame with black bars where
   its shape differs, and joined, picture (H.264, 24 fps) and sound (AAC, 48 kHz stereo).
 
+Quality: the clips are already compressed, so the export aims to add as little loss as it can:
+H.264 at CRF 16 (visually lossless; CRF 18 is the usual "transparent" setting) with the "medium"
+preset, 4:2:0 for players everywhere, AAC at 256 kb/s. A clip already at the export size goes to the
+encoder as decoded, with no colour conversion; other sizes are scaled with Lanczos.
+
 No ComfyUI imports, so both can run and be tested anywhere PyAV is installed.
 """
 
 import json
 import os
+from fractions import Fraction
 
 import numpy as np
 
@@ -18,6 +24,8 @@ RATE = 48000
 STRIP_STEP = 0.5        # seconds between filmstrip pictures
 STRIP_HEIGHT = 72
 PEAKS_PER_SECOND = 25
+TIME_BASE = Fraction(1, FPS)
+VIDEO_CRF, VIDEO_PRESET, AUDIO_BITRATE = "16", "medium", 256000
 
 
 class Cancelled(Exception):
@@ -99,9 +107,11 @@ def fitted(frame, width, height):
     fw, fh = frame.width, frame.height
     scale = min(width / fw, height / fh)
     sw, sh = max(2, int(round(fw * scale / 2)) * 2), max(2, int(round(fh * scale / 2)) * 2)
-    if (sw, sh) == (width, height):
-        return frame.to_ndarray(format="rgb24", width=width, height=height)
-    picture = frame.to_ndarray(format="rgb24", width=min(sw, width), height=min(sh, height))
+    if (fw, fh) == (width, height):
+        return frame.to_ndarray(format="rgb24")
+    picture = frame.reformat(width=min(sw, width), height=min(sh, height), format="rgb24", interpolation="LANCZOS").to_ndarray()
+    if picture.shape[:2] == (height, width):
+        return picture
     canvas = np.zeros((height, width, 3), dtype=np.uint8)
     y, x = (height - picture.shape[0]) // 2, (width - picture.shape[1]) // 2
     canvas[y:y + picture.shape[0], x:x + picture.shape[1]] = picture
@@ -170,23 +180,29 @@ def export(pieces, out_path, width, height, sound=True, progress=None, cancelled
         with av.open(temp, mode="w", format="mp4", options={"movflags": "+faststart"}) as out:
             video = out.add_stream("libx264" if "libx264" in av.codecs_available else "h264", rate=FPS)
             video.width, video.height, video.pix_fmt = width, height, "yuv420p"
-            video.options = {"crf": "18", "preset": "veryfast"}
+            video.options = {"crf": VIDEO_CRF, "preset": VIDEO_PRESET, "profile": "high"}
             audio = None
             if sound:
                 audio = out.add_stream("aac", rate=RATE, layout="stereo")
-                audio.bit_rate = 192000
+                audio.bit_rate = AUDIO_BITRATE
             samples_written = 0
             for number, ((path, start, end), count) in enumerate(zip(pieces, counts), 1):
                 if progress:
                     progress(done / total, "Clip %d of %d" % (number, len(pieces)))
-                last, last_rgb = None, None
+                last, last_out = None, None
                 for frame in frames_at(path, [start + k / FPS for k in range(count)]):
                     if cancelled and cancelled():
                         raise Cancelled()
                     if frame is not last:
-                        last, last_rgb = frame, (fitted(frame, width, height) if frame is not None
-                                                 else np.zeros((height, width, 3), dtype=np.uint8))
-                    for packet in video.encode(av.VideoFrame.from_ndarray(last_rgb, format="rgb24")):
+                        last = frame
+                        if frame is not None and (frame.width, frame.height) == (width, height):
+                            last_out = frame.reformat(format="yuv420p")   # as decoded: no colour round trip
+                        else:
+                            rgb = fitted(frame, width, height) if frame is not None else np.zeros((height, width, 3), dtype=np.uint8)
+                            last_out = av.VideoFrame.from_ndarray(rgb, format="rgb24")
+                    # Our own clock: a decoded frame still carries its source's timestamps.
+                    last_out.pts, last_out.time_base = done, TIME_BASE
+                    for packet in video.encode(last_out):
                         out.mux(packet)
                     done += 1
                     if progress and done % 12 == 0:
