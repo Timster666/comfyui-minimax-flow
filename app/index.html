@@ -215,7 +215,10 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .take i video { width: 100%; height: 100%; object-fit: cover; display: block; }
 .take.on i { border: 2px solid var(--accent); }
 .clip-side { flex: 1 1 340px; max-width: 420px; display: flex; flex-direction: column; gap: 18px; }
-.clip-prompt { margin: 0; font-size: 15px; line-height: 1.6; white-space: pre-wrap; }
+.prompt-box { position: relative; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
+.prompt-box .clip-prompt { max-height: 168px; overflow-y: auto; padding: 12px 48px 12px 14px; scrollbar-width: thin; scrollbar-color: var(--raised-2) transparent; }
+.prompt-copy { position: absolute; top: 8px; right: 8px; }
+.clip-prompt { margin: 0; font-size: 15px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: break-word; }
 .clip-prompt .m { color: var(--accent-text); background: var(--mention-bg); box-shadow: 0 0 0 2px var(--mention-bg); border-radius: 5px; }
 .facts { margin: 0; display: grid; grid-template-columns: 100px 1fr; row-gap: 10px; column-gap: 12px; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 16px; }
 .facts dt { color: var(--muted); }
