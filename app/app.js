@@ -318,12 +318,11 @@ function renderNegative() {
   $("negToggle").hidden = !on;
   $("negBox").hidden = !(on && state.negativeOpen);
   if (!on) return;
-  const rec = negativeDefault(state.settings.model);
-  $("negToggle").innerHTML = (state.negativeOpen ? "− " : "+ ") + "Negative prompt" + (state.negative.trim() ? " ·  custom" : "");
+  $("negToggle").innerHTML = (state.negativeOpen ? "− " : "+ ") + "Negative prompt" + (state.negative.trim() ? "" : " · none");
   $("negToggle").setAttribute("aria-expanded", state.negativeOpen);
   const box = $("negative");
   if (box.value !== state.negative) box.value = state.negative;
-  box.placeholder = rec ? "Empty uses the recommended one: " + rec : "This model uses no negative prompt unless you write one";
+  box.placeholder = "No negative prompt";
 }
 
 function renderRefs() {
@@ -781,6 +780,7 @@ function samplingFacts(c) {
   const one = (own, dflt) => own ? esc(own) : dflt ? `${esc(dflt === "hyperflow" ? "HyperFlow's own" : dflt)} <span class="label">· model default</span>` : '<span class="label">Model default</span>';
   return `<dt>Sampler</dt><dd>${one(c.sampler, m.sampler)}</dd><dt>Scheduler</dt><dd>${one(c.scheduler, m.scheduler)}</dd>`;
 }
+// Images saved before the negative prompt box existed used the model's own.
 const negativeDefault = (modelName) => (OPT.image.models.find((m) => m.name === modelName) || OPT.image.models[0] || {}).negative || "";
 
 function renderImageSide(c) {
@@ -799,7 +799,7 @@ function renderImageSide(c) {
       <dt>Seed</dt><dd class="seed-dd">${c.seed}<button class="copy" data-act="copySeed" aria-label="Copy seed">${ICON.copy}</button></dd>
       <dt>LoRAs</dt><dd>${c.loras.length ? c.loras.map((l) => esc(loraText(l))).join("<br>") : '<span class="label">None</span>'}</dd>
       ${samplingFacts(c)}
-      <dt>Negative</dt><dd>${c.negative ? esc(c.negative) : '<span class="label">' + esc(negativeDefault(c.model) ? "Recommended" : "None") + "</span>"}</dd>
+      <dt>Negative</dt><dd>${c.negative != null ? (c.negative ? esc(c.negative) : '<span class="label">None</span>') : esc(negativeDefault(c.model)) || '<span class="label">None</span>'}</dd>
     </dl>
     ${c.imported ? `<p class="hint imported">Imported from ${esc(c.imported)}${c.found === "graph" ? ". Settings worked out from its ComfyUI workflow" : ""}.</p>` : ""}
     <div class="actions">
@@ -1269,7 +1269,7 @@ const ACT = {
     Object.assign(state.settings, { model, steps: c.steps, res: c.res, aspect: c.aspect, seedMode: "random",
       loras: c.loras.map((l) => ({ id: l.name, name: l.name, strength: l.strength, on: true })) },
       kindOf(c) === "image" ? { cfg: c.cfg } : { len: c.len }, { sampler: c.sampler || "", scheduler: c.scheduler || "" });
-    if (kindOf(c) === "image") { state.negative = c.negative || ""; if (c.negative) state.negativeOpen = true; }
+    if (kindOf(c) === "image") state.negative = c.negative != null ? c.negative : negativeDefault(c.model);
     state.prompt = c.prompt; state.caret = c.prompt.length; state.mentionClosed = true;
     mentionsIn(c.prompt).forEach((n) => { const r = state.refs.find((x) => x.name === n); if (r) attach(r.id); });
     if (isFull()) document.exitFullscreen();
@@ -1746,7 +1746,7 @@ async function load(first = true) {
       EDIT.load(data.edit);
       state.tab = "video";   // the app always opens on the Video tab
       state.drafts = { video: ui.prompt || "", image: ui.imagePrompt || "" };
-      state.negative = ui.imageNegative || "";
+      state.negative = typeof ui.imageNegative === "string" ? ui.imageNegative : "";
       state.negativeOpen = !!ui.negativeOpen;
       state.attached = (ui.attached || []).filter((id) => state.refs.some((r) => r.id === id));
       state.perRow = ui.perRow || 3;
