@@ -63,7 +63,7 @@ svg { display: block; }
 .per-row { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 13px; white-space: nowrap; }
 .per-row input { width: 140px; }
 .per-row output { width: 14px; text-align: right; color: var(--text); font-variant-numeric: tabular-nums; }
-.grid { display: grid; grid-template-columns: repeat(var(--per-row, 3), minmax(0, 1fr)); gap: 18px; padding-bottom: 300px; }
+.grid { display: grid; grid-template-columns: repeat(var(--per-row, 3), minmax(0, 1fr)); gap: 18px; padding-bottom: var(--dock-space, 300px); }
 .empty { padding: 80px 0; text-align: center; color: var(--muted); font-size: 15px; grid-column: 1 / -1; }
 .tile { display: flex; flex-direction: column; gap: 8px; }
 .tile-hit { position: absolute; inset: 0; background: transparent; border: 0; padding: 0; z-index: 1; }
@@ -92,7 +92,7 @@ svg { display: block; }
 /* Composer dock */
 .dock { position: fixed; left: 0; right: 0; bottom: 0; padding: 0 32px 20px; display: flex; justify-content: center; z-index: 6; pointer-events: none; }
 .dock-inner { width: 100%; max-width: var(--composer-width); position: relative; pointer-events: auto; }
-.composer { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-lg); padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
+.composer { position: relative; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-lg); padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
 .scrim { position: fixed; inset: 0; background: rgba(0,0,0,.35); z-index: 5; }
 
 /* Reference images */
@@ -119,7 +119,9 @@ button.add-ref { background: transparent; font: inherit; font-size: 11px; }
 /* Prompt: a coloured mirror under a transparent textarea */
 .prompt-wrap { position: relative; }
 .mirror, #prompt { font: 400 17px/1.55 var(--font); padding: 4px; margin: 0; white-space: pre-wrap; overflow-wrap: break-word; }
-.mirror { min-height: 78px; color: var(--text); }
+.mirror { min-height: var(--prompt-height, 78px); color: var(--text); }
+.prompt-resize { position: absolute; top: 6px; right: 6px; width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; color: var(--faint); cursor: nesw-resize; border-radius: 6px; touch-action: none; z-index: 2; }
+.prompt-resize:hover { color: var(--text); background: var(--raised); }
 .mirror .ph { color: var(--faint); }
 .mirror .m { color: var(--accent-text); background: var(--mention-bg); box-shadow: 0 0 0 2px var(--mention-bg); border-radius: 5px; }
 .mirror .bad, .clip-prompt .bad { color: var(--danger); text-decoration: underline wavy; }
@@ -319,7 +321,7 @@ body.dragging-ref .composer { border-color: var(--line-strong); }
 
 /* App additions */
 .top-right { display: flex; align-items: center; gap: 12px; }
-.fake { font-size: 12px; font-weight: 600; color: var(--accent-text); background: transparent; border: 1px solid rgba(224,162,74,.5); border-radius: 999px; padding: 4px 10px; cursor: pointer; }
+.missing { font-size: 12px; font-weight: 600; color: var(--accent-text); background: transparent; border: 1px solid rgba(224,162,74,.5); border-radius: 999px; padding: 4px 10px; cursor: pointer; }
 .close-btn { width: 32px; height: 32px; border-radius: 16px; border: 0; background: var(--raised); display: flex; align-items: center; justify-content: center; }
 .close-btn:hover { background: var(--raised-2); }
 /* A render with a live preview: the moving picture shows, with its progress along the bottom. */

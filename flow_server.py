@@ -7,10 +7,9 @@ Everything lives in ComfyUI's output folder under minimax_flow/:
     stills/        finished images (the Image tab)
 Files there are served by ComfyUI's own /view endpoint.
 
-Videos are real when the H3 editor pack and its models are installed (see h3_bridge.py), and
-images are real when MOSS-Image's files are installed (see moss_bridge.py). Each is fake otherwise: a fake render reports its steps like a real one and then hands out a
-sample clip, so the whole app can be built and tested without models or a GPU.
-"mode" in config.json can force either: "auto" (the default), "real" or "fake" ("image_mode" for images).
+Videos are MiniMax H3 graphs built here (h3_graph.py, with this pack's nodes in vision_nodes.py), and
+images are MOSS-Image graphs (moss_bridge.py). Both run in ComfyUI's own queue. A tab whose models
+aren't installed says which files it needs.
 """
 
 import asyncio
@@ -26,30 +25,17 @@ import uuid
 
 from aiohttp import web
 
-from . import clip_info, comfy_link, h3_bridge, moss_bridge
+from . import clip_info, comfy_link, h3_graph, moss_bridge
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 APP_DIR = os.path.join(HERE, "app")
-SAMPLES_DIR = os.path.join(HERE, "samples")
-CONFIG_FILE = os.path.join(HERE, "config.json")
 ROOT = "minimax_flow"
 EVENT = "mmflow.clip"
 LOG = logging.getLogger("minimax_flow")
 
-# The models fake renders offer. Real renders offer the H3 editor's checkpoint families that are installed.
-FAKE_MODELS = [
-    {"id": "hyperflow", "name": "HyperFlow H3 Flash", "steps": 6, "minSteps": 4, "maxSteps": 8, "stepSize": 2},
-    {"id": "h3_turbo", "name": "MiniMax H3 Turbo", "steps": 6, "minSteps": 1, "maxSteps": 16, "stepSize": 1},
-    {"id": "h3", "name": "MiniMax H3", "steps": 20, "minSteps": 1, "maxSteps": 40, "stepSize": 1},
-    {"id": "singularity", "name": "Singularity v2", "steps": 20, "minSteps": 1, "maxSteps": 40, "stepSize": 1},
-]
 ASPECTS = {"16:9": [16, 9], "9:16": [9, 16], "1:1": [1, 1], "4:3": [4, 3], "3:4": [3, 4], "21:9": [21, 9]}
 
 # The Image tab (MOSS-Image): any aspect ratio, sides in steps of 16, about 0.25 to 4 MP, best at 1 to 2 MP.
-FAKE_IMAGE_MODELS = [{"id": "moss_image_sft_int8_convrot.safetensors", "name": "MOSS-Image SFT (INT8)", "steps": 50,
-                      "minSteps": 1, "maxSteps": 80, "stepSize": 1, "cfg": 3.0},
-                     {"id": "moss_image_sft_8stepdmd_int8_convrot.safetensors", "name": "MOSS-Image SFT Turbo 8-step (INT8)",
-                      "steps": 8, "minSteps": 1, "maxSteps": 80, "stepSize": 1, "cfg": 1.0}]
 IMAGE_ASPECTS = {"1:1": [1, 1], "4:5": [4, 5], "3:4": [3, 4], "2:3": [2, 3], "9:16": [9, 16],
                  "16:9": [16, 9], "3:2": [3, 2], "4:3": [4, 3], "5:4": [5, 4], "21:9": [21, 9]}
 IMAGE_MEGAPIXELS = [0.25, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0]
@@ -62,7 +48,7 @@ NAME_RE = re.compile(r"^[A-Za-z0-9_]{1,40}$")
 MENTION_RE = re.compile(r"@([A-Za-z0-9_]+)")
 
 DEFAULT_UI = {
-    "settings": {"model": "MiniMax H3", "steps": 20, "res": 0.6, "aspect": "16:9", "len": 6,
+    "settings": {"model": "HyperFlow H3 Flash", "steps": 6, "res": 0.6, "aspect": "16:9", "len": 5,
                  "seedMode": "random", "seed": 48213, "loras": []},
     "imageSettings": {"model": "MOSS-Image SFT (INT8)", "steps": 50, "cfg": 3.0, "res": 1.0, "aspect": "1:1",
                       "seedMode": "random", "seed": 48213, "loras": []},
@@ -73,8 +59,6 @@ DEFAULT_UI = {
 }
 
 _lock = asyncio.Lock()
-_queue = None          # asyncio.Queue of clip ids, made on first use (it needs the running loop)
-_cancelled = set()
 
 
 # ---------------------------------------------------------------- storage
@@ -94,53 +78,26 @@ def project_file():
     return os.path.join(root_dir(), "project.json")
 
 
-def load_config():
+def video_models():
+    """The installed MiniMax H3 models, and why there are none when there are none."""
     try:
-        with open(CONFIG_FILE, encoding="utf-8") as f:
-            return json.load(f)
-    except (OSError, ValueError):
-        return {}
-
-
-def render_mode():
-    """("real", models) or ("fake", models), and why real isn't used when it isn't."""
-    config = load_config()
-    mode = config.get("mode")
-    if mode not in ("auto", "real", "fake"):
-        mode = "fake" if config.get("fake_renders") else "auto"
-    if mode == "fake":
-        return "fake", FAKE_MODELS, "Fake renders are switched on in config.json."
-    try:
-        models = h3_bridge.models()
-    except h3_bridge.Missing as error:
-        return ("fake", FAKE_MODELS, str(error)) if mode == "auto" else ("real", [], str(error))
+        models = h3_graph.models()
+        return models, (None if models else h3_graph.why_none())
     except Exception as error:
-        # Never let this break the app: say what went wrong and offer fake renders.
-        LOG.exception("MiniMax H3 Vision couldn't check for the H3 editor")
-        why = "MiniMax H3 Vision couldn't use the H3 editor: %s: %s" % (type(error).__name__, error)
-        return ("fake", FAKE_MODELS, why) if mode == "auto" else ("real", [], why)
-    if not models:
-        why = "None of the H3 editor's checkpoints are installed."
-        return ("fake", FAKE_MODELS, why) if mode == "auto" else ("real", [], why)
-    return "real", models, None
+        # Never let this break the app: say what went wrong.
+        LOG.exception("MiniMax H3 Vision couldn't list its video models")
+        return [], "MiniMax H3 Vision couldn't list its video models: %s: %s" % (type(error).__name__, error)
 
 
-def image_mode():
-    """Like render_mode, for the Image tab: real when MOSS-Image's files are installed."""
-    config = load_config()
-    mode = config.get("image_mode", config.get("mode"))
-    if mode not in ("auto", "real", "fake"):
-        mode = "fake" if config.get("fake_renders") else "auto"
-    if mode == "fake":
-        return "fake", FAKE_IMAGE_MODELS, "Fake renders are switched on in config.json."
+def image_models():
+    """The installed MOSS-Image models, and why there are none when there are none."""
     try:
-        return "real", moss_bridge.models(), None
+        return moss_bridge.models(), None
     except moss_bridge.Missing as error:
-        return ("fake", FAKE_IMAGE_MODELS, str(error)) if mode == "auto" else ("real", [], str(error))
+        return [], str(error)
     except Exception as error:
         LOG.exception("MiniMax H3 Vision couldn't check for MOSS-Image")
-        why = "MiniMax H3 Vision couldn't check for MOSS-Image: %s: %s" % (type(error).__name__, error)
-        return ("fake", FAKE_IMAGE_MODELS, why) if mode == "auto" else ("real", [], why)
+        return [], "MiniMax H3 Vision couldn't check for MOSS-Image: %s: %s" % (type(error).__name__, error)
 
 
 def read_project():
@@ -206,17 +163,17 @@ async def get_state(request):
         loras = sorted(folder_paths.get_filename_list("loras"), key=str.lower)
     except Exception:
         loras = []
-    mode, models, why = render_mode()
-    imode, imodels, iwhy = image_mode()
+    models, why = video_models()
+    imodels, iwhy = image_models()
     if any(c.get("status") in ("queued", "rendering") and c.get("prompt_id") for c in data["clips"]):
         ensure_watcher()
     return web.json_response({
         **data,
         "options": {"models": models, "aspects": ASPECTS, "megapixels": MEGAPIXELS, "length": LENGTH,
-                    "loras": loras, "fake": mode == "fake", "why_fake": why, "root": ROOT,
+                    "loras": loras, "missing": why, "root": ROOT,
                     "image": {"models": imodels, "aspects": IMAGE_ASPECTS, "megapixels": IMAGE_MEGAPIXELS,
                               "recommendedMP": IMAGE_RECOMMENDED_MP, "cfg": CFG,
-                              "fake": imode == "fake", "why_fake": iwhy}},
+                              "missing": iwhy}},
     })
 
 
@@ -291,7 +248,7 @@ async def generate(request):
         raise web.HTTPBadRequest(text="Write a prompt first.")
     if body.get("kind") == "image":
         return await generate_image(prompt, s)
-    mode, models, why = render_mode()
+    models, why = video_models()
     model = next((m for m in models if m["name"] == s.get("model")), None)
     if not model:
         raise web.HTTPBadRequest(text=why or "That model isn't installed.")
@@ -320,32 +277,29 @@ async def generate(request):
         clip = {"id": "c" + uuid.uuid4().hex[:10], "prompt": prompt, "model": model["name"], "profile": model["id"],
                 "steps": steps, "res": res, "aspect": aspect, "len": length, "width": w, "height": h, "seed": seed,
                 "loras": loras, "status": "queued", "step": 0, "file": None, "subfolder": ROOT + "/clips",
-                "starred": False, "created": time.time(), "mode": mode, "kind": "video"}
+                "starred": False, "created": time.time(), "kind": "video"}
         images = list(data["images"])
 
-    if mode == "real":
-        try:
-            graph = h3_bridge.build_graph(clip, images, name=clip_info.file_stem(clip))
-            clip["prompt_id"] = await h3_bridge.queue(graph, body.get("client_id"), clip_info.extra_data(clip))
-        except Exception as error:
-            LOG.exception("MiniMax H3 Vision couldn't queue a render")
-            raise web.HTTPBadRequest(text="ComfyUI refused the render: %s" % error)
+    try:
+        graph = h3_graph.build_graph(clip, images, name=clip_info.file_stem(clip))
+        clip["prompt_id"] = await comfy_link.queue_prompt(graph, clip_info.extra_data(clip), body.get("client_id"))
+    except h3_graph.Missing as error:
+        raise web.HTTPBadRequest(text=str(error))
+    except Exception as error:
+        LOG.exception("MiniMax H3 Vision couldn't queue a render")
+        raise web.HTTPBadRequest(text="ComfyUI refused the render: %s" % error)
 
     async with _lock:
         data = read_project()
         data["clips"].insert(0, clip)
         write_project(data)
-    if mode == "real":
-        ensure_watcher()
-    else:
-        ensure_worker()
-        await _queue.put(clip["id"])
+    ensure_watcher()
     broadcast(clip)
     return web.json_response({"clip": clip})
 
 
 async def generate_image(prompt, s):
-    mode, models, why = image_mode()
+    models, why = image_models()
     model = next((m for m in models if m["name"] == s.get("model")), None)
     if not model:
         raise web.HTTPBadRequest(text=why or "That model isn't installed.")
@@ -365,23 +319,18 @@ async def generate_image(prompt, s):
     clip = {"id": "s" + uuid.uuid4().hex[:10], "kind": "image", "prompt": prompt, "model": model["name"], "profile": model["id"],
             "steps": steps, "cfg": cfg, "res": res, "aspect": aspect, "width": w, "height": h, "seed": seed, "loras": loras,
             "status": "queued", "step": 0, "file": None, "subfolder": ROOT + "/stills", "starred": False,
-            "created": time.time(), "mode": mode}
-    if mode == "real":
-        try:
-            clip["prompt_id"] = await comfy_link.queue_prompt(moss_bridge.build_graph(clip, name=clip_info.file_stem(clip)),
-                                                              clip_info.extra_data(clip, moss_bridge.EXTRA_DATA))
-        except Exception as error:
-            LOG.exception("MiniMax H3 Vision couldn't queue an image")
-            raise web.HTTPBadRequest(text="ComfyUI refused the image: %s" % error)
+            "created": time.time()}
+    try:
+        clip["prompt_id"] = await comfy_link.queue_prompt(moss_bridge.build_graph(clip, name=clip_info.file_stem(clip)),
+                                                          clip_info.extra_data(clip, moss_bridge.EXTRA_DATA))
+    except Exception as error:
+        LOG.exception("MiniMax H3 Vision couldn't queue an image")
+        raise web.HTTPBadRequest(text="ComfyUI refused the image: %s" % error)
     async with _lock:
         data = read_project()
         data["clips"].insert(0, clip)
         write_project(data)
-    if mode == "real":
-        ensure_watcher()
-    else:
-        ensure_worker()
-        await _queue.put(clip["id"])
+    ensure_watcher()
     broadcast(clip)
     return web.json_response({"clip": clip})
 
@@ -482,16 +431,16 @@ async def import_clip(request):
 def clip_from_settings(found, kind):
     """A clip record from what a file says, filled in to match this app's settings."""
     if kind == "image":
-        _, models, _ = image_mode()
+        models, _ = image_models()
         table, sizes, default_aspect = IMAGE_ASPECTS, IMAGE_MEGAPIXELS, "1:1"
     else:
-        _, models, _ = render_mode()
+        models, _ = video_models()
         table, sizes, default_aspect = ASPECTS, MEGAPIXELS, "16:9"
     model = next((m for m in models if m["id"] == found.get("profile") or m["name"] == found.get("model")), None)
     if not model and found.get("unet"):
         # An H3 editor graph names a checkpoint file: find the model family that uses it.
         try:
-            model = next((m for m in models if m["id"] == h3_bridge.profile_for(found["unet"], found.get("unet_lora"))), None)
+            model = next((m for m in models if m["id"] == h3_graph.profile_for(found["unet"], found.get("unet_lora"))), None)
         except Exception:
             model = None
     w, h = found.get("width") or 0, found.get("height") or 0
@@ -533,8 +482,6 @@ async def delete_clip(request):
         if not clip:
             raise web.HTTPNotFound(text="No such clip.")
         busy = clip.get("status") in ("queued", "rendering")
-        if busy:
-            _cancelled.add(clip_id)
         data["clips"].remove(clip)
         write_project(data)
     if busy and clip.get("prompt_id"):
@@ -552,13 +499,6 @@ async def delete_clip(request):
 
 # ---------------------------------------------------------------- rendering
 
-def ensure_worker():
-    global _queue
-    if _queue is None:
-        _queue = asyncio.Queue()
-        asyncio.get_running_loop().create_task(worker())
-
-
 async def set_clip(clip_id, **fields):
     async with _lock:
         data = read_project()
@@ -569,19 +509,6 @@ async def set_clip(clip_id, **fields):
         write_project(data)
     broadcast(clip)
     return clip
-
-
-async def worker():
-    while True:
-        clip_id = await _queue.get()
-        try:
-            if clip_id in _cancelled:
-                _cancelled.discard(clip_id)
-                continue
-            await fake_render(clip_id)
-        except Exception as error:
-            LOG.exception("MiniMax H3 Vision render failed")
-            await set_clip(clip_id, status="failed", error=str(error))
 
 
 _watcher = None
@@ -615,7 +542,8 @@ async def watch_real():
                         entry = comfy_link.history(pid)
                         file, why = moss_bridge.saved_file(entry), comfy_link.failure(entry)
                     else:
-                        file, why = h3_bridge.result(pid)
+                        entry = comfy_link.history(pid)
+                        file, why = video_file(entry), comfy_link.failure(entry)
                     if file:
                         await set_clip(clip["id"], status="done", step=clip["steps"], file=file["filename"],
                                        subfolder=file.get("subfolder") or ROOT + ("/stills" if clip.get("kind") == "image" else "/clips"))
@@ -627,10 +555,13 @@ async def watch_real():
             LOG.exception("MiniMax H3 Vision couldn't check its renders")
 
 
-def sample_for(aspect, kind="video"):
-    a, b = (IMAGE_ASPECTS if kind == "image" else ASPECTS)[aspect]
-    shape = "wide" if a > b else "tall" if a < b else "square"
-    return os.path.join(SAMPLES_DIR, ("sample_image_%s.png" if kind == "image" else "sample_%s.mp4") % shape)
+def video_file(entry):
+    """The video a finished job saved, as {filename, subfolder}, or None."""
+    for value in ((entry or {}).get("outputs") or {}).get(h3_graph.SAVE_NODE, {}).values():
+        for found in value if isinstance(value, list) else []:
+            if isinstance(found, dict) and found.get("filename"):
+                return found
+    return None
 
 
 def numbered(folder, stem, ext):
@@ -639,52 +570,6 @@ def numbered(folder, stem, ext):
     while os.path.exists(os.path.join(folder, "%s_%05d_%s" % (stem, n, ext))):
         n += 1
     return "%s_%05d_%s" % (stem, n, ext)
-
-
-def save_sample_image(source, target, clip):
-    """A fake image, with its prompt and settings inside like a real one (so importing can be tried)."""
-    try:
-        from PIL import Image, PngImagePlugin
-
-        info = PngImagePlugin.PngInfo()
-        info.add_text(clip_info.KEY, json.dumps(clip_info.record(clip)))
-        with Image.open(source) as image:
-            image.save(target, pnginfo=info)
-    except Exception:
-        shutil.copyfile(source, target)
-
-
-async def fake_render(clip_id):
-    """Stands in for a real render: model loading, then one step at a time, then a finished file."""
-    config = load_config()
-    async with _lock:
-        clip = next((c for c in read_project()["clips"] if c["id"] == clip_id), None)
-    if not clip:
-        return
-    await set_clip(clip_id, status="rendering", step=0)
-    await asyncio.sleep(float(config.get("fake_load_seconds", 1.5)))
-    if clip.get("kind") == "image":
-        per_step = float(config.get("fake_seconds_per_image_step", 0.08)) * math.sqrt(clip["res"])
-    else:
-        per_step = float(config.get("fake_seconds_per_step", 0.35)) * math.sqrt(clip["res"] / 0.2) * (clip["len"] / 6)
-    for step in range(1, clip["steps"] + 1):
-        if clip_id in _cancelled:
-            _cancelled.discard(clip_id)
-            return
-        await asyncio.sleep(per_step)
-        if clip_id in _cancelled:
-            _cancelled.discard(clip_id)
-            return
-        if not await set_clip(clip_id, step=step):
-            return
-    if clip.get("kind") == "image":
-        file = numbered(root_dir("stills"), clip_info.file_stem(clip), ".png")
-        save_sample_image(sample_for(clip["aspect"], "image"), root_dir("stills", file), clip)
-        await set_clip(clip_id, status="done", step=clip["steps"], file=file, subfolder=ROOT + "/stills")
-        return
-    file = numbered(root_dir("clips"), clip_info.file_stem(clip), ".mp4")
-    shutil.copyfile(sample_for(clip["aspect"]), root_dir("clips", file))
-    await set_clip(clip_id, status="done", step=clip["steps"], file=file)
 
 
 # ---------------------------------------------------------------- wiring
