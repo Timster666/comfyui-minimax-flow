@@ -751,6 +751,8 @@ function wirePlayer() {
   v.addEventListener("loadedmetadata", update);
   v.addEventListener("play", () => { btn.innerHTML = ICON.pause; btn.setAttribute("aria-label", "Pause"); });
   v.addEventListener("pause", () => { btn.innerHTML = ICON.play; btn.setAttribute("aria-label", "Play"); });
+  // A click on the picture plays or pauses it (a double-click is full screen).
+  v.addEventListener("click", () => { if (v.paused) v.play().catch(() => {}); else v.pause(); });
   $("scrub").addEventListener("pointerdown", (e) => {
     const box = e.currentTarget.getBoundingClientRect();
     if (v.duration) v.currentTime = ((e.clientX - box.left) / box.width) * v.duration;
@@ -1395,6 +1397,14 @@ document.addEventListener("dblclick", (e) => { if (e.target.closest(".player") &
 document.addEventListener("keydown", (e) => {
   if (state.view !== "clip" || e.target.closest("input, textarea, select") || !($("pv") || $("pimg"))) return;
   if (e.key === "f" || e.key === "F") ACT.fullscreen();
+  // Left and right go to the previous and next video or image in the gallery.
+  if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && !e.altKey && !e.metaKey && !e.ctrlKey) {
+    const list = filteredClips(), at = list.findIndex((c) => c.id === state.openId);
+    const next = list[at + (e.key === "ArrowRight" ? 1 : -1)];
+    e.preventDefault();
+    if (next) openClip(next.id);
+    return;
+  }
   if (!$("pv")) return;
   if (e.key === " " && !e.target.closest("button")) { e.preventDefault(); ACT.play(); }
 });
@@ -1614,3 +1624,32 @@ if (window.parent !== window) $("closeBtn").hidden = false;
 render();
 load();
 connect();
+
+// Hovering an image in the prompt bar shows it bigger, above it.
+const peek = document.createElement("div");
+peek.className = "ref-peek";
+peek.hidden = true;
+peek.innerHTML = '<img alt="">';
+document.body.appendChild(peek);
+const hidePeek = () => { peek.hidden = true; };
+document.addEventListener("mouseover", (e) => {
+  const pic = e.target.closest?.(".ref-pic");
+  if (!pic || e.target.closest(".ref-x") || e.buttons) { if (!e.target.closest?.(".ref-peek")) hidePeek(); return; }
+  const src = pic.querySelector("img")?.src;
+  if (!src) return;
+  const img = peek.firstChild;
+  const place = () => {
+    const box = pic.getBoundingClientRect();
+    const ratio = img.naturalWidth && img.naturalHeight ? img.naturalWidth / img.naturalHeight : 1.5;
+    const h = Math.min(300, box.top - 24), w = Math.min(420, h * ratio, innerWidth - 24);
+    peek.style.width = w + "px"; peek.style.height = w / ratio + "px";
+    peek.style.left = Math.max(12, Math.min(innerWidth - w - 12, box.left + box.width / 2 - w / 2)) + "px";
+    peek.style.top = box.top - w / ratio - 12 + "px";
+    peek.hidden = false;
+  };
+  if (img.getAttribute("src") !== src) { img.onload = place; img.src = src; if (img.complete && img.naturalWidth) place(); }
+  else place();
+});
+document.addEventListener("mouseout", (e) => { if (e.target.closest?.(".ref-pic") && !e.relatedTarget?.closest?.(".ref-pic")) hidePeek(); });
+document.addEventListener("dragstart", hidePeek, true);
+document.addEventListener("pointerdown", hidePeek, true);
