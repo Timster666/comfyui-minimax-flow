@@ -1,16 +1,16 @@
-# MiniMax Flow
+# MiniMax H3 Vision
 
 A simple prompt-and-gallery video studio for MiniMax H3, inside ComfyUI.
 
-Open it from the **MiniMax Flow** button in ComfyUI's sidebar (or View → Open MiniMax Flow).
+Open it from the **MiniMax H3 Vision** button in ComfyUI's sidebar (or View → Open MiniMax H3 Vision).
 It opens full screen over ComfyUI; the × in the top-right corner brings you back.
 
 ## Real and fake renders
 
-MiniMax Flow picks by itself (`"mode": "auto"` in `config.json`):
+MiniMax H3 Vision picks by itself (`"mode": "auto"` in `config.json`):
 
 - **Real renders** when the H3 editor pack (comfyui-h3-editor) and at least one of its models
-  are installed. MiniMax Flow hands each clip to the H3 editor's own graph builder, so a render
+  are installed. MiniMax H3 Vision hands each clip to the H3 editor's own graph builder, so a render
   is built the way the editor builds one, and then sets the size, steps, LoRAs and file
   locations to your settings. Every `@image` in the prompt becomes a reference picture.
   While a clip renders you see its steps and the H3 editor's moving live preview.
