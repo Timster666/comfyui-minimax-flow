@@ -562,9 +562,6 @@ function renderSettings() {
   const model = modelOf(s.model);
   const minSteps = model.minSteps || 1, stepSize = model.stepSize || 1;
   const recPct = ((model.steps - minSteps) / (model.maxSteps - minSteps)) * 100;
-  const used = new Set(s.loras.map((l) => l.id));
-  const choices = OPT.loras.filter((n) => !used.has(n));
-
   box.innerHTML = `
     <div class="field">
       <label class="label" for="model">Model</label>
@@ -624,9 +621,6 @@ function renderSettings() {
 
     <div class="field">
       <div class="field-head"><span class="label">LoRAs</span><button class="link" data-act="loraPicker">+ Add LoRA</button></div>
-      ${state.loraPicker ? `<div class="picker">${choices.length
-        ? choices.map((n) => `<button data-act="addLora" data-id="${esc(n)}">${esc(n)}</button>`).join("")
-        : `<span>${OPT.loras.length ? "All your LoRAs are in use." : "No LoRAs found in ComfyUI's loras folder."}</span>`}</div>` : ""}
       ${s.loras.map((l) => `<div class="lora ${l.on ? "" : "dim"}">
           <button class="switch ${l.on ? "on" : ""}" data-act="toggleLora" data-id="${esc(l.id)}" aria-label="${l.on ? "Switch off" : "Switch on"} ${esc(l.name)}" aria-pressed="${l.on}"></button>
           <div class="lora-body">
@@ -1123,6 +1117,111 @@ async function removeClip(id, message) {
   }
 }
 
+/* ------------------------------------------------------------------
+   Add LoRA: a window listing the LoRA files in ComfyUI's loras folders
+   ------------------------------------------------------------------ */
+const LM = { open: false, q: "", sel: 0, sizes: {}, busy: false };
+const loraFolder = (n) => (n.includes("/") ? n.slice(0, n.lastIndexOf("/")) : n.includes("\\") ? n.slice(0, n.lastIndexOf("\\")) : "");
+const loraStem = (n) => n.slice(Math.max(n.lastIndexOf("/"), n.lastIndexOf("\\")) + 1).replace(/\.[^.]+$/, "");
+const loraSize = (b) => (b >= 1 << 30 ? (b / (1 << 30)).toFixed(1) + " GB" : b >= 1 << 20 ? Math.round(b / (1 << 20)) + " MB" : Math.max(1, Math.round(b / 1024)) + " KB");
+const loraShown = () => {
+  const words = LM.q.toLowerCase().split(/\s+/).filter(Boolean);
+  return OPT.loras.filter((n) => words.every((w) => n.toLowerCase().includes(w)));
+};
+const loraUsed = (n) => state.settings.loras.some((l) => l.id === n);
+
+function openLoras() {
+  LM.open = true; LM.q = ""; LM.sel = 0;
+  $("loraModal").hidden = false;
+  renderLoras(true);
+  $("loraQuery").focus();
+  fetchLoras(false);
+}
+function closeLoras() {
+  if (!LM.open) return;
+  LM.open = false;
+  $("loraModal").hidden = true;
+  render();
+  document.querySelector('[data-act="loraPicker"]')?.focus();
+}
+async function fetchLoras(refresh) {
+  if (LM.busy) return;
+  LM.busy = true; renderLoraHead();
+  const before = new Set(OPT.loras);
+  try {
+    const r = await api("GET", "loras" + (refresh ? "?refresh=1" : ""));
+    OPT.loras = r.loras; LM.sizes = r.sizes || {};
+    if (refresh) {
+      const added = r.loras.filter((n) => !before.has(n)).length, gone = [...before].filter((n) => !r.loras.includes(n)).length;
+      say(`Found ${r.loras.length} LoRA${r.loras.length === 1 ? "" : "s"}` + (added ? `, ${added} new` : "") + (gone ? `, ${gone} gone` : "") + (added || gone ? "." : ". Nothing changed."));
+    }
+  } catch (error) {
+    if (refresh) say("Couldn't look for LoRAs: " + error.message);
+  }
+  LM.busy = false;
+  if (LM.open) {
+    renderLoras();
+    if (!$("loraModal").contains(document.activeElement)) (refresh ? $("loraRefresh") : $("loraQuery")).focus();
+  }
+}
+function toggleLoraFile(name) {
+  if (loraUsed(name)) state.settings.loras = state.settings.loras.filter((l) => l.id !== name);
+  else state.settings.loras.push({ id: name, name, strength: 1, on: true });
+  const list = loraShown();
+  LM.sel = Math.max(0, list.indexOf(name));
+  render();
+  renderLoras();
+  if (!$("loraModal").contains(document.activeElement)) $("loraQuery").focus();
+}
+function renderLoraHead() {
+  const b = $("loraRefresh");
+  if (!b) return;
+  b.disabled = LM.busy;
+  b.classList.toggle("spin", LM.busy);
+  b.lastChild.textContent = LM.busy ? "Looking…" : "Refresh";
+}
+function renderLoras(first) {
+  if (first) $("loraQuery").value = "";
+  renderLoraHead();
+  const list = loraShown();
+  LM.sel = Math.min(LM.sel, Math.max(0, list.length - 1));
+  const n = state.settings.loras.length;
+  $("loraCount").textContent = `${OPT.loras.length} found · ${n} in use`;
+  if (!OPT.loras.length) {
+    $("loraList").innerHTML = `<p class="lm-empty">No LoRAs in ComfyUI's loras folder. Put .safetensors files in <code>models/loras</code> and click Refresh.</p>`;
+    return;
+  }
+  if (!list.length) { $("loraList").innerHTML = `<p class="lm-empty">No LoRA matches “${esc(LM.q)}”.</p>`; return; }
+  let folder = null, html = "";
+  list.forEach((name, i) => {
+    const f = loraFolder(name);
+    if (f !== folder) { folder = f; if (f || i) html += `<div class="lm-folder">${f ? esc(f) : "loras"}</div>`; }
+    const on = loraUsed(name);
+    html += `<button class="lm-item ${on ? "on" : ""} ${i === LM.sel ? "sel" : ""}" role="option" aria-selected="${i === LM.sel}" data-act="pickLora" data-id="${esc(name)}" title="${esc(name)}">
+      <span class="lm-name">${esc(loraStem(name))}</span>
+      <span class="lm-size">${LM.sizes[name] ? loraSize(LM.sizes[name]) : ""}</span>
+      <span class="lm-state">${on ? ICON.check + "Added" : ICON.plus + "Add"}</span></button>`;
+  });
+  $("loraList").innerHTML = html;
+  $("loraList").querySelector(".lm-item.sel")?.scrollIntoView({ block: "nearest" });
+}
+$("loraQuery").addEventListener("input", (e) => { LM.q = e.target.value; LM.sel = 0; renderLoras(); });
+$("loraModal").addEventListener("mousedown", (e) => { if (e.target === $("loraModal")) closeLoras(); });
+// Capture, so the window has its keys wherever the focus is, and Escape closes it and nothing else.
+document.addEventListener("keydown", (e) => {
+  if (!LM.open) return;
+  const list = loraShown();
+  if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); closeLoras(); }
+  else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    e.preventDefault();
+    LM.sel = Math.max(0, Math.min(list.length - 1, LM.sel + (e.key === "ArrowDown" ? 1 : -1)));
+    renderLoras();
+  } else if (e.key === "Enter" && list[LM.sel] && !e.target.closest?.("button")) {
+    e.preventDefault();
+    toggleLoraFile(list[LM.sel]);
+  }
+}, true);
+
 const ACT = {
   filter: (id) => { state.filter = id; render(); },
   // Switching tabs keeps each tab's own prompt and settings.
@@ -1242,12 +1341,10 @@ const ACT = {
   recSteps: () => { state.settings.steps = modelOf(state.settings.model).steps; render(); },
   seedMode: (id) => { state.settings.seedMode = id; render(); },
   rollSeed: () => { state.settings.seed = newSeed(); render(); },
-  loraPicker: () => { state.loraPicker = !state.loraPicker; render(); },
-  addLora: (name) => {
-    state.settings.loras.push({ id: name, name, strength: 1, on: true });
-    state.loraPicker = false;
-    render();
-  },
+  loraPicker: () => openLoras(),
+  closeLoras: () => closeLoras(),
+  refreshLoras: () => fetchLoras(true),
+  pickLora: (name) => toggleLoraFile(name),
   toggleLora: (id) => { const l = state.settings.loras.find((x) => x.id === id); l.on = !l.on; render(); },
   removeLora: (id) => { state.settings.loras = state.settings.loras.filter((x) => x.id !== id); render(); },
   generate: () => generate(),

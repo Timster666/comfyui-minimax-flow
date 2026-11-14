@@ -303,6 +303,33 @@ body.dragging-ref .composer { border-color: var(--line-strong); }
   .grid { grid-template-columns: repeat(min(var(--per-row, 3), 2), minmax(0, 1fr)); }
 }
 
+/* Add LoRA window */
+.lm-scrim { position: fixed; inset: 0; z-index: 35; background: rgba(0,0,0,.55); display: flex; align-items: center; justify-content: center; padding: 24px; }
+.lm { width: 100%; max-width: 560px; max-height: min(720px, calc(100vh - 48px)); background: var(--surface); border: 1px solid var(--raised-2); border-radius: 18px; padding: 20px; display: flex; flex-direction: column; gap: 12px; box-shadow: 0 20px 48px rgba(0,0,0,.5); }
+.lm-head { display: flex; align-items: center; gap: 10px; }
+.lm-head > div { flex: 1; min-width: 0; }
+.lm-head h2 { margin: 0; font-size: 18px; font-weight: 600; }
+.lm-count { font-size: 13px; color: var(--muted); }
+.lm-refresh { display: inline-flex; align-items: center; gap: 8px; padding: 0 14px; min-height: 36px; }
+.lm-refresh.spin svg { animation: lm-spin .9s linear infinite; }
+@keyframes lm-spin { to { transform: rotate(360deg); } }
+.lm-close { width: 36px; height: 36px; border-radius: 10px; border: 0; background: transparent; color: var(--muted); display: grid; place-items: center; }
+.lm-close:hover { background: var(--raised); color: var(--text); }
+.lm-search { width: 100%; min-height: 40px; border-radius: 10px; border: 1px solid var(--raised-2); background: #151619; color: var(--text); padding: 0 12px; font: inherit; }
+.lm-list { flex: 1; min-height: 120px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; margin: 0 -6px; padding: 0 6px; }
+.lm-folder { font-size: 12px; color: var(--muted); padding: 10px 10px 4px; text-transform: none; }
+.lm-item { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 42px; padding: 0 10px; border: 0; border-radius: 10px; background: transparent; color: var(--text); text-align: left; font: inherit; cursor: pointer; }
+.lm-item:hover, .lm-item.sel { background: var(--raised); }
+.lm-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.lm-size { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.lm-state { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; color: var(--muted); min-width: 66px; justify-content: flex-end; }
+.lm-state svg { width: 14px; height: 14px; }
+.lm-item.on .lm-state { color: var(--accent-text); }
+.lm-empty { color: var(--muted); padding: 16px 10px; margin: 0; line-height: 1.5; }
+.lm-foot { display: flex; align-items: center; gap: 12px; }
+.lm-foot span { flex: 1; font-size: 12px; color: var(--muted); }
+.lm-foot .btn { min-width: 100px; }
+
 /* Close confirmation */
 .confirm { position: fixed; inset: 0; z-index: 40; background: rgba(0,0,0,.55); display: flex; align-items: center; justify-content: center; padding: 24px; }
 .confirm-box { width: 100%; max-width: 420px; background: var(--surface); border: 1px solid var(--raised-2); border-radius: 18px; padding: 24px; display: flex; flex-direction: column; gap: 10px; box-shadow: 0 20px 48px rgba(0,0,0,.5); }
@@ -523,6 +550,18 @@ body.dragging-ref .composer { border-color: var(--line-strong); }
 </div>
 
 <div class="ctx" id="ctx" role="menu" aria-label="Clip" hidden></div>
+<div class="lm-scrim" id="loraModal" hidden>
+  <div class="lm" role="dialog" aria-modal="true" aria-labelledby="loraTitle">
+    <div class="lm-head">
+      <div><h2 id="loraTitle">Add a LoRA</h2><span class="lm-count" id="loraCount"></span></div>
+      <button class="btn lm-refresh" id="loraRefresh" data-act="refreshLoras" title="Look in ComfyUI's loras folders again, for files added since ComfyUI started"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.3-5.7L20 8.6M20 3v5.6h-5.6"/></svg><span>Refresh</span></button>
+      <button class="lm-close" data-act="closeLoras" aria-label="Close"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+    </div>
+    <input class="lm-search" id="loraQuery" type="search" placeholder="Search LoRAs" autocomplete="off" spellcheck="false" aria-label="Search LoRAs">
+    <div class="lm-list" id="loraList" role="listbox" aria-label="LoRAs"></div>
+    <div class="lm-foot"><span>Click a LoRA to add it, click again to take it out. ↑ ↓ and Enter work too.</span><button class="btn primary" data-act="closeLoras">Done</button></div>
+  </div>
+</div>
 <div class="confirm" id="confirm" hidden>
   <div class="confirm-box" role="alertdialog" aria-modal="true" aria-labelledby="confirmTitle" aria-describedby="confirmText">
     <h2 id="confirmTitle">Close MiniMax H3 Vision?</h2>
