@@ -14,7 +14,8 @@ let OPT = {
   root: "minimax_flow",
   // The Image tab's options (MOSS-Image). The server sends the real lists.
   image: {
-    models: [{ id: "moss_image_sft_int8_convrot.safetensors", name: "MOSS-Image SFT (INT8)", steps: 50, minSteps: 1, maxSteps: 80, stepSize: 1, cfg: 3.0 }],
+    models: [{ id: "moss_image_sft_int8_convrot.safetensors", name: "MOSS-Image SFT (INT8)", steps: 50, minSteps: 1, maxSteps: 80, stepSize: 1, cfg: 3.0 },
+      { id: "moss_image_sft_8stepdmd_int8_convrot.safetensors", name: "MOSS-Image SFT Turbo 8-step (INT8)", steps: 8, minSteps: 1, maxSteps: 80, stepSize: 1, cfg: 1.0 }],
     aspects: { "1:1": [1, 1], "4:5": [4, 5], "3:4": [3, 4], "2:3": [2, 3], "9:16": [9, 16], "16:9": [16, 9], "3:2": [3, 2], "4:3": [4, 3], "5:4": [5, 4], "21:9": [21, 9] },
     megapixels: [0.25, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0],
     recommendedMP: [1.0, 1.5, 2.0],
