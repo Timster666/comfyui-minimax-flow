@@ -117,15 +117,18 @@ button.add-ref { background: transparent; font: inherit; font-size: 11px; }
 .add-ref input { position: absolute; width: 1px; height: 1px; opacity: 0; overflow: hidden; }
 
 /* Prompt: a coloured mirror under a transparent textarea */
-.prompt-wrap { position: relative; }
-.mirror, #prompt { font: 400 17px/1.55 var(--font); padding: 4px; margin: 0; white-space: pre-wrap; overflow-wrap: break-word; }
-.mirror { min-height: var(--prompt-height, 78px); color: var(--text); }
+/* The box has a fixed height (fitPrompt in app.js): it grows with the text up to half the window, or
+   is the height you dragged it to. Longer text scrolls; the mirror follows the textarea's scrolling. */
+.prompt-wrap { position: relative; height: var(--prompt-box, 78px); }
+.mirror, #prompt { font: 400 17px/1.55 var(--font); padding: 4px; margin: 0; white-space: pre-wrap; overflow-wrap: break-word;
+  scrollbar-gutter: stable; scrollbar-width: thin; scrollbar-color: var(--raised-2) transparent; }
+.mirror { position: absolute; inset: 0; overflow-y: hidden; color: var(--text); }
 .prompt-resize { position: absolute; top: 6px; right: 6px; width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; color: var(--faint); cursor: nesw-resize; border-radius: 6px; touch-action: none; z-index: 2; }
 .prompt-resize:hover { color: var(--text); background: var(--raised); }
 .mirror .ph { color: var(--faint); }
 .mirror .m { color: var(--accent-text); background: var(--mention-bg); box-shadow: 0 0 0 2px var(--mention-bg); border-radius: 5px; }
 .mirror .bad, .clip-prompt .bad { color: var(--danger); text-decoration: underline wavy; }
-#prompt { position: absolute; inset: 0; width: 100%; height: 100%; resize: none; overflow: hidden; background: transparent; border: 0; color: transparent; caret-color: var(--text); outline: none; }
+#prompt { position: absolute; inset: 0; width: 100%; height: 100%; resize: none; overflow-x: hidden; overflow-y: auto; background: transparent; border: 0; color: transparent; caret-color: var(--text); outline: none; }
 .mention { position: absolute; left: 0; bottom: calc(100% + 6px); width: 300px; background: var(--raised); border: 1px solid var(--line-strong); border-radius: 14px; padding: 6px; display: flex; flex-direction: column; gap: 2px; z-index: 12; }
 .mention-title, .mention-help { font-size: 12px; color: var(--muted); padding: 6px 10px; }
 .mention-item { display: flex; align-items: center; gap: 10px; background: transparent; border: 0; border-radius: 10px; padding: 6px 10px; min-height: 48px; text-align: left; font-weight: 500; }
