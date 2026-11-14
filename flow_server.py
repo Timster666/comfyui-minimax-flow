@@ -25,7 +25,7 @@ import uuid
 
 from aiohttp import web
 
-from . import clip_info, comfy_link, h3_graph, moss_bridge
+from . import clip_info, comfy_link, edit_media, h3_graph, moss_bridge
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 APP_DIR = os.path.join(HERE, "app")
@@ -46,6 +46,11 @@ LENGTH = {"min": 2, "max": 20, "fps": 24}
 IMAGE_TYPES = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 NAME_RE = re.compile(r"^[A-Za-z0-9_]{1,40}$")
 MENTION_RE = re.compile(r"@([A-Za-z0-9_]+)")
+
+# The Edit tab: one track of pieces, each a part of a finished video: {id, clip, in, out} in seconds.
+DEFAULT_EDIT = {"name": "Untitled edit", "pieces": [], "ratio": "16:9", "muted": False}
+EXPORT_EVENT = "mmvision_export"
+_exports = {}   # export id -> {"cancel": bool}
 
 DEFAULT_UI = {
     "settings": {"model": "HyperFlow H3 Flash", "steps": 6, "res": 0.6, "aspect": "16:9", "len": 5,
@@ -108,6 +113,7 @@ def read_project():
         data = {}
     data.setdefault("images", [])
     data.setdefault("clips", [])
+    data.setdefault("edit", dict(DEFAULT_EDIT))
     ui = data.setdefault("ui", {})
     for key, value in DEFAULT_UI.items():
         ui.setdefault(key, json.loads(json.dumps(value)))
@@ -169,7 +175,7 @@ async def get_state(request):
         ensure_watcher()
     return web.json_response({
         **data,
-        "options": {"models": models, "aspects": ASPECTS, "megapixels": MEGAPIXELS, "length": LENGTH,
+        "options": {"editSizes": EDIT_SIZES, "models": models, "aspects": ASPECTS, "megapixels": MEGAPIXELS, "length": LENGTH,
                     "loras": loras, "missing": why, "root": ROOT,
                     "image": {"models": imodels, "aspects": IMAGE_ASPECTS, "megapixels": IMAGE_MEGAPIXELS,
                               "recommendedMP": IMAGE_RECOMMENDED_MP, "cfg": CFG,
@@ -574,6 +580,110 @@ def numbered(folder, stem, ext):
 
 # ---------------------------------------------------------------- wiring
 
+# ---------------------------------------------------------------- the Edit tab
+
+async def put_edit(request):
+    """Save the edit (the app sends it a moment after each change)."""
+    body = await request.json()
+    pieces = []
+    for p in body.get("pieces") or []:
+        try:
+            pieces.append({"id": str(p["id"])[:40], "clip": str(p["clip"])[:40], "in": round(float(p["in"]), 4), "out": round(float(p["out"]), 4)})
+        except (KeyError, TypeError, ValueError):
+            raise web.HTTPBadRequest(text="A piece of the edit is missing its clip or times.")
+    edit = {"name": str(body.get("name") or "Untitled edit")[:80], "pieces": pieces[:500],
+            "ratio": body.get("ratio") if body.get("ratio") in EDIT_SIZES else "16:9", "muted": bool(body.get("muted"))}
+    async with _lock:
+        data = read_project()
+        data["edit"] = edit
+        write_project(data)
+    return web.json_response({"edit": edit})
+
+
+def clip_path(clip):
+    folder = clip.get("subfolder") or ROOT + "/clips"
+    return os.path.join(output_dir(), folder, clip["file"])
+
+
+async def clip_strip(request):
+    """A video's filmstrip and waveform for the timeline (made once, then kept in minimax_flow/strips)."""
+    clip_id = request.match_info["id"]
+    async with _lock:
+        clip = next((c for c in read_project()["clips"] if c["id"] == clip_id), None)
+    if not clip or not clip.get("file") or clip.get("kind") == "image":
+        raise web.HTTPNotFound(text="No such video.")
+    try:
+        info = await asyncio.to_thread(edit_media.strip, clip_path(clip), root_dir("strips"), clip_id)
+    except Exception as error:
+        LOG.exception("MiniMax H3 Vision couldn't read %s", clip.get("file"))
+        raise web.HTTPBadRequest(text="Couldn't read %s: %s" % (clip.get("file"), error))
+    info = dict(info, sprite_url="/view?type=output&subfolder=%s&filename=%s&v=%s" % (ROOT + "/strips", info["sprite"], int(info["source_mtime"])))
+    return web.json_response(info)
+
+
+# Export sizes per frame shape: "as made" is H3's own 0.6 MP size.
+EDIT_SIZES = {"16:9": [[1056, 608], [1280, 720], [1920, 1080]], "9:16": [[608, 1056], [720, 1280], [1080, 1920]],
+              "1:1": [[800, 800], [1080, 1080]]}
+
+
+async def start_export(request):
+    """Export the edit as one MP4 in minimax_flow/exports. Progress arrives as mmvision_export events."""
+    from server import PromptServer
+
+    body = await request.json()
+    width, height = int(body.get("width", 1056)), int(body.get("height", 608))
+    if not (64 <= width <= 4096 and 64 <= height <= 4096):
+        raise web.HTTPBadRequest(text="Unknown size.")
+    async with _lock:
+        data = read_project()
+    clips = {c["id"]: c for c in data["clips"]}
+    pieces = []
+    for p in data["edit"]["pieces"]:
+        clip = clips.get(p["clip"])
+        if clip and clip.get("file") and os.path.exists(clip_path(clip)):
+            pieces.append((clip_path(clip), float(p["in"]), float(p["out"])))
+    if not pieces:
+        raise web.HTTPBadRequest(text="The edit is empty.")
+    stem = re.sub(r"[^a-z0-9]+", "_", str(body.get("name") or data["edit"]["name"]).lower()).strip("_")[:60] or "edit"
+    folder = root_dir("exports")
+    file = stem + ".mp4"
+    n = 2
+    while os.path.exists(os.path.join(folder, file)):
+        file = "%s_%d.mp4" % (stem, n)
+        n += 1
+    job = "x" + uuid.uuid4().hex[:10]
+    _exports[job] = {"cancel": False}
+    server, loop = PromptServer.instance, asyncio.get_running_loop()
+
+    def tell(**fields):
+        # From the export thread: ComfyUI's send_sync is safe to call from another thread.
+        server.send_sync(EXPORT_EVENT, dict(fields, job=job), None)
+
+    async def run():
+        try:
+            await asyncio.to_thread(edit_media.export, pieces, os.path.join(folder, file), width, height, bool(body.get("sound", True)),
+                                    lambda fraction, words: tell(progress=round(fraction, 3), step=words),
+                                    lambda: _exports.get(job, {}).get("cancel"))
+            tell(done=True, file=file, subfolder=ROOT + "/exports", progress=1.0)
+        except edit_media.Cancelled:
+            tell(cancelled=True)
+        except Exception as error:
+            LOG.exception("MiniMax H3 Vision couldn't export the edit")
+            tell(error=str(error))
+        finally:
+            _exports.pop(job, None)
+
+    loop.create_task(run())
+    return web.json_response({"job": job, "file": file, "subfolder": ROOT + "/exports"})
+
+
+async def cancel_export(request):
+    job = _exports.get(request.match_info["job"])
+    if job:
+        job["cancel"] = True
+    return web.json_response({"ok": True})
+
+
 ROUTES = (
     ("GET", "/mmflow/app", page),
     ("GET", "/mmflow/api/state", get_state),
@@ -585,6 +695,10 @@ ROUTES = (
     ("POST", "/mmflow/api/import", import_clip),
     ("PATCH", "/mmflow/api/clips/{id}", update_clip),
     ("DELETE", "/mmflow/api/clips/{id}", delete_clip),
+    ("PUT", "/mmflow/api/edit", put_edit),
+    ("GET", "/mmflow/api/strips/{id}", clip_strip),
+    ("POST", "/mmflow/api/export", start_export),
+    ("DELETE", "/mmflow/api/export/{job}", cancel_export),
 )
 
 
