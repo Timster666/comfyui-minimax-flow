@@ -25,8 +25,8 @@ Each tab picks by itself (`"mode": "auto"` in `config.json`):
   the way the editor builds one, and then sets the size, steps, LoRAs and file locations to your
   settings. While a clip renders you see its steps and the H3 editor's moving live preview.
 - **Image is real** when MOSS-Image's three files are installed (below). The graph follows
-  Comfy-Org's MOSS-Image template (er_sde / simple, 50 steps, guidance 3.0, the recommended
-  negative prompt). While an image renders you see its steps and ComfyUI's live preview.
+  Comfy-Org's MOSS-Image template (er_sde / simple, the recommended
+  negative prompt), at 50 steps and guidance 3.0. While an image renders you see its steps and ComfyUI's live preview.
 - **Fake** otherwise: a fake render counts through its steps and then hands out a sample from
   `samples/`, so the app can be tried on any machine. The tab shows a "Fake renders" badge;
   click it to see why.
@@ -45,6 +45,12 @@ From [Comfy-Org/MOSS-Image](https://huggingface.co/Comfy-Org/MOSS-Image), into C
 
 Any other MOSS-Image checkpoint in `models/diffusion_models` (BF16, Base, a finetune) shows up
 in the Image tab's model list as well.
+
+**Turbo (optional).** [Spectrallic's 8-step DMD checkpoint](https://huggingface.co/Spectrallic/MOSS-Image-SFT-8step-DMD-int8-convrot)
+(`moss_image_sft_8stepdmd_int8_convrot.safetensors`, 5.4 GB) also goes in `models/diffusion_models/`
+and uses the same text encoder and VAE. It shows up as "MOSS-Image SFT Turbo 8-step (INT8)" and
+renders with 8 steps, guidance 1, Euler and no negative prompt. Any checkpoint whose file name
+has "dmd", "turbo" or "8step" gets these turbo settings.
 
 ## Where things are kept
 

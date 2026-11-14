@@ -7,6 +7,9 @@ as they are by default there.
 
 MOSS-Image's files are found by name in ComfyUI's model folders, so any MOSS checkpoint you
 add (BF16, Base, a finetune) shows up as a model of its own.
+
+Distilled "turbo" checkpoints (a file name with "dmd", "turbo" or "Nstep") render in a few
+steps: they get their own settings (8 steps, guidance 1, Euler, no negative prompt).
 """
 
 import os
@@ -19,12 +22,17 @@ NEGATIVE = "nsfw, worst quality, bad anatomy, watermark, jpeg artifact"
 SAMPLER, SCHEDULER = "er_sde", "simple"
 DEFAULT_STEPS, DEFAULT_CFG = 50, 3.0
 
+# Settings per kind of checkpoint: the full model, and step-distilled (turbo) ones.
+FULL = {"steps": DEFAULT_STEPS, "cfg": DEFAULT_CFG, "sampler": SAMPLER, "scheduler": SCHEDULER, "negative": NEGATIVE}
+TURBO = {"steps": 8, "cfg": 1.0, "sampler": "euler", "scheduler": "simple", "negative": ""}
+
 # Names for the checkpoints Comfy-Org publishes; anything else is named after its file.
 KNOWN = {
     "moss_image_sft_int8_convrot": "MOSS-Image SFT (INT8)",
     "moss_image_sft_bf16": "MOSS-Image SFT (BF16)",
     "moss_image_base_int8_convrot": "MOSS-Image Base (INT8)",
     "moss_image_base_bf16": "MOSS-Image Base (BF16)",
+    "moss_image_sft_8stepdmd_int8_convrot": "MOSS-Image SFT Turbo 8-step (INT8)",
 }
 # Text encoders and VAEs, best first.
 TEXT_ENCODERS = ["qwen3.5_9b_w4a8_gptq", "qwen3.5_9b_int8_convrot", "qwen3.5_9b_bf16"]
@@ -56,6 +64,16 @@ def _pick(files, preferred, fallback):
     return next((f for f in files if fallback(_stem(f).lower())), None)
 
 
+def is_turbo(file):
+    stem = _stem(file or "").lower()
+    return "dmd" in stem or "turbo" in stem or re.search(r"\d+step", stem) is not None
+
+
+def preset(file):
+    """The settings a checkpoint renders best with."""
+    return TURBO if is_turbo(file) else FULL
+
+
 def parts():
     """The text encoder and VAE MOSS-Image needs, or Missing saying which isn't there."""
     encoder = _pick(_files("text_encoders"), TEXT_ENCODERS, lambda s: s.startswith("qwen3.5_9b") or "qwen35" in s)
@@ -74,11 +92,15 @@ def models():
         raise Missing("No MOSS-Image checkpoint (moss_image_sft_int8_convrot.safetensors) in models/diffusion_models.")
     parts()
     rows = []
-    for file in sorted(checkpoints, key=lambda f: (0 if "int8" in f.lower() else 1, f.lower())):
+    # INT8 first, and the full model before its turbo version.
+    for file in sorted(checkpoints, key=lambda f: (0 if "int8" in f.lower() else 1, is_turbo(f), f.lower())):
         stem = _stem(file)
         name = KNOWN.get(stem.lower()) or re.sub(r"[_-]+", " ", stem)
-        rows.append({"id": file, "name": name, "file": file, "steps": DEFAULT_STEPS, "minSteps": 1, "maxSteps": 80,
-                     "stepSize": 1, "cfg": DEFAULT_CFG})
+        if is_turbo(file) and "turbo" not in name.lower() and stem.lower() not in KNOWN:
+            name += " (turbo)"
+        p = preset(file)
+        rows.append({"id": file, "name": name, "file": file, "steps": p["steps"], "minSteps": 1, "maxSteps": 80,
+                     "stepSize": 1, "cfg": p["cfg"]})
     return rows
 
 
@@ -88,12 +110,13 @@ def build_graph(clip):
     clip: the image as the app keeps it (prompt, profile = checkpoint file, steps, cfg, width, height, seed, loras).
     """
     encoder, vae = parts()
+    p = preset(clip["profile"])
     graph = {
         "1": {"class_type": "UNETLoader", "inputs": {"unet_name": clip["profile"], "weight_dtype": "default"}},
         "2": {"class_type": "CLIPLoader", "inputs": {"clip_name": encoder, "type": "moss_image", "device": "default"}},
         "3": {"class_type": "VAELoader", "inputs": {"vae_name": vae}},
         "4": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["2", 0], "text": clip["prompt"]}},
-        "5": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["2", 0], "text": NEGATIVE}},
+        "5": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["2", 0], "text": p["negative"]}},
         "6": {"class_type": "EmptyFlux2LatentImage", "inputs": {"width": int(clip["width"]), "height": int(clip["height"]), "batch_size": 1}},
     }
     model = ["1", 0]
@@ -104,7 +127,7 @@ def build_graph(clip):
         model = [key, 0]
     graph[SAMPLER_NODE] = {"class_type": "KSampler", "inputs": {
         "model": model, "seed": int(clip["seed"]), "steps": int(clip["steps"]), "cfg": float(clip["cfg"]),
-        "sampler_name": SAMPLER, "scheduler": SCHEDULER, "positive": ["4", 0], "negative": ["5", 0],
+        "sampler_name": p["sampler"], "scheduler": p["scheduler"], "positive": ["4", 0], "negative": ["5", 0],
         "latent_image": ["6", 0], "denoise": 1.0}}
     graph["8"] = {"class_type": "VAEDecode", "inputs": {"samples": [SAMPLER_NODE, 0], "vae": ["3", 0]}}
     graph[SAVE_NODE] = {"class_type": "SaveImage", "inputs": {"images": ["8", 0], "filename_prefix": "%s/stills/%s" % (ROOT, clip["id"])}}
