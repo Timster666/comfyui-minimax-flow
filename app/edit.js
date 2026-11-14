@@ -163,9 +163,9 @@ const EDIT = (() => {
           </div>
           <div id="edExDone" hidden>
             <h2>Exported</h2>
-            <div class="ed-summary">Saved in ComfyUI's output folder:</div>
+            <div class="ed-summary">Downloading now. It's also saved in ComfyUI's output folder:</div>
             <div class="ed-path" id="edExPath"></div>
-            <div class="ed-row"><button class="ed-btn" data-edclose>Close</button><a class="ed-btn primary" id="edExDownload" download>Download</a></div>
+            <div class="ed-row"><button class="ed-btn" data-edclose>Close</button><a class="ed-btn primary" id="edExDownload" download>Download again</a></div>
           </div>
         </div>
       </div>`;
@@ -662,6 +662,7 @@ const EDIT = (() => {
       ed("ExPath").textContent = d.subfolder + "/" + d.file;
       ed("ExDownload").href = fileUrl(d.subfolder, d.file);
       ed("ExDownload").setAttribute("download", d.file);
+      ed("ExDownload").click();   // the file downloads by itself; the button is there to get it again
     } else if (d.cancelled || d.error) {
       E.exportJob = null;
       ed("Export").hidden = true;
