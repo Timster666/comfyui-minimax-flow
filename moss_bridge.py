@@ -18,7 +18,7 @@ import re
 ROOT = "minimax_flow"
 SAMPLER_NODE = "15"     # its progress is the render's steps (the app listens for this id)
 SAVE_NODE = "9"
-NEGATIVE = "nsfw, worst quality, bad anatomy, watermark, jpeg artifact"
+NEGATIVE = "worst quality, bad anatomy, watermark, jpeg artifact"
 SAMPLER, SCHEDULER = "er_sde", "simple"
 DEFAULT_STEPS, DEFAULT_CFG = 50, 3.0
 
