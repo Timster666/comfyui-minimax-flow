@@ -28,9 +28,21 @@ The app has three tabs, and it always opens on **Video**.
 - **Image** makes pictures with MOSS-Image. It's good at words in pictures: put the text you want
   in quotes. A finished image can be sent to the Video tab with **Use in a video**, and the Video
   tab's **Add image** pop-up lists all of them under **Generated images**.
-- **LoRAs** are added in the settings pop-up with **+ Add LoRA**: a window lists every file in
-  ComfyUI's `loras` folders (with subfolders and sizes) to search and pick from. **Refresh** looks in
-  the folders again, so LoRAs you download while ComfyUI runs show up without a restart.
+- **LoRAs** are added in the settings pop-up with **+ Add LoRA**: a window lists the LoRA files to
+  search and pick from. **Refresh** looks in the folders again, so LoRAs you download while ComfyUI runs
+  show up without a restart. Sort your LoRAs by model in folders inside `models/loras`:
+
+  ```
+  models/loras/
+    MiniMax H3/    the Video tab's LoRAs
+    MOSS Image/    the Image tab's LoRAs
+    Flux Klein/    for Klein, coming later
+  ```
+
+  Each tab lists its own folder first, then **Not sorted**: files loose in `loras` and any folder that
+  isn't one of these. Another model's folder is hidden unless you tick **Show all LoRAs**. Folder names
+  are matched loosely (`minimax_h3`, `moss`, `klein` work too). Moving a LoRA into a folder doesn't break
+  saved settings or **Use this prompt and settings** on older clips: a LoRA is found by its file name.
 - **Edit** puts your videos together, like a very simple CapCut: your videos on the left, a player
   on the right and one timeline track below. Add a video with its **+**, by double-clicking it or
   with Enter (it goes into the gap between clips nearest the playhead), or drag it onto the timeline
