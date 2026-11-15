@@ -209,7 +209,12 @@ function render() {
   }
   EDIT.hide();
   $("clipView").hidden = inGallery;
-  $("scrim").hidden = !(inGallery && (state.settingsOpen || state.library.open));
+  // An open pop-up darkens everything else: the page, the top bar and the prompt bar, all but its own button.
+  const popup = inGallery && (state.settingsOpen || state.library.open);
+  $("scrim").hidden = !popup;
+  $("composerDim").hidden = !popup;
+  document.body.classList.toggle("popup-open", popup);
+  document.body.classList.toggle("library-open", popup && state.library.open);
   renderHeader();
   if (inGallery) {
     renderFilters();
@@ -442,11 +447,14 @@ function generatedItems() {
 const libraryIds = () => (isGen() ? generatedItems() : uploadItems()).map((x) => x.id);
 const libSelected = () => (isGen() ? state.library.selectedGen : state.library.selected);
 
+// Where pop-ups above the prompt bar may reach up to: a little under the top bar.
+const belowTop = () => (document.querySelector(".top")?.getBoundingClientRect().bottom || 0) + 12;
+
 function renderLibrary() {
   const box = $("library");
   box.hidden = !state.library.open;
   if (!state.library.open) return;
-  box.style.maxHeight = Math.max(320, document.querySelector(".composer").getBoundingClientRect().top - 24) + "px";
+  box.style.maxHeight = Math.max(320, document.querySelector(".composer").getBoundingClientRect().top - 12 - belowTop()) + "px";
   if (!box.firstChild) {
     // The frame is drawn once, so the search field keeps focus while you type.
     box.innerHTML = `
@@ -550,8 +558,8 @@ function renderSettings() {
   const box = $("settings");
   box.hidden = !state.settingsOpen;
   if (!state.settingsOpen) return;
-  // Fit between the top of the window and the button.
-  box.style.maxHeight = Math.max(240, $("pill").getBoundingClientRect().top - 24) + "px";
+  // Fit between the top bar and the button.
+  box.style.maxHeight = Math.max(240, $("pill").getBoundingClientRect().top - 12 - belowTop()) + "px";
 
   const T = tabOpt();
   const model = modelOf(s.model);

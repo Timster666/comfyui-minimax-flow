@@ -90,7 +90,13 @@ svg { display: block; }
 .dock { position: fixed; left: 0; right: 0; bottom: 0; padding: 0 32px 20px; display: flex; justify-content: center; z-index: 6; pointer-events: none; }
 .dock-inner { width: 100%; max-width: var(--composer-width); position: relative; pointer-events: auto; }
 .composer { position: relative; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-lg); padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
-.scrim { position: fixed; inset: 0; background: rgba(0,0,0,.35); z-index: 5; }
+/* An open pop-up (settings, Add image): the scrim darkens the page and the top bar, the dock is lifted
+   above it, and composer-dim darkens the prompt bar too, all but the button that opened the pop-up. */
+.scrim { position: fixed; inset: 0; background: rgba(0,0,0,.7); z-index: 8; }
+body.popup-open .dock { z-index: 9; }
+.composer-dim { position: absolute; inset: -1px; border-radius: inherit; background: rgba(0,0,0,.7); z-index: 5; }
+body.popup-open .pill[aria-expanded="true"] { position: relative; z-index: 6; }
+body.library-open .add-ref { z-index: 6; background: var(--surface); }
 
 /* Reference images */
 .refs { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-start; }
@@ -525,6 +531,7 @@ body.dragging-ref .composer { border-color: var(--line-strong); }
   <div class="dock-inner">
     <div class="library" id="library" role="dialog" aria-label="Your images" hidden></div>
     <div class="composer">
+      <div class="composer-dim" id="composerDim" data-act="closePopups" hidden></div>
       <button class="prompt-reset" id="resetPrompt" data-act="resetPrompt" title="Clear the prompt and take the images out of the prompt bar" hidden>Reset</button>
       <div class="refs" id="refs"></div>
       <div class="prompt-wrap">
