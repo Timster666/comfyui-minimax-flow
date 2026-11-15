@@ -27,6 +27,13 @@ DEFAULT_STEPS, DEFAULT_CFG = 50, 3.0
 # Settings per kind of checkpoint: the full model, and step-distilled (turbo) ones.
 FULL = {"steps": DEFAULT_STEPS, "cfg": DEFAULT_CFG, "sampler": SAMPLER, "scheduler": SCHEDULER, "negative": NEGATIVE}
 TURBO = {"steps": 8, "cfg": 1.0, "sampler": "euler", "scheduler": "simple", "negative": ""}
+# Editing one picture with Comfy-Org's MOSS-Image edit LoRA, as in ComfyUI's image_moss_image_edit workflow:
+# the LoRA (strength 1) and Skip Layer Guidance on single layer 22, the instruction and the negative encoded
+# together with the picture (TextEncodeMOSSImageEdit, format Moss-Image-Edit), 30 steps, cfg 4, euler/normal.
+# The picture is scaled to the chosen megapixels in steps of 16 px, and the new image is made at that same size.
+EDIT_LORA = "moss_image_edit_lora_rank_64_bf16.safetensors"
+EDIT = {"steps": 30, "cfg": 4.0, "sampler": "euler", "scheduler": "normal", "minSteps": 1, "maxSteps": 60,
+        "format": "Moss-Image-Edit", "slg_layers": "22"}
 
 # Names for the checkpoints Comfy-Org publishes; anything else is named after its file.
 KNOWN = {
@@ -117,11 +124,31 @@ def lora_file(name):
         return name
 
 
-def build_graph(clip, name=None):
+def edit_lora():
+    """The edit LoRA as ComfyUI lists it (in any folder of models/loras), or None."""
+    try:
+        import folder_paths
+        from .h3_graph import pick_file
+        return pick_file([EDIT_LORA], folder_paths.get_filename_list("loras"))
+    except Exception:
+        return None
+
+
+def edit_size(w0, h0, mp, step=16):
+    """The size ImageScaleToTotalPixels makes a w0 x h0 picture at mp megapixels in steps of 16 px (the edit's size)."""
+    import math
+    k = math.sqrt(mp * 1024 * 1024 / (w0 * h0))
+    return round(w0 * k / step) * step, round(h0 * k / step) * step
+
+
+def build_graph(clip, name=None, source=None):
     """The ComfyUI graph for one MiniMax H3 Vision image.
 
     clip: the image as the app keeps it (prompt, profile = checkpoint file, steps, cfg, width, height, seed, loras).
+    source: for an edit, the picture to edit (a file inside the output folder); the graph is then the edit LoRA's.
     """
+    if source:
+        return _edit_graph(clip, name, source)
     encoder, vae = parts()
     p = preset(clip["profile"])
     graph = {
@@ -142,6 +169,44 @@ def build_graph(clip, name=None):
         "model": model, "seed": int(clip["seed"]), "steps": int(clip["steps"]), "cfg": float(clip["cfg"]),
         "sampler_name": clip.get("sampler") or p["sampler"], "scheduler": clip.get("scheduler") or p["scheduler"], "positive": ["4", 0], "negative": ["5", 0],
         "latent_image": ["6", 0], "denoise": 1.0}}
+    graph["8"] = {"class_type": "VAEDecode", "inputs": {"samples": [SAMPLER_NODE, 0], "vae": ["3", 0]}}
+    graph[SAVE_NODE] = {"class_type": "SaveImage", "inputs": {"images": ["8", 0], "filename_prefix": "%s/stills/%s" % (ROOT, name or clip["id"])}}
+    return graph
+
+
+def _edit_graph(clip, name, source):
+    encoder, vae = parts()
+    lora = edit_lora()
+    if not lora:
+        raise Missing("The MOSS-Image edit LoRA (%s) isn't in models/loras." % EDIT_LORA)
+    negative = NEGATIVE if clip.get("negative") is None else clip["negative"]
+    graph = {
+        "1": {"class_type": "UNETLoader", "inputs": {"unet_name": clip["profile"], "weight_dtype": "default"}},
+        "2": {"class_type": "CLIPLoader", "inputs": {"clip_name": encoder, "type": "moss_image", "device": "default"}},
+        "3": {"class_type": "VAELoader", "inputs": {"vae_name": vae}},
+        "30": {"class_type": "MMVisionLoadStill", "inputs": {"file": source}},
+        "31": {"class_type": "ImageScaleToTotalPixels", "inputs": {"image": ["30", 0], "upscale_method": "lanczos",
+                                                                  "megapixels": float(clip.get("res") or 1.0), "resolution_steps": 16}},
+        "32": {"class_type": "GetImageSize", "inputs": {"image": ["31", 0]}},
+        "4": {"class_type": "TextEncodeMOSSImageEdit", "inputs": {"clip": ["2", 0], "prompt": clip["prompt"], "vae": ["3", 0],
+                                                                   "edit_format": EDIT["format"], "images.image_0": ["31", 0], "image_strength": 1.0}},
+        "5": {"class_type": "TextEncodeMOSSImageEdit", "inputs": {"clip": ["2", 0], "prompt": negative, "vae": ["3", 0],
+                                                                   "edit_format": EDIT["format"], "images.image_0": ["31", 0], "image_strength": 1.0}},
+        "6": {"class_type": "EmptyFlux2LatentImage", "inputs": {"width": ["32", 0], "height": ["32", 1], "batch_size": 1}},
+        "19": {"class_type": "LoraLoaderModelOnly", "inputs": {"model": ["1", 0], "lora_name": lora, "strength_model": 1.0}},
+    }
+    model = ["19", 0]
+    for i, extra in enumerate(clip.get("loras") or []):
+        key = str(20 + i)
+        graph[key] = {"class_type": "LoraLoaderModelOnly",
+                      "inputs": {"model": model, "lora_name": lora_file(extra["name"]), "strength_model": float(extra["strength"])}}
+        model = [key, 0]
+    graph["18"] = {"class_type": "SkipLayerGuidanceDiTSimple", "inputs": {
+        "model": model, "double_layers": "", "single_layers": EDIT["slg_layers"], "start_percent": 0.0, "end_percent": 1.0}}
+    graph[SAMPLER_NODE] = {"class_type": "KSampler", "inputs": {
+        "model": ["18", 0], "seed": int(clip["seed"]), "steps": int(clip["steps"]), "cfg": float(clip["cfg"]),
+        "sampler_name": clip.get("sampler") or EDIT["sampler"], "scheduler": clip.get("scheduler") or EDIT["scheduler"],
+        "positive": ["4", 0], "negative": ["5", 0], "latent_image": ["6", 0], "denoise": 1.0}}
     graph["8"] = {"class_type": "VAEDecode", "inputs": {"samples": [SAMPLER_NODE, 0], "vae": ["3", 0]}}
     graph[SAVE_NODE] = {"class_type": "SaveImage", "inputs": {"images": ["8", 0], "filename_prefix": "%s/stills/%s" % (ROOT, name or clip["id"])}}
     return graph

@@ -14,7 +14,7 @@ import re
 KEY = "mmflow"
 VERSION = 1
 FIELDS = ("kind", "prompt", "model", "profile", "steps", "cfg", "res", "aspect", "len", "width", "height", "seed", "loras",
-          "sampler", "scheduler", "negative", "family", "size", "slots")
+          "sampler", "scheduler", "negative", "family", "size", "slots", "edit")
 VIDEO_TYPES = {".mp4", ".mov", ".webm", ".mkv"}
 IMAGE_TYPES = {".png", ".jpg", ".jpeg", ".webp"}
 
@@ -144,9 +144,17 @@ def _from_moss(graph):
     positive = graph.get(str((s.get("positive") or [""])[0]), {}).get("inputs", {})
     unet = next((n["inputs"].get("unet_name") for _, n in _nodes(graph, "UNETLoader")), None)
     latent = next((n["inputs"] for _, n in _nodes(graph, "EmptyFlux2LatentImage", "EmptyLatentImage", "EmptySD3LatentImage")), {})
-    return {"kind": "image", "prompt": _literal(positive.get("text")) or "", "profile": unet,
-            "steps": _literal(s.get("steps")), "cfg": _literal(s.get("cfg")), "seed": _literal(s.get("seed")),
-            "width": _literal(latent.get("width")), "height": _literal(latent.get("height")), "loras": _loras(graph)}
+    edit = any(True for _ in _nodes(graph, "TextEncodeMOSSImageEdit"))
+    # An edit (TextEncodeMOSSImageEdit) has its prompt in "prompt", sizes from the picture, and the edit LoRA
+    # isn't one of yours; the picture itself isn't in the file, so the edit comes back without it.
+    width, height = _literal(latent.get("width")), _literal(latent.get("height"))
+    found = {"kind": "image", "prompt": _literal(positive.get("text", positive.get("prompt"))) or "", "profile": unet,
+             "steps": _literal(s.get("steps")), "cfg": _literal(s.get("cfg")), "seed": _literal(s.get("seed")),
+             "width": width if isinstance(width, int) else None, "height": height if isinstance(height, int) else None,
+             "loras": [l for l in _loras(graph) if "moss_image_edit_lora" not in l["name"]]}
+    if edit:
+        found["edit"] = {"id": None, "name": "the picture it was made from"}
+    return found
 
 
 def _from_h3(graph):

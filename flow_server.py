@@ -70,6 +70,8 @@ DEFAULT_UI = {
     "kleinPrompt": "",
     "kleinSlots": [None, None, None, None],
     "imageNegative": moss_bridge.NEGATIVE,   # the Image tab's negative prompt box starts with this text
+    "imageEdit": False,                      # the Image tab's Edit switch (one picture, with the edit LoRA)
+    "imageEditSource": None,                 # the picture to edit: an Add image library id
     "negativeOpen": False,
     "negativeShown": True,
 }
@@ -226,6 +228,8 @@ async def get_state(request):
                     "loras": loras, "missing": why, "root": ROOT,
                     "image": {"models": imodels, "aspects": IMAGE_ASPECTS, "megapixels": IMAGE_MEGAPIXELS,
                               "recommendedMP": IMAGE_RECOMMENDED_MP, "cfg": CFG,
+                              # Edit (one picture, with the edit LoRA): its settings, and whether the LoRA is there.
+                              "edit": dict(moss_bridge.EDIT, available=bool(moss_bridge.edit_lora()), lora=moss_bridge.EDIT_LORA),
                               "missing": iwhy},
                     "klein": {"models": kmodels, "aspects": IMAGE_ASPECTS, "megapixels": KLEIN_MEGAPIXELS,
                               "recommendedMP": KLEIN_RECOMMENDED_MP, "cfg": CFG, "slots": klein_bridge.SLOTS,
@@ -336,7 +340,7 @@ async def generate(request):
     if not prompt:
         raise web.HTTPBadRequest(text="Write a prompt first.")
     if body.get("kind") == "image":
-        return await generate_image(prompt, s, body.get("negative"))
+        return await generate_image(prompt, s, body.get("negative"), body.get("edit"))
     if body.get("kind") == "klein":
         return await generate_klein(prompt, s, body.get("slots") or [], body.get("negative"))
     models, why = video_models()
@@ -396,7 +400,8 @@ async def generate(request):
     return web.json_response({"clip": clip})
 
 
-async def generate_image(prompt, s, negative=None):
+async def generate_image(prompt, s, negative=None, edit=None):
+    """A MOSS-Image picture; with edit (an Add image library id), an edit of that picture with the edit LoRA."""
     models, why = image_models()
     model = next((m for m in models if m["name"] == s.get("model")), None)
     if not model:
@@ -405,6 +410,17 @@ async def generate_image(prompt, s, negative=None):
     res = float(s.get("res", 1.0))
     if res not in IMAGE_MEGAPIXELS:
         raise web.HTTPBadRequest(text="Unknown size.")
+    source = None
+    if edit:
+        # Edit: the picture from the Add image library, and the edit LoRA's settings.
+        async with _lock:
+            source = next((i for i in read_project()["images"] if i["id"] == edit), None)
+        if not source or not os.path.exists(image_path(source)):
+            raise web.HTTPBadRequest(text="The picture to edit isn't in the Add image library any more.")
+        if not moss_bridge.edit_lora():
+            raise web.HTTPBadRequest(text="Edit needs the MOSS-Image edit LoRA (%s) in models/loras "
+                                          "(on RunPod: ENABLE_MOSS_EDIT=true)." % moss_bridge.EDIT_LORA)
+        model = dict(model, minSteps=moss_bridge.EDIT["minSteps"], maxSteps=moss_bridge.EDIT["maxSteps"])
     steps = int(s.get("steps", model["steps"]))
     if not model["minSteps"] <= steps <= model["maxSteps"]:
         raise web.HTTPBadRequest(text="%s takes %d to %d steps." % (model["name"], model["minSteps"], model["maxSteps"]))
@@ -417,6 +433,12 @@ async def generate_image(prompt, s, negative=None):
     # The negative prompt is exactly what the box holds; empty means none.
     negative = str(negative).strip()[:2000] if negative is not None else None
     w, h = dims(aspect, res, 16, IMAGE_ASPECTS)
+    if source:
+        size = picture_size(image_path(source))
+        if not size:
+            raise web.HTTPBadRequest(text="Couldn't read the picture to edit.")
+        w, h = moss_bridge.edit_size(size[0], size[1], res)
+        aspect = nearest_aspect(w, h, IMAGE_ASPECTS)
     clip = {"id": "s" + uuid.uuid4().hex[:10], "kind": "image", "prompt": prompt, "model": model["name"], "profile": model["id"],
             "steps": steps, "cfg": cfg, "res": res, "aspect": aspect, "width": w, "height": h, "seed": seed, "loras": loras,
             "status": "queued", "step": 0, "file": None, "subfolder": ROOT + "/stills", "starred": False,
@@ -426,8 +448,12 @@ async def generate_image(prompt, s, negative=None):
             clip[key] = value
     if negative is not None:
         clip["negative"] = negative
+    if source:
+        clip["edit"] = {"id": source["id"], "name": source["name"]}
     try:
-        clip["prompt_id"] = await comfy_link.queue_prompt(moss_bridge.build_graph(clip, name=clip_info.file_stem(clip)),
+        graph = moss_bridge.build_graph(clip, name=clip_info.file_stem(clip),
+                                        source="%s/images/%s" % (ROOT, source["file"]) if source else None)
+        clip["prompt_id"] = await comfy_link.queue_prompt(graph,
                                                           clip_info.extra_data(clip, moss_bridge.EXTRA_DATA))
     except Exception as error:
         LOG.exception("MiniMax H3 Vision couldn't queue an image")
@@ -654,6 +680,8 @@ def clip_from_settings(found, kind):
             "loras": [{"name": str(l["name"]), "strength": float(l.get("strength", 1.0))} for l in found.get("loras") or []]}
     if kind == "image":
         clip["cfg"] = float(found.get("cfg") or (model or {}).get("cfg") or 3.0)
+        if found.get("edit"):
+            clip["edit"] = found["edit"]
     if klein:
         # Its pictures are named; they are found again by id when this machine has them.
         clip.update({"family": "klein", "size": found.get("size") or "match",
