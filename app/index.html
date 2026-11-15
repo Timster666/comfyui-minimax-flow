@@ -85,6 +85,18 @@ svg { display: block; }
 .tile.hovering .hover-line { opacity: 1; }
 .star { position: absolute; z-index: 3; right: 8px; top: 8px; width: 36px; height: 36px; border-radius: 18px; border: 0; background: rgba(10,11,13,.78); display: flex; align-items: center; justify-content: center; }
 .star.on { color: var(--accent-text); }
+/* The tick box (where the star was): shows on hover, when ticked, and on every tile while anything is ticked */
+.pick { position: absolute; z-index: 3; right: 10px; top: 10px; width: 26px; height: 26px; border-radius: 7px; border: 2px solid rgba(255,255,255,.75); background: rgba(10,11,13,.55); color: transparent; display: flex; align-items: center; justify-content: center; padding: 0; opacity: 0; transition: opacity .12s; }
+.pick svg { width: 16px; height: 16px; stroke-width: 3; }
+.tile:hover .pick, .pick:focus-visible, .pick.on, #grid.picking .pick { opacity: 1; }
+.pick.on { background: var(--accent); border-color: var(--accent); color: #121316; }
+.tile.picked .frame { outline: 3px solid var(--accent); outline-offset: -3px; }
+.chip.count { cursor: default; display: inline-flex; align-items: center; }
+.delete-chip { display: inline-flex; align-items: center; gap: 8px; }
+.delete-chip:not(:disabled) { color: var(--danger); border-color: rgba(255,180,166,.5); }
+.delete-chip:not(:disabled):hover { background: rgba(255,180,166,.1); }
+.delete-chip:disabled { opacity: .5; cursor: default; }
+.clear-pick { align-self: center; font-size: 13px; }
 
 /* Composer dock */
 .dock { position: fixed; left: 0; right: 0; bottom: 0; padding: 0 32px 20px; display: flex; justify-content: center; z-index: 6; pointer-events: none; }
@@ -372,6 +384,8 @@ body.dragging-ref .composer { border-color: var(--line-strong); }
 .confirm-box p { margin: 0 0 10px; color: var(--muted); line-height: 1.5; }
 .confirm-actions { display: flex; justify-content: flex-end; gap: 10px; }
 .confirm-actions .btn { min-width: 110px; padding: 0 18px; }
+.confirm-actions .btn.danger { background: #b9473a; border-color: #b9473a; color: #fff; }
+.confirm-actions .btn.danger:hover { background: #cc5244; }
 
 /* Image library: where the images come from */
 .lib-nav { width: 210px; flex-shrink: 0; display: flex; flex-direction: column; gap: 4px; padding-right: 12px; border-right: 1px solid var(--line); }
@@ -620,8 +634,8 @@ body.dragging-ref .composer { border-color: var(--line-strong); }
     <h2 id="confirmTitle">Close MiniMax H3 Vision?</h2>
     <p id="confirmText"></p>
     <div class="confirm-actions">
-      <button class="btn" id="confirmNo" data-act="closeNo">Cancel</button>
-      <button class="btn primary" id="confirmYes" data-act="closeYes">Close</button>
+      <button class="btn" id="confirmNo" data-act="confirmNo">Cancel</button>
+      <button class="btn primary" id="confirmYes" data-act="confirmYes">Close</button>
     </div>
   </div>
 </div>

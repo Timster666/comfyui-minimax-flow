@@ -63,6 +63,9 @@ const state = {
   // The Klein tab's four slots, image 1-4: ids of images from the Add image library, or null. The slots keep
   // their names: whatever is in slot 3 is "image 3" in the prompt.
   kleinSlots: [null, null, null, null],
+  // Grid selection, for Delete: ids of the tiles that are ticked, and the last one clicked (for Shift ranges).
+  picked: new Set(),
+  lastPicked: null,
   // The Image tab's Edit switch: one picture to edit (an Add image library id) with MOSS-Image's edit LoRA.
   imageEdit: false,
   imageEditSlot: [null],
@@ -302,19 +305,55 @@ function renderHeader() {
 const missingWhy = () => (isImage() ? OPT.image.missing : isKlein() ? OPT.klein.missing : OPT.missing) || "";
 
 const tabClips = () => state.clips.filter((c) => tabOf(c) === state.tab);
-const filteredClips = () => tabClips().filter((c) => state.filter === "all" || c.starred);
+// Starred is hidden for now (the stars are kept with each clip): the grid shows everything.
+const filteredClips = () => tabClips();
 
 function renderFilters() {
-  const starred = tabClips().filter((c) => c.starred).length;
-  $("filters").innerHTML = [["all", "All", tabClips().length], ["starred", "Starred", starred]]
-    .map(([id, label, n]) => `<button class="chip ${state.filter === id ? "on" : ""}" data-act="filter" data-id="${id}">${label} · ${n}</button>`).join("")
+  const n = pickedHere().length, what = isImage() || isKlein() ? (n === 1 ? "image" : "images") : n === 1 ? "video" : "videos";
+  $("filters").innerHTML = `<span class="chip on count">All · ${tabClips().length}</span>`
     + `<label class="chip import" title="Bring in a video or image made earlier. Its prompt and settings are read from the file. A .zip from Export .zip brings its reference images too. You can also drop files on the page.">${ICON.upload}Import
-        <input type="file" accept="video/*,image/png,image/jpeg,image/webp,.zip,application/zip" multiple data-change="importFiles"></label>`;
+        <input type="file" accept="video/*,image/png,image/jpeg,image/webp,.zip,application/zip" multiple data-change="importFiles"></label>`
+    + `<button class="chip delete-chip" data-act="deletePicked" ${n ? "" : "disabled"} title="${n ? `Delete the ${n} ticked ${what}` : "Tick videos or images to delete them: the box on each, or ⌘-click (Ctrl-click) and Shift-click"}">${ICON.trash}Delete${n ? " " + n : ""}</button>`
+    + (n ? `<button class="link clear-pick" data-act="clearPicked">Clear selection</button>` : "");
 }
+
+function pickClip(id, e) {
+  const list = filteredClips().map((c) => c.id);
+  if (e && e.shiftKey && state.lastPicked && list.includes(state.lastPicked)) {
+    const [a, b] = [list.indexOf(state.lastPicked), list.indexOf(id)].sort((x, y) => x - y);
+    list.slice(a, b + 1).forEach((x) => state.picked.add(x));
+  } else if (state.picked.has(id)) state.picked.delete(id);
+  else state.picked.add(id);
+  state.lastPicked = id;
+  renderFilters(); renderGrid();
+}
+
+// Yes/no in the app's own dialog. danger: a red Yes (for Delete).
+let confirmAnswer = null;
+function askConfirm(title, text, yes, danger = false) {
+  $("confirmTitle").textContent = title;
+  $("confirmText").textContent = text;
+  $("confirmYes").textContent = yes;
+  $("confirmYes").classList.toggle("danger", danger);
+  $("confirmYes").classList.toggle("primary", !danger);
+  $("confirm").hidden = false;
+  (danger ? $("confirmNo") : $("confirmYes")).focus();
+  return new Promise((resolve) => { confirmAnswer = resolve; });
+}
+function answerConfirm(yes) {
+  $("confirm").hidden = true;
+  const done = confirmAnswer;
+  confirmAnswer = null;
+  if (done) done(yes);
+}
+
+// The ticked tiles that are in this tab and still exist.
+const pickedHere = () => tabClips().filter((c) => state.picked.has(c.id)).map((c) => c.id);
 
 function renderGrid() {
   const grid = $("grid");
   grid.style.setProperty("--per-row", state.perRow);
+  grid.classList.toggle("picking", pickedHere().length > 0);
   $("perRow").value = state.perRow;
   $("perRowVal").textContent = state.perRow;
   $("perRowLabel").textContent = isImage() ? "Images per row" : "Videos per row";
@@ -363,7 +402,7 @@ function patchGrid(grid, tiles) {
 // A video in the grid.
 function videoTile(c) {
   const busy = isBusy(c), failed = c.status === "failed";
-  return `<div class="tile" data-clip="${c.id}">
+  return `<div class="tile ${state.picked.has(c.id) ? "picked" : ""}" data-clip="${c.id}">
       <div class="frame">
         <span class="pic" style="${picStyle(c.aspect, toneOf(c.id))}">${busy && c.preview ? liveVideo(c) : c.file ? `<video src="${clipUrl(c)}" muted loop playsinline preload="metadata"></video>` : ""}</span>
         <button class="tile-hit" data-act="open" data-id="${c.id}" aria-label="Open clip: ${esc(c.prompt)}"></button>
@@ -374,7 +413,7 @@ function videoTile(c) {
         <span class="badge">${mpText(c.res)}</span>
         <span class="len" data-len="${c.id}">${c.len} s</span>
         ${c.file ? `<span class="hover-line" aria-hidden="true"><span data-hoverbar="${c.id}"></span></span>` : ""}
-        <button class="star ${c.starred ? "on" : ""}" data-act="star" data-id="${c.id}" aria-label="${c.starred ? "Unstar" : "Star"}">${ICON.star(c.starred)}</button>
+        <button class="pick ${state.picked.has(c.id) ? "on" : ""}" data-act="pick" data-id="${c.id}" role="checkbox" aria-checked="${state.picked.has(c.id)}" aria-label="Select for Delete" title="Select (⌘-click or Shift-click the tiles for more)">${ICON.check}</button>
       </div>
     </div>`;
 }
@@ -384,7 +423,7 @@ function imageTile(c) {
   const busy = isBusy(c), failed = c.status === "failed", done = c.status === "done";
   const picture = busy && c.preview ? `<img data-live="${c.id}" src="${c.preview}" alt="">` : done ? `<img src="${clipUrl(c)}" alt="" loading="lazy" draggable="false">` : "";
   // A finished image can be dragged: onto a Klein slot, or into the Video tab's prompt as an @image.
-  return `<div class="tile" data-clip="${c.id}" ${done ? `draggable="true" data-drag-gen="${c.id}"` : ""}>
+  return `<div class="tile ${state.picked.has(c.id) ? "picked" : ""}" data-clip="${c.id}" ${done ? `draggable="true" data-drag-gen="${c.id}"` : ""}>
       <div class="frame">
         <span class="pic" style="${picStyle(shapeOf(c), toneOf(c.id))}">${picture}</span>
         <button class="tile-hit" data-act="open" data-id="${c.id}" aria-label="Open image: ${esc(c.prompt)}"></button>
@@ -395,7 +434,7 @@ function imageTile(c) {
         <span class="badge">${mpText(c.res)}</span>
         <span class="len">${c.family === "klein" && c.width ? c.width + "×" + c.height : c.aspect}</span>
         ${done && isKlein() ? `<button class="edit-this" data-act="editThis" data-id="${c.id}" title="Put this image in image 1 and keep editing it">Edit this</button>` : ""}
-        <button class="star ${c.starred ? "on" : ""}" data-act="star" data-id="${c.id}" aria-label="${c.starred ? "Unstar" : "Star"}">${ICON.star(c.starred)}</button>
+        <button class="pick ${state.picked.has(c.id) ? "on" : ""}" data-act="pick" data-id="${c.id}" role="checkbox" aria-checked="${state.picked.has(c.id)}" aria-label="Select for Delete" title="Select (⌘-click or Shift-click the tiles for more)">${ICON.check}</button>
       </div>
     </div>`;
 }
@@ -1639,6 +1678,7 @@ const ACT = {
   tab: (id) => {
     if (id === state.tab) return;
     hoverStop();
+    state.picked.clear(); state.lastPicked = null;
     state.drafts[state.tab] = state.prompt;
     state.tab = id;
     state.prompt = state.drafts[id] || "";
@@ -1669,22 +1709,48 @@ const ACT = {
       say(error.message);
     }
   },
-  open: (id) => openClip(id),
+  // A click opens the clip; with ⌘ or Ctrl (add/take out) or Shift (a range) it selects instead, and while
+  // anything is selected a plain click selects too.
+  open: (id, el, e) => {
+    if (e && (e.metaKey || e.ctrlKey || e.shiftKey || state.picked.size)) { pickClip(id, e); return; }
+    openClip(id);
+  },
   back: () => {
     if (isFull()) document.exitFullscreen();
     state.view = "gallery";
     render();
   },
-  close: () => {
+  close: async () => {
     const busy = state.clips.filter(isBusy).length;
-    $("confirmText").textContent = "You'll go back to ComfyUI. " + (busy
+    const yes = await askConfirm("Close MiniMax H3 Vision?", "You'll go back to ComfyUI. " + (busy
       ? (busy === 1 ? "The clip that is rendering keeps going" : "The " + busy + " clips that are rendering keep going") + " in the background, and everything is saved."
-      : "Everything is saved, so you can pick up where you left off.");
-    $("confirm").hidden = false;
-    $("confirmYes").focus();
+      : "Everything is saved, so you can pick up where you left off."), "Close");
+    if (yes) window.parent.postMessage("mmflow-close", location.origin);
+    else $("closeBtn").focus();
   },
-  closeYes: () => { $("confirm").hidden = true; window.parent.postMessage("mmflow-close", location.origin); },
-  closeNo: () => { $("confirm").hidden = true; $("closeBtn").focus(); },
+  confirmYes: () => answerConfirm(true),
+  confirmNo: () => answerConfirm(false),
+  // The grid's selection: the box on a tile, ⌘/Ctrl-click to add or take out one, Shift-click for a range.
+  pick: (id, el, e) => pickClip(id, e),
+  clearPicked: () => { state.picked.clear(); state.lastPicked = null; render(); },
+  deletePicked: async () => {
+    const ids = pickedHere();
+    if (!ids.length) return;
+    const images = isImage() || isKlein(), n = ids.length;
+    const what = images ? (n === 1 ? "image" : "images") : n === 1 ? "video" : "videos";
+    const busy = ids.filter((id) => isBusy(clipById(id))).length;
+    const yes = await askConfirm(`Delete ${n === 1 ? "this " + what : n + " " + what}?`,
+      `${n === 1 ? "It is" : "They are"} deleted from the output folder too. This can't be undone.`
+      + (busy ? ` ${busy === 1 ? "One is" : busy + " are"} still rendering and will be stopped.` : ""), "Delete", true);
+    if (!yes) return;
+    ids.forEach((id) => { deleted.add(id); state.picked.delete(id); });
+    state.clips = state.clips.filter((c) => !ids.includes(c.id));
+    state.lastPicked = null;
+    render();
+    let failed = 0;
+    for (const id of ids) { try { await api("DELETE", "clips/" + id); } catch { failed++; } }
+    say(failed ? `Deleted ${n - failed} of ${n}; ${failed} couldn't be deleted.` : `${n === 1 ? (images ? "Image" : "Video") : n + " " + what} deleted.`);
+  },
   whyMissing: () => say(missingWhy()),
   star: (id) => {
     const c = clipById(id);
@@ -2122,7 +2188,7 @@ document.addEventListener("input", (e) => {
 });
 document.addEventListener("keydown", (e) => {
   if (!$("confirm").hidden) {
-    if (e.key === "Escape") { e.preventDefault(); ACT.closeNo(); }
+    if (e.key === "Escape") { e.preventDefault(); ACT.confirmNo(); }
     if (e.key === "Tab") {
       e.preventDefault();
       (document.activeElement === $("confirmYes") ? $("confirmNo") : $("confirmYes")).focus();
@@ -2130,6 +2196,8 @@ document.addEventListener("keydown", (e) => {
     return;
   }
   if (e.key === "Escape" && e.target.id !== "prompt" && (state.settingsOpen || state.library.open)) ACT.closePopups();
+  // Esc in the grid lets go of the selection.
+  else if (e.key === "Escape" && state.view === "gallery" && state.picked.size && !/^(INPUT|TEXTAREA)$/.test(e.target.tagName)) ACT.clearPicked();
 });
 document.addEventListener("keydown", (e) => {
   if (!state.library.open) return;
