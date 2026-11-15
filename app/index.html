@@ -338,6 +338,11 @@ body.dragging-ref .composer { border-color: var(--line-strong); }
 .lm-foot { display: flex; align-items: center; gap: 12px; }
 .lm-foot span { flex: 1; font-size: 12px; color: var(--muted); }
 .lm-foot .btn { min-width: 100px; }
+.lm-all { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-soft); cursor: pointer; flex: none !important; }
+.lm-all input { accent-color: var(--accent); width: 16px; height: 16px; margin: 0; }
+.lm-all span { flex: none !important; font-size: 13px !important; color: var(--text-soft) !important; }
+.lm-folder.other { color: var(--faint); border-top: 1px solid var(--line); margin-top: 6px; }
+.lm-empty code { background: var(--raised); padding: 1px 6px; border-radius: 5px; color: var(--text-soft); }
 
 /* Close confirmation */
 .confirm { position: fixed; inset: 0; z-index: 40; background: rgba(0,0,0,.55); display: flex; align-items: center; justify-content: center; padding: 24px; }
@@ -570,7 +575,7 @@ body.dragging-ref .composer { border-color: var(--line-strong); }
     </div>
     <input class="lm-search" id="loraQuery" type="search" placeholder="Search LoRAs" autocomplete="off" spellcheck="false" aria-label="Search LoRAs">
     <div class="lm-list" id="loraList" role="listbox" aria-label="LoRAs"></div>
-    <div class="lm-foot"><span>Click a LoRA to add it, click again to take it out. ↑ ↓ and Enter work too.</span><button class="btn primary" data-act="closeLoras">Done</button></div>
+    <div class="lm-foot"><label class="lm-all"><input type="checkbox" id="loraAll"><span id="loraAllText">Show all LoRAs</span></label><span>Click to add, again to take out.</span><button class="btn primary" data-act="closeLoras">Done</button></div>
   </div>
 </div>
 <div class="confirm" id="confirm" hidden>

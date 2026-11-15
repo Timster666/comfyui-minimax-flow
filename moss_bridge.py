@@ -107,6 +107,16 @@ def models():
     return rows
 
 
+def lora_file(name):
+    """The LoRA as ComfyUI lists it: found by its file name if it was moved into a folder (e.g. loras/MOSS Image)."""
+    try:
+        import folder_paths
+        from .h3_graph import pick_file
+        return pick_file([name], folder_paths.get_filename_list("loras")) or name
+    except Exception:
+        return name
+
+
 def build_graph(clip, name=None):
     """The ComfyUI graph for one MiniMax H3 Vision image.
 
@@ -126,7 +136,7 @@ def build_graph(clip, name=None):
     for i, lora in enumerate(clip.get("loras") or []):
         key = str(20 + i)
         graph[key] = {"class_type": "LoraLoaderModelOnly",
-                      "inputs": {"model": model, "lora_name": lora["name"], "strength_model": float(lora["strength"])}}
+                      "inputs": {"model": model, "lora_name": lora_file(lora["name"]), "strength_model": float(lora["strength"])}}
         model = [key, 0]
     graph[SAMPLER_NODE] = {"class_type": "KSampler", "inputs": {
         "model": model, "seed": int(clip["seed"]), "steps": int(clip["steps"]), "cfg": float(clip["cfg"]),

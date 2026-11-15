@@ -79,7 +79,7 @@ const clipUrl = (c) => c.url || (c.file ? fileUrl(c.subfolder || OPT.root + (kin
 // H3 takes lengths in steps of 17 frames, so a clip gets the nearest such length.
 const snapFrames = (seconds) => 5 + 17 * Math.max(1, Math.round((seconds * OPT.length.fps - 5) / 17));
 const isBusy = (c) => c.status === "queued" || c.status === "rendering";
-const loraText = (l) => l.name.replace(/\.[^.]+$/, "") + " · " + Number(l.strength).toFixed(2);
+const loraText = (l) => l.name.replace(/\\/g, "/").split("/").pop().replace(/\.[^.]+$/, "") + " · " + Number(l.strength).toFixed(2);
 const attach = (id) => { if (!state.attached.includes(id)) state.attached.push(id); };
 
 // Width and height for an aspect ratio at a size in megapixels. H3 wants sides in steps of 32, MOSS-Image in steps of 16.
@@ -661,7 +661,7 @@ function renderSettings() {
       ${s.loras.map((l) => `<div class="lora ${l.on ? "" : "dim"}">
           <button class="switch ${l.on ? "on" : ""}" data-act="toggleLora" data-id="${esc(l.id)}" aria-label="${l.on ? "Switch off" : "Switch on"} ${esc(l.name)}" aria-pressed="${l.on}"></button>
           <div class="lora-body">
-            <span class="lora-name">${esc(l.name)}</span>
+            <span class="lora-name" title="${esc(l.name)}">${esc(loraStem(l.name))}</span>
             <input type="range" min="0" max="2" step="0.05" value="${l.strength}" data-input="loraStrength" data-id="${esc(l.id)}" aria-label="Strength of ${esc(l.name)}">
           </div>
           <span class="lora-val" data-strength="${esc(l.id)}">${Number(l.strength).toFixed(2)}</span>
@@ -1157,18 +1157,46 @@ async function removeClip(id, message) {
 /* ------------------------------------------------------------------
    Add LoRA: a window listing the LoRA files in ComfyUI's loras folders
    ------------------------------------------------------------------ */
-const LM = { open: false, q: "", sel: 0, sizes: {}, busy: false };
+const LM = { open: false, q: "", sel: 0, sizes: {}, busy: false, all: false };
+// LoRAs are sorted by model in folders inside models/loras: "MiniMax H3" for the Video tab, "MOSS Image" for the
+// Image tab, "Flux Klein" for Klein. Each tab lists its own folder and the loose files in loras itself
+// ("Not sorted"); Show all lists every folder. Folder names are matched loosely (minimax_h3, moss, klein…).
+const LORA_FOLDER = { video: "MiniMax H3", image: "MOSS Image", klein: "Flux Klein" };
+const loraTop = (n) => { const p = n.replace(/\\/g, "/"); return p.includes("/") ? p.slice(0, p.indexOf("/")) : ""; };
+function loraFamily(n) {
+  const top = loraTop(n).toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (!top) return "";
+  if (top.startsWith("minimax") || top.startsWith("h3") || top === "hyperflow") return "video";
+  if (top.startsWith("moss")) return "image";
+  if (top.includes("klein") || top.startsWith("flux")) return "klein";
+  return "other";
+}
+const loraTab = () => (isImage() ? "image" : "video");
+const loraBase = (n) => n.replace(/\\/g, "/").split("/").pop();
 const loraFolder = (n) => (n.includes("/") ? n.slice(0, n.lastIndexOf("/")) : n.includes("\\") ? n.slice(0, n.lastIndexOf("\\")) : "");
 const loraStem = (n) => n.slice(Math.max(n.lastIndexOf("/"), n.lastIndexOf("\\")) + 1).replace(/\.[^.]+$/, "");
 const loraSize = (b) => (b >= 1 << 30 ? (b / (1 << 30)).toFixed(1) + " GB" : b >= 1 << 20 ? Math.round(b / (1 << 20)) + " MB" : Math.max(1, Math.round(b / 1024)) + " KB");
+// The LoRAs to list, in groups: this tab's folder, then Not sorted, then (with Show all) other models' folders.
+// A folder that isn't one of the model folders counts as Not sorted too: only another model's LoRAs are hidden.
+const loraRank = (n) => { const f = loraFamily(n); return f === loraTab() ? 0 : f === "" || f === "other" ? 1 : 2; };
 const loraShown = () => {
   const words = LM.q.toLowerCase().split(/\s+/).filter(Boolean);
-  return OPT.loras.filter((n) => words.every((w) => n.toLowerCase().includes(w)));
+  return OPT.loras
+    .filter((n) => LM.all || loraRank(n) < 2)
+    .filter((n) => words.every((w) => n.toLowerCase().includes(w)))
+    .sort((a, b) => loraRank(a) - loraRank(b) || a.toLowerCase().localeCompare(b.toLowerCase()));
 };
-const loraUsed = (n) => state.settings.loras.some((l) => l.id === n);
+// A LoRA in the settings counts as this file when the name is the same, or the file name is (it was moved).
+const loraUsed = (n) => state.settings.loras.some((l) => l.id === n || loraBase(l.id) === loraBase(n));
+function loraHeading(n) {
+  const rank = loraRank(n), parts = n.replace(/\\/g, "/").split("/").slice(0, -1);
+  if (rank === 1) return parts.length ? parts.join(" / ") + " · not sorted" : "Not sorted · loose in the loras folder";
+  if (rank === 0) return parts.join(" / ");
+  return parts.join(" / ") + " · for another model";
+}
 
 function openLoras() {
-  LM.open = true; LM.q = ""; LM.sel = 0;
+  LM.open = true; LM.q = ""; LM.sel = 0; LM.all = false;
   $("loraModal").hidden = false;
   renderLoras(true);
   $("loraQuery").focus();
@@ -1202,7 +1230,7 @@ async function fetchLoras(refresh) {
   }
 }
 function toggleLoraFile(name) {
-  if (loraUsed(name)) state.settings.loras = state.settings.loras.filter((l) => l.id !== name);
+  if (loraUsed(name)) state.settings.loras = state.settings.loras.filter((l) => l.id !== name && loraBase(l.id) !== loraBase(name));
   else state.settings.loras.push({ id: name, name, strength: 1, on: true });
   const list = loraShown();
   LM.sel = Math.max(0, list.indexOf(name));
@@ -1222,17 +1250,25 @@ function renderLoras(first) {
   renderLoraHead();
   const list = loraShown();
   LM.sel = Math.min(LM.sel, Math.max(0, list.length - 1));
-  const n = state.settings.loras.length;
-  $("loraCount").textContent = `${OPT.loras.length} found · ${n} in use`;
+  const n = state.settings.loras.length, folder = LORA_FOLDER[loraTab()];
+  const own = OPT.loras.filter((x) => loraRank(x) === 0).length, others = OPT.loras.filter((x) => loraRank(x) === 2).length;
+  $("loraTitle").textContent = "Add a LoRA · " + folder;
+  $("loraCount").textContent = `${own} in loras/${folder} · ${n} in use`;
+  $("loraAll").checked = LM.all;
+  $("loraAllText").textContent = `Show all LoRAs${others ? ` (${others} for other models)` : ""}`;
+  const tip = `<p class="lm-empty">Put this tab's LoRAs in <code>models/loras/${esc(folder)}</code> and click Refresh.</p>`;
   if (!OPT.loras.length) {
-    $("loraList").innerHTML = `<p class="lm-empty">No LoRAs in ComfyUI's loras folder. Put .safetensors files in <code>models/loras</code> and click Refresh.</p>`;
+    $("loraList").innerHTML = `<p class="lm-empty">No LoRAs in ComfyUI's loras folder yet.</p>` + tip;
     return;
   }
-  if (!list.length) { $("loraList").innerHTML = `<p class="lm-empty">No LoRA matches “${esc(LM.q)}”.</p>`; return; }
-  let folder = null, html = "";
+  if (!list.length) {
+    $("loraList").innerHTML = LM.q ? `<p class="lm-empty">No LoRA matches “${esc(LM.q)}”.</p>` : `<p class="lm-empty">No LoRAs for ${esc(folder)} yet.</p>` + tip;
+    return;
+  }
+  let heading = null, html = "";
   list.forEach((name, i) => {
-    const f = loraFolder(name);
-    if (f !== folder) { folder = f; if (f || i) html += `<div class="lm-folder">${f ? esc(f) : "loras"}</div>`; }
+    const h = loraHeading(name);
+    if (h !== heading) { heading = h; if (h) html += `<div class="lm-folder ${loraRank(name) ? "other" : ""}">${esc(h)}</div>`; }
     const on = loraUsed(name);
     html += `<button class="lm-item ${on ? "on" : ""} ${i === LM.sel ? "sel" : ""}" role="option" aria-selected="${i === LM.sel}" data-act="pickLora" data-id="${esc(name)}" title="${esc(name)}">
       <span class="lm-name">${esc(loraStem(name))}</span>
@@ -1243,6 +1279,7 @@ function renderLoras(first) {
   $("loraList").querySelector(".lm-item.sel")?.scrollIntoView({ block: "nearest" });
 }
 $("loraQuery").addEventListener("input", (e) => { LM.q = e.target.value; LM.sel = 0; renderLoras(); });
+$("loraAll").addEventListener("change", (e) => { LM.all = e.target.checked; LM.sel = 0; renderLoras(); $("loraQuery").focus(); });
 $("loraModal").addEventListener("mousedown", (e) => { if (e.target === $("loraModal")) closeLoras(); });
 // Capture, so the window has its keys wherever the focus is, and Escape closes it and nothing else.
 document.addEventListener("keydown", (e) => {

@@ -125,7 +125,8 @@ def available():
 
 
 def pick_file(names, files):
-    """The first of these names that is installed, as ComfyUI lists it (a name ending in * matches any file it starts), or None."""
+    """The first of these names that is installed, as ComfyUI lists it (a name ending in * matches any file it starts,
+    and a name not found as it is matches the same file name in another folder), or None."""
     if not names:
         return None
     listed = {f.replace("\\", "/"): f for f in files}
@@ -137,6 +138,13 @@ def pick_file(names, files):
                 return listed[found[0]]
         elif name in listed:
             return listed[name]
+        else:
+            # Moved into a folder (or out of one), e.g. loras/x.safetensors -> loras/MiniMax H3/x.safetensors:
+            # the same file name anywhere will do, so saved settings and old clips keep working.
+            base = name.replace("\\", "/").rsplit("/", 1)[-1]
+            found = sorted(f for f in listed if f.rsplit("/", 1)[-1] == base)
+            if found:
+                return listed[found[0]]
     return None
 
 
