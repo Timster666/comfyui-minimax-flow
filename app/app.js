@@ -2206,7 +2206,11 @@ document.addEventListener("keydown", (e) => {
     }
     return;
   }
+  if (e.key === "Escape" && e.defaultPrevented) return;
   if (e.key === "Escape" && e.target.id !== "prompt" && (state.settingsOpen || state.library.open)) ACT.closePopups();
+  // Esc on an open video or image goes back to the grid, like Back to gallery (not while typing).
+  else if (e.key === "Escape" && state.view === "clip" && !isFull()
+    && !/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName) && !e.target.isContentEditable) { e.preventDefault(); ACT.back(); }
   // Esc in the grid lets go of the selection.
   else if (e.key === "Escape" && state.view === "gallery" && state.picked.size && !/^(INPUT|TEXTAREA)$/.test(e.target.tagName)) ACT.clearPicked();
 });
@@ -2535,8 +2539,9 @@ ta.addEventListener("keydown", (e) => {
     if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); insertMention(list[i]); return; }
   }
   if (e.key === "Escape") {
-    if (mentionQuery() !== null) { state.mentionClosed = true; renderMention(); }
-    else if (state.settingsOpen || state.library.open) ACT.closePopups();
+    // preventDefault marks the key as used, so it doesn't also leave the clip view.
+    if (mentionQuery() !== null) { e.preventDefault(); state.mentionClosed = true; renderMention(); }
+    else if (state.settingsOpen || state.library.open) { e.preventDefault(); ACT.closePopups(); }
   }
 });
 
