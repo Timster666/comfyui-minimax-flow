@@ -811,7 +811,7 @@ function libButton(refId, inBar) {
     if (at >= 0) return `<button class="btn lib-add" data-act="libToggle">Take out of image ${at + 1}</button>`;
     return `<button class="btn primary lib-add" data-act="libToggle" ${to < 0 ? "disabled" : ""}>${to < 0 ? "All four slots are full" : "Put in image " + (to + 1)}</button>`;
   }
-  return `<button class="btn ${inBar ? "" : "primary"} lib-add" data-act="libToggle">${inBar ? "Remove from prompt bar" : "Add to prompt bar"}</button>`;
+  return `<button class="btn ${inBar ? "" : "primary"} lib-add" data-act="libToggle">${inBar ? "Remove from prompt" : "Add to prompt"}</button>`;
 }
 
 // Move the selection up or down the list, and keep it in view.
@@ -1871,7 +1871,11 @@ const ACT = {
       return;
     }
     if (state.attached.includes(id)) { state.attached = state.attached.filter((x) => x !== id); say("@" + ref.name + " taken out of the prompt bar."); }
-    else { attach(id); say("@" + ref.name + " added to the prompt bar. Drag it onto the text, or type @" + ref.name + ", to use it."); }
+    else {
+      // Adding closes the window; the picture is in the prompt bar, ready to drag onto the text.
+      attach(id); say("@" + ref.name + " added to the prompt. Drag it onto the text, or type @" + ref.name + ", to use it.");
+      saveUi(); ACT.closePopups(); return;
+    }
     const hadFocus = document.activeElement?.classList.contains("lib-item");
     renderRefs(); renderLibNav(); renderLibList(); renderLibPreview(); saveUi();
     if (hadFocus) document.querySelector(".lib-item.on")?.focus();
