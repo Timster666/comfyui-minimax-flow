@@ -24,8 +24,9 @@ cloned under the old name keeps working.
 
 The app has four tabs, and it always opens on **Video**.
 
-- **Video** makes clips with MiniMax H3. Every `@image` in the prompt is a reference picture. Click an image
-  in the prompt bar to put its `@name` in the prompt at the cursor.
+- **Video** makes clips with MiniMax H3. Every `@image` in the prompt is a reference picture. Drag an image
+  from the prompt bar onto the text to put its `@name` where the cursor was; click it to see it in
+  **Add image**.
 - **Image** makes pictures with MOSS-Image. It's good at words in pictures: put the text you want
   in quotes. A finished image can be sent to the Video tab with **Use in a video**, and the Video
   tab's **Add image** pop-up lists all of them under **Generated images**.
@@ -34,8 +35,9 @@ The app has four tabs, and it always opens on **Video**.
   of the woman in image 1"). The slots keep their names: drag a picture onto another slot to swap
   them, or drop a new one on a slot to replace it, and the prompt stays as it is. Fill a slot by
   clicking it (it opens **Add image**), or drag a picture onto it from the grid, Add image or your
-  computer. Under each slot is the picture's own size, and hovering it shows it big. Click a filled slot to
-  put its name ("image 2") in the prompt at the cursor, or drag it into the prompt text. With no pictures
+  computer. Under each slot is the picture's own size, and hovering it shows it big. Drag a slot onto the
+  prompt text to put its name ("image 2") where the cursor was. Click a filled slot to open **Add image**
+  and pick a picture to replace it. With no pictures
   Klein makes one from the prompt alone. **Size** in the settings is **Match image 1** (its shape) or an
   aspect ratio. **Edit this** on a result puts it in image 1, to keep editing; the Image tab's pictures
   have **Edit in Klein**. A prompt that names an empty slot isn't sent.
