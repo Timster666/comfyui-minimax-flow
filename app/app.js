@@ -328,6 +328,12 @@ function pickClip(id, e) {
   renderFilters(); renderGrid();
 }
 
+function showAppMenu(open) {
+  $("appMenu").hidden = !open;
+  $("closeBtn").setAttribute("aria-expanded", String(open));
+  if (open) $("appMenu").querySelector(".app-menu-item").focus();
+}
+
 // Yes/no in the app's own dialog. danger: a red Yes (for Delete).
 let confirmAnswer = null;
 function askConfirm(title, text, yes, danger = false) {
@@ -1720,11 +1726,13 @@ const ACT = {
     state.view = "gallery";
     render();
   },
+  appMenu: () => showAppMenu($("appMenu").hidden),
   close: async () => {
+    showAppMenu(false);
     const busy = state.clips.filter(isBusy).length;
-    const yes = await askConfirm("Close MiniMax H3 Vision?", "You'll go back to ComfyUI. " + (busy
+    const yes = await askConfirm("Exit MiniMax H3 Vision?", "You'll go back to ComfyUI. " + (busy
       ? (busy === 1 ? "The clip that is rendering keeps going" : "The " + busy + " clips that are rendering keep going") + " in the background, and everything is saved."
-      : "Everything is saved, so you can pick up where you left off."), "Close");
+      : "Everything is saved, so you can pick up where you left off."), "Exit");
     if (yes) window.parent.postMessage("mmflow-close", location.origin);
     else $("closeBtn").focus();
   },
@@ -2172,6 +2180,8 @@ async function uploadImages(files) {
 }
 
 document.addEventListener("click", (e) => {
+  // A click anywhere outside the gear menu closes it.
+  if (!$("appMenu").hidden && !e.target.closest("#appMenuWrap")) showAppMenu(false);
   const el = e.target.closest("[data-act]");
   if (el && (el.classList.contains("off") || el.disabled)) return;
   if (el && ACT[el.dataset.act]) ACT[el.dataset.act](el.dataset.id, el, e);
@@ -2187,6 +2197,7 @@ document.addEventListener("input", (e) => {
   if (el && INPUT[el.dataset.input]) INPUT[el.dataset.input](el);
 });
 document.addEventListener("keydown", (e) => {
+  if (!$("appMenu").hidden && e.key === "Escape") { e.preventDefault(); showAppMenu(false); $("closeBtn").focus(); return; }
   if (!$("confirm").hidden) {
     if (e.key === "Escape") { e.preventDefault(); ACT.confirmNo(); }
     if (e.key === "Tab") {
@@ -2700,7 +2711,8 @@ $("negative").addEventListener("input", (e) => { state.negative = e.target.value
 
 // Start. Last, so everything above is defined.
 // Only show the Close button when the app runs inside ComfyUI's page.
-if (window.parent !== window) $("closeBtn").hidden = false;
+// The gear menu: its only item, Exit, goes back to ComfyUI, so it shows only inside ComfyUI.
+if (window.parent !== window) $("appMenuWrap").hidden = false;
 render();
 load();
 connect();

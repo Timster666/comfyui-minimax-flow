@@ -434,7 +434,11 @@ body.dragging-ref .composer { border-color: var(--line-strong); }
 .top-right { display: flex; align-items: center; gap: 12px; }
 .missing { font-size: 12px; font-weight: 600; color: var(--accent-text); background: transparent; border: 1px solid rgba(224,162,74,.5); border-radius: 999px; padding: 4px 10px; cursor: pointer; }
 .close-btn { width: 32px; height: 32px; border-radius: 16px; border: 0; background: var(--raised); display: flex; align-items: center; justify-content: center; }
-.close-btn:hover { background: var(--raised-2); }
+.close-btn:hover, .close-btn[aria-expanded="true"] { background: var(--raised-2); }
+.app-menu-wrap { position: relative; }
+.app-menu { position: absolute; right: 0; top: calc(100% + 8px); z-index: 30; min-width: 230px; padding: 6px; background: var(--panel, #1c1d21); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 12px 32px rgba(0,0,0,.5); }
+.app-menu-item { display: flex; align-items: center; gap: 10px; width: 100%; padding: 10px 12px; border: 0; border-radius: 8px; background: transparent; color: var(--text); font: inherit; font-size: 14px; text-align: left; cursor: pointer; white-space: nowrap; }
+.app-menu-item:hover, .app-menu-item:focus-visible { background: var(--raised); outline: none; }
 /* A render with a live preview: the moving picture shows, with its progress along the bottom. */
 .busy.has-live { background: linear-gradient(to top, rgba(10,11,13,.88), rgba(10,11,13,0) 60%); justify-content: flex-end; padding-bottom: 14px; }
 .pic video[data-live] { filter: saturate(.9); }
@@ -561,9 +565,17 @@ body.dragging-ref .composer { border-color: var(--line-strong); }
   <div class="top-right">
     <div class="edit-head" id="editHead" hidden></div>
     <div class="queue"><span class="dot" id="queueDot"></span><span id="queueText"></span></div>
-    <button class="close-btn" id="closeBtn" data-act="close" aria-label="Close MiniMax H3 Vision" title="Back to ComfyUI" hidden>
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
-    </button>
+    <div class="app-menu-wrap" id="appMenuWrap" hidden>
+      <button class="close-btn" id="closeBtn" data-act="appMenu" aria-label="Settings" aria-haspopup="menu" aria-expanded="false" title="Settings">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      </button>
+      <div class="app-menu" id="appMenu" role="menu" hidden>
+        <button class="app-menu-item" role="menuitem" data-act="close">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg>
+          Exit MiniMax H3 Vision
+        </button>
+      </div>
+    </div>
   </div>
 </header>
 

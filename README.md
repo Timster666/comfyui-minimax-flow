@@ -6,7 +6,7 @@ Open it from the **MiniMax H3 Vision** button in ComfyUI's sidebar (or View → 
 It also opens by itself the first time ComfyUI loads in a browser tab (a reload in the same tab doesn't
 open it again); its **×** goes back to ComfyUI. Switch that off in ComfyUI's settings under
 **MiniMax H3 Vision → Open MiniMax H3 Vision when ComfyUI opens**.
-It opens full screen over ComfyUI; the × in the top-right corner brings you back.
+It opens full screen over ComfyUI; the gear in the top-right corner has **Exit MiniMax H3 Vision**, which brings you back.
 
 ## Install
 
