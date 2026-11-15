@@ -20,14 +20,23 @@ packages beyond ComfyUI's own.
 The repository used to be called `comfyui-minimax-flow`; that address still leads here, and a copy
 cloned under the old name keeps working.
 
-## Video, Image and Edit
+## Video, Image, Klein 9b and Edit
 
-The app has three tabs, and it always opens on **Video**.
+The app has four tabs, and it always opens on **Video**.
 
 - **Video** makes clips with MiniMax H3. Every `@image` in the prompt is a reference picture.
 - **Image** makes pictures with MOSS-Image. It's good at words in pictures: put the text you want
   in quotes. A finished image can be sent to the Video tab with **Use in a video**, and the Video
   tab's **Add image** pop-up lists all of them under **Generated images**.
+- **Klein 9b** edits pictures with FLUX.2 [klein] 9B. The prompt bar has four slots, **image 1** to
+  **image 4**, and the prompt calls the pictures by those names ("put the bag from image 2 in the hand
+  of the woman in image 1"). The slots keep their names: drag a picture onto another slot to swap
+  them, or drop a new one on a slot to replace it, and the prompt stays as it is. Fill a slot by
+  clicking it (it opens **Add image**), or drag a picture onto it from the grid, Add image or your
+  computer. Under each slot is the picture's own size, and hovering it shows it big. With no pictures
+  Klein makes one from the prompt alone. **Size** in the settings is **Match image 1** (its shape) or an
+  aspect ratio. **Edit this** on a result puts it in image 1, to keep editing; the Image tab's pictures
+  have **Edit in Klein**. A prompt that names an empty slot isn't sent.
 - **LoRAs** are added in the settings pop-up with **+ Add LoRA**: a window lists the LoRA files to
   search and pick from. **Refresh** looks in the folders again, so LoRAs you download while ComfyUI runs
   show up without a restart. Sort your LoRAs by model in folders inside `models/loras`:
@@ -36,7 +45,7 @@ The app has three tabs, and it always opens on **Video**.
   models/loras/
     MiniMax H3/    the Video tab's LoRAs
     MOSS Image/    the Image tab's LoRAs
-    Flux Klein/    for Klein, coming later
+    Flux Klein/    the Klein 9b tab's LoRAs
   ```
 
   Each tab lists its own folder first, then **Not sorted**: files loose in `loras` and any folder that
@@ -111,6 +120,24 @@ and uses the same text encoder and VAE. It shows up as "MOSS-Image SFT Turbo 8-s
 renders with 8 steps, guidance 1, Euler and no negative prompt. Any checkpoint whose file name
 has "dmd", "turbo" or "8step" gets these turbo settings.
 
+## Klein 9B files
+
+From Black Forest Labs (accept the FLUX Non-Commercial License on each repository first; they need a
+Hugging Face login) and [Comfy-Org/flux2-klein-9B](https://huggingface.co/Comfy-Org/flux2-klein-9B):
+
+| File | Folder |
+|---|---|
+| `flux-2-klein-9b.safetensors` ([FLUX.2-klein-9B](https://huggingface.co/black-forest-labs/FLUX.2-klein-9B)), or `flux-2-klein-9b-fp8.safetensors` ([FLUX.2-klein-9b-fp8](https://huggingface.co/black-forest-labs/FLUX.2-klein-9b-fp8)) | `models/diffusion_models/` |
+| `qwen_3_8b_fp8mixed.safetensors` | `models/text_encoders/` |
+| `flux2-vae.safetensors` | `models/vae/` |
+
+Distilled checkpoints render in 4 steps without guidance. `flux-2-klein-base-9b(-fp8).safetensors`
+(the undistilled Base) shows up too, with 20 steps and guidance 5. The graph follows ComfyUI's Klein 9B
+image edit templates: each picture is scaled to 1 MP and passed to the model with `ReferenceLatent`.
+Klein numbers the pictures in the order it gets them, so when a slot before it is empty the prompt the
+model reads is renumbered to match (slots 1 and 3 filled: "image 3" is sent as "image 2"). MOSS-Image's
+`flux2-vae_small` isn't used for Klein: its pictures need the full VAE encoder.
+
 ## File names and importing
 
 Finished files are named after the start of their prompt, like
@@ -150,6 +177,7 @@ In ComfyUI's output folder, under `minimax_flow/`:
 - `vision_nodes.py`: the pack's graph nodes, with `h3_lora.py` (LoRAs), `hyperflow.py` (HyperFlow H3 Flash)
   and `live_preview.py` (the moving preview)
 - `moss_bridge.py`: image graphs, with MOSS-Image
+- `klein_bridge.py`: Klein 9B graphs, with up to four reference pictures
 - `edit_media.py`: the Edit tab's filmstrips, waveforms and export, with PyAV
 - `edit_project.py`: edit projects as zip files (export and import)
 - `clip_info.py`: the prompt and settings saved in each file, and reading them back on import
@@ -162,3 +190,7 @@ In ComfyUI's output folder, under `minimax_flow/`:
 GPL-3.0 (`LICENSE`). The video code is adapted from the
 [H3 Editor](https://github.com/igorls/comfyui-h3-editor) by Igor Lins e Silva, which includes work
 from ComfyUI-HyperFlow-Flash and ComfyUI-MiniMax-H3-Turbo. `NOTICE` lists what came from where.
+
+The models have their own licenses: MiniMax H3's community license, MOSS-Image's, and the FLUX
+Non-Commercial License for FLUX.2 [klein] 9B (non-commercial use; commercial use goes through Black
+Forest Labs' API).

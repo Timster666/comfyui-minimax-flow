@@ -14,7 +14,7 @@ import re
 KEY = "mmflow"
 VERSION = 1
 FIELDS = ("kind", "prompt", "model", "profile", "steps", "cfg", "res", "aspect", "len", "width", "height", "seed", "loras",
-          "sampler", "scheduler", "negative")
+          "sampler", "scheduler", "negative", "family", "size", "slots")
 VIDEO_TYPES = {".mp4", ".mov", ".webm", ".mkv"}
 IMAGE_TYPES = {".png", ".jpg", ".jpeg", ".webp"}
 
@@ -114,11 +114,14 @@ def _literal(value):
 
 
 def from_graph(graph):
-    """Settings from a ComfyUI graph: MOSS-Image or the H3 editor's, else None."""
+    """Settings from a ComfyUI graph: MOSS-Image, Klein 9B or the H3 editor's, else None."""
     if _nodes(graph, "H3EditorTake", "H3Take", "MiniMaxH3ReferenceToVideo", "MiniMaxH3ImageToVideo"):
         return _from_h3(graph)
     if any(n.get("inputs", {}).get("type") == "moss_image" for _, n in _nodes(graph, "CLIPLoader")):
         return _from_moss(graph)
+    if any(n.get("inputs", {}).get("type") == "flux2" for _, n in _nodes(graph, "CLIPLoader")) and \
+            any("klein" in str(n.get("inputs", {}).get("unet_name", "")).lower() for _, n in _nodes(graph, "UNETLoader")):
+        return _from_klein(graph)
     return None
 
 
@@ -174,3 +177,26 @@ def h3_prompt(text):
     # Text-only takes start with the editor's style words, which it adds by itself.
     line = re.sub(r"^Live-action, cinematic,\s*", "", line)
     return re.sub(r"<Subject (\d+)>", lambda m: "@" + names[m.group(1)] if m.group(1) in names else m.group(0), line).strip()
+
+
+def _from_klein(graph):
+    """A Klein graph (MiniMax H3 Vision's or ComfyUI's Klein templates): the prompt is the text the guider's
+    positive side starts from, through any ReferenceLatent nodes."""
+    guider = next((n["inputs"] for _, n in _nodes(graph, "CFGGuider")), None)
+    if not guider:
+        return None
+    link, text = guider.get("positive"), ""
+    for _ in range(12):
+        node = graph.get(str((link or [""])[0]), {}) if isinstance(link, list) else {}
+        if node.get("class_type") == "ReferenceLatent":
+            link = node.get("inputs", {}).get("conditioning")
+            continue
+        text = _literal(node.get("inputs", {}).get("text")) or ""
+        break
+    unet = next((n["inputs"].get("unet_name") for _, n in _nodes(graph, "UNETLoader")), None)
+    sched = next((n["inputs"] for _, n in _nodes(graph, "Flux2Scheduler")), {})
+    latent = next((n["inputs"] for _, n in _nodes(graph, "EmptyFlux2LatentImage")), {})
+    noise = next((n["inputs"] for _, n in _nodes(graph, "RandomNoise")), {})
+    return {"kind": "image", "family": "klein", "prompt": text, "profile": unet, "steps": _literal(sched.get("steps")),
+            "cfg": _literal(guider.get("cfg")), "seed": _literal(noise.get("noise_seed")),
+            "width": _literal(latent.get("width")), "height": _literal(latent.get("height")), "loras": _loras(graph)}

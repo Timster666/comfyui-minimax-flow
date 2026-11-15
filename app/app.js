@@ -22,6 +22,16 @@ let OPT = {
     cfg: { min: 1, max: 10, step: 0.5 },
     missing: null,
   },
+  // The Klein tab's options (FLUX.2 [klein] 9B). The server sends the real lists.
+  klein: {
+    models: [{ id: "flux-2-klein-9b.safetensors", name: "Klein 9B Distilled (BF16)", steps: 4, minSteps: 1, maxSteps: 12, stepSize: 1, cfg: 1.0, base: false }],
+    aspects: { "1:1": [1, 1], "4:5": [4, 5], "3:4": [3, 4], "2:3": [2, 3], "9:16": [9, 16], "16:9": [16, 9], "3:2": [3, 2], "4:3": [4, 3], "5:4": [5, 4], "21:9": [21, 9] },
+    megapixels: [0.5, 1.0, 1.5, 2.0, 3.0, 4.0],
+    recommendedMP: [1.0, 1.5, 2.0],
+    cfg: { min: 1, max: 10, step: 0.5 },
+    slots: 4,
+    missing: null,
+  },
 };
 const TONES = ["#2a3a37", "#33302a", "#2b2d3a", "#3b3328", "#26332f", "#30262a", "#222a33", "#2f2a36"];
 
@@ -42,17 +52,24 @@ const state = {
   attached: [],              // ids of the images in the prompt bar
   library: { open: false, source: "uploads", selected: null, selectedGen: null, query: "", sort: "newest" },
   clips: [],
-  tab: "video",              // "video" | "image" | "edit": "edit" is the editor (edit.js), the others the gallery and prompt
+  tab: "video",              // "video" | "image" | "klein" | "edit": "edit" is the editor (edit.js), the others the gallery and prompt
   negative: "",              // the Image tab's negative prompt (empty: the model's recommended one)
   negativeOpen: false,
-  drafts: { video: "", image: "", edit: "" },   // each tab keeps its own prompt
+  drafts: { video: "", image: "", klein: "", edit: "" },   // each tab keeps its own prompt
   videoSettings: { model: "HyperFlow H3 Flash", steps: 6, res: 0.6, aspect: "16:9", len: 5, seedMode: "random", seed: 48213, loras: [] },
   imageSettings: { model: "MOSS-Image SFT (INT8)", steps: 50, cfg: 3.0, res: 1.0, aspect: "1:1", seedMode: "random", seed: 48213, loras: [] },
+  // size: "match" (image 1's shape) or an aspect ratio, which is also kept in aspect.
+  kleinSettings: { model: "Klein 9B Distilled (BF16)", steps: 4, cfg: 1.0, res: 1.0, size: "match", aspect: "1:1", seedMode: "random", seed: 48213, loras: [] },
+  // The Klein tab's four slots, image 1-4: ids of images from the Add image library, or null. The slots keep
+  // their names: whatever is in slot 3 is "image 3" in the prompt.
+  kleinSlots: [null, null, null, null],
   settingsOpen: false,
   loraPicker: false,
 };
 // state.settings is the settings of the tab you're on.
-Object.defineProperty(state, "settings", { get: () => (state.tab === "image" ? state.imageSettings : state.videoSettings) });
+Object.defineProperty(state, "settings", {
+  get: () => (state.tab === "image" ? state.imageSettings : state.tab === "klein" ? state.kleinSettings : state.videoSettings),
+});
 const deleted = new Set();   // clips deleted here, so a late progress message can't bring one back
 
 /* ------------------------------------------------------------------
@@ -64,13 +81,18 @@ const newSeed = () => Math.floor(Math.random() * 2 ** 31);
 const clipById = (id) => state.clips.find((c) => c.id === id);
 const mpText = (mp) => (Math.round(mp * 10) === mp * 10 ? Number(mp).toFixed(1) : String(mp)) + " MP";
 const isImage = () => state.tab === "image";
+const isKlein = () => state.tab === "klein";
 const kindOf = (c) => c.kind || "video";
+// Which tab a clip belongs to: Klein's images are images too (page, download, Use in a video), in their own tab.
+const tabOf = (c) => (c.family === "klein" ? "klein" : kindOf(c));
 // The options of the tab you're on: models, aspect ratios and sizes.
-const tabOpt = () => (isImage() ? OPT.image : { models: OPT.models, aspects: OPT.aspects, megapixels: OPT.megapixels });
+const tabOpt = () => (isImage() ? OPT.image : isKlein() ? OPT.klein : { models: OPT.models, aspects: OPT.aspects, megapixels: OPT.megapixels });
 // With nothing installed, the settings keep the saved model so the pop-up still works.
 const modelOf = (name) => tabOpt().models.find((m) => m.name === name) || tabOpt().models[0]
   || { name: name || "Not installed", steps: state.settings.steps || 20, minSteps: 1, maxSteps: 80, stepSize: 1, cfg: state.settings.cfg || 3 };
-const aspectOf = (a) => OPT.aspects[a] || OPT.image.aspects[a] || [16, 9];
+const aspectOf = (a) => OPT.aspects[a] || OPT.image.aspects[a] || (/^\d+:\d+$/.test(a || "") ? a.split(":").map(Number) : [16, 9]);
+// A clip's shape: its aspect ratio, or (Klein's Match image 1) its exact width and height.
+const shapeOf = (c) => (c.family === "klein" && c.width && c.height ? c.width + ":" + c.height : c.aspect);
 const clock = (s) => Math.floor(s / 60) + ":" + String(Math.floor(s % 60)).padStart(2, "0");
 const toneOf = (id) => TONES[[...id].reduce((a, ch) => a + ch.charCodeAt(0), 0) % TONES.length];
 const viewUrl = (folder, file) => `/view?type=output&subfolder=${encodeURIComponent(OPT.root + "/" + folder)}&filename=${encodeURIComponent(file)}`;
@@ -85,7 +107,7 @@ const attach = (id) => { if (!state.attached.includes(id)) state.attached.push(i
 // Width and height for an aspect ratio at a size in megapixels. H3 wants sides in steps of 32, MOSS-Image in steps of 16.
 function dims(aspect, mp, kind = state.tab) {
   const [a, b] = aspectOf(aspect);
-  const grid = kind === "image" ? 16 : 32;
+  const grid = kind === "image" || kind === "klein" ? 16 : 32;
   const pixels = mp * 1024 * 1024;
   const w = Math.max(grid, Math.round(Math.sqrt((pixels * a) / b) / grid) * grid);
   const h = Math.max(grid, Math.round(Math.sqrt((pixels * b) / a) / grid) * grid);
@@ -123,6 +145,7 @@ const ICON = {
   video: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3"/></svg>',
   image: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-9 9"/></svg>',
   check: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M5 12l5 5 9-10"/></svg>',
+  klein: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="8" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/><path d="M17 13v8M13 17h8"/></svg>',
   edit: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 15h18M8 15v4M14 15v4"/></svg>',
   copy: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a1 1 0 0 1 1-1h10"/></svg>',
 };
@@ -132,8 +155,13 @@ function mentionsIn(text) {
 }
 
 // The prompt as HTML, with known @names highlighted and unknown ones underlined.
-function promptHTML(text, kind = state.tab) {
+function promptHTML(text, kind = state.tab, slots = state.kleinSlots) {
   if (kind === "image") return esc(text);
+  // Klein: "image 1" to "image 4" name the slots; a slot with nothing in it is underlined.
+  if (kind === "klein") {
+    return text.split(/\b(image\s?[1-4])\b/i).map((part, i) => i % 2
+      ? `<span class="${slots[Number(part.slice(-1)) - 1] ? "m" : "bad"}">${esc(part)}</span>` : esc(part)).join("");
+  }
   const names = new Set(state.refs.map((r) => r.name));
   return text.split(/(@[A-Za-z0-9_]+)/).map((part) => {
     if (/^@[A-Za-z0-9_]+$/.test(part)) return `<span class="${names.has(part.slice(1)) ? "m" : "bad"}">${esc(part)}</span>`;
@@ -154,6 +182,11 @@ const stepsText = (n, rec) => n + (n === rec ? " · recommended" : "");
 function summary() {
   const s = state.settings;
   const n = activeLoras().length;
+  if (isKlein()) {
+    const m = modelOf(s.model), [w, h] = kleinSize();
+    return [s.model, s.steps + " steps", ...(m.base ? ["Guidance " + s.cfg] : []), s.size === "match" ? "Match image 1" : s.aspect,
+      w + "×" + h, s.seedMode === "fixed" ? "Seed " + s.seed : "Random seed", n + (n === 1 ? " LoRA" : " LoRAs")].join(" · ");
+  }
   return [s.model, s.steps + " steps", ...(isImage() ? ["Guidance " + s.cfg] : []), mpText(s.res), s.aspect, ...(isImage() ? [] : [s.len + " s"]),
     s.seedMode === "fixed" ? "Seed " + s.seed : "Random seed", n + (n === 1 ? " LoRA" : " LoRAs")].join(" · ");
 }
@@ -186,6 +219,7 @@ function saveUi() {
     state.drafts[state.tab] = state.prompt;
     api("PUT", "ui", { settings: state.videoSettings, imageSettings: state.imageSettings, attached: state.attached, perRow: state.perRow,
       prompt: state.drafts.video, imagePrompt: state.drafts.image, imageNegative: state.negative, negativeOpen: state.negativeOpen,
+      kleinSettings: state.kleinSettings, kleinPrompt: state.drafts.klein, kleinSlots: state.kleinSlots,
       tab: state.tab }).catch(() => {});
   }, 400);
 }
@@ -231,8 +265,8 @@ function render() {
 
 function renderHeader() {
   $("tabs").hidden = state.view !== "gallery";
-  $("tabs").innerHTML = [["video", "Video", ICON.video], ["image", "Image", ICON.image], ["edit", "Edit", ICON.edit]].map(([id, label, icon]) => {
-    const busy = state.clips.filter((c) => kindOf(c) === id && isBusy(c)).length;
+  $("tabs").innerHTML = [["video", "Video", ICON.video], ["image", "Image", ICON.image], ["klein", "Klein 9b", ICON.klein], ["edit", "Edit", ICON.edit]].map(([id, label, icon]) => {
+    const busy = state.clips.filter((c) => tabOf(c) === id && isBusy(c)).length;
     return `<button class="tab ${state.tab === id ? "on" : ""}" data-act="tab" data-id="${id}" role="tab" aria-selected="${state.tab === id}">${icon}${label}${busy ? `<span class="tab-busy" title="${busy} rendering">${busy}</span>` : ""}</button>`;
   }).join("");
   $("headLeft").innerHTML = (state.view === "clip"
@@ -245,9 +279,9 @@ function renderHeader() {
 }
 
 // Why this tab can't render, when its models aren't installed.
-const missingWhy = () => (isImage() ? OPT.image.missing : OPT.missing) || "";
+const missingWhy = () => (isImage() ? OPT.image.missing : isKlein() ? OPT.klein.missing : OPT.missing) || "";
 
-const tabClips = () => state.clips.filter((c) => kindOf(c) === state.tab);
+const tabClips = () => state.clips.filter((c) => tabOf(c) === state.tab);
 const filteredClips = () => tabClips().filter((c) => state.filter === "all" || c.starred);
 
 function renderFilters() {
@@ -327,18 +361,20 @@ function videoTile(c) {
 
 // An image in the grid: the picture, or its live preview while it renders.
 function imageTile(c) {
-  const busy = isBusy(c), failed = c.status === "failed";
-  const picture = busy && c.preview ? `<img data-live="${c.id}" src="${c.preview}" alt="">` : c.status === "done" ? `<img src="${clipUrl(c)}" alt="" loading="lazy">` : "";
-  return `<div class="tile" data-clip="${c.id}">
+  const busy = isBusy(c), failed = c.status === "failed", done = c.status === "done";
+  const picture = busy && c.preview ? `<img data-live="${c.id}" src="${c.preview}" alt="">` : done ? `<img src="${clipUrl(c)}" alt="" loading="lazy" draggable="false">` : "";
+  // A finished image can be dragged: onto a Klein slot, or into the Video tab's prompt as an @image.
+  return `<div class="tile" data-clip="${c.id}" ${done ? `draggable="true" data-drag-gen="${c.id}"` : ""}>
       <div class="frame">
-        <span class="pic" style="${picStyle(c.aspect, toneOf(c.id))}">${picture}</span>
+        <span class="pic" style="${picStyle(shapeOf(c), toneOf(c.id))}">${picture}</span>
         <button class="tile-hit" data-act="open" data-id="${c.id}" aria-label="Open image: ${esc(c.prompt)}"></button>
         ${busy ? `<span class="busy ${c.preview ? "has-live" : ""}"><span data-progtext="${c.id}">${progressText(c)}</span><span class="track"><span class="fill" data-prog="${c.id}" style="width:${barWidth(c)}"></span></span>
           <button class="cancel" data-act="cancel" data-id="${c.id}">Cancel</button></span>` : ""}
         ${failed ? `<span class="busy failed"><span>Render failed</span><span class="fail-why">${esc(c.error || "")}</span>
           <button class="cancel" data-act="deleteClip" data-id="${c.id}">Remove</button></span>` : ""}
         <span class="badge">${mpText(c.res)}</span>
-        <span class="len">${c.aspect}</span>
+        <span class="len">${c.family === "klein" && c.width ? c.width + "×" + c.height : c.aspect}</span>
+        ${done && isKlein() ? `<button class="edit-this" data-act="editThis" data-id="${c.id}" title="Put this image in image 1 and keep editing it">Edit this</button>` : ""}
         <button class="star ${c.starred ? "on" : ""}" data-act="star" data-id="${c.id}" aria-label="${c.starred ? "Unstar" : "Star"}">${ICON.star(c.starred)}</button>
       </div>
     </div>`;
@@ -360,7 +396,8 @@ function renderNegative() {
 function renderRefs() {
   renderNegative();
   // Reset (top right of the prompt) shows when there is something to clear.
-  $("resetPrompt").hidden = !(state.prompt.trim() || (!isImage() && state.attached.length));
+  $("resetPrompt").hidden = !(state.prompt.trim() || (isKlein() ? state.kleinSlots.some(Boolean) : !isImage() && state.attached.length));
+  if (isKlein()) { renderSlots(); return; }
   document.querySelector(".composer").classList.toggle("no-refs", isImage());
   // MOSS-Image takes no reference pictures, so the Image tab has no image strip.
   $("refs").hidden = isImage();
@@ -387,10 +424,66 @@ function renderRefs() {
     <button class="add-ref" id="addRef" data-act="openLibrary" aria-expanded="${state.library.open}">${ICON.plus}Add image</button>`;
 }
 
+/* Klein's four slots, image 1-4. They keep their names: swapping two pictures (drag one onto another) or
+   putting a new one in doesn't change the prompt. Each shows the picture's own size under it. */
+const slotRef = (i) => state.refs.find((r) => r.id === state.kleinSlots[i]) || null;
+function refSize(r) {
+  if (r.w || r.sizing) return;
+  r.sizing = true;
+  const im = new Image();
+  im.onload = () => { r.w = im.naturalWidth; r.h = im.naturalHeight; if (isKlein() && state.view === "gallery") renderRefs(); if (state.view === "clip") renderClip(); };
+  im.src = r.img;
+}
+// The size a Klein render comes out at: image 1's shape (Match image 1), or an aspect ratio, at the resolution.
+function kleinSize(s = state.kleinSettings) {
+  const r = slotRef(0);
+  if (s.size === "match" && r && r.w) {
+    const k = Math.sqrt((s.res * 1024 * 1024) / (r.w * r.h));
+    return [Math.max(16, Math.round((r.w * k) / 16) * 16), Math.max(16, Math.round((r.h * k) / 16) * 16)];
+  }
+  return dims(s.size === "match" ? "1:1" : s.aspect, s.res, "klein");
+}
+// The slots the prompt names that have nothing in them.
+const emptyNamed = (text = state.prompt) => [...new Set([...text.matchAll(/\bimage\s?([1-4])\b/gi)].map((m) => Number(m[1])))]
+  .filter((n) => !state.kleinSlots[n - 1]).sort();
+function renderSlots() {
+  $("refs").hidden = false;
+  document.querySelector(".composer").classList.remove("no-refs");
+  const filled = state.kleinSlots.filter(Boolean).length, empty = emptyNamed();
+  $("hint").textContent = empty.length
+    ? `The prompt names ${empty.map((n) => "image " + n).join(" and ")}, but ${empty.length > 1 ? "those slots are" : "that slot is"} empty`
+    : filled ? `${filled} of 4 pictures · drag one onto another slot to swap them` : "No pictures: Klein makes one from the prompt alone";
+  $("hint").classList.toggle("warn", empty.length > 0);
+  $("refs").innerHTML = state.kleinSlots.map((id, i) => {
+    const r = slotRef(i);
+    if (!r) return `<div class="ref slot">
+        <button class="slot-empty" data-act="pickSlot" data-id="${i}" data-slot="${i}" aria-label="Add image ${i + 1}" title="Add a picture here: click, or drag one in from the grid, Add image or your computer">${ICON.plus}image ${i + 1}</button>
+        <span class="slot-res"></span></div>`;
+    refSize(r);
+    return `<div class="ref slot used">
+        <span class="ref-pic slot-pic" style="background:${r.tone}" draggable="true" data-drag-slot="${i}" data-slot="${i}" title="image ${i + 1}: @${esc(r.name)}. Drag onto another slot to swap them.">
+          <img src="${r.img}" alt="" draggable="false"><span class="slot-name">image ${i + 1}</span>
+          <button class="ref-x" data-act="clearSlot" data-id="${i}" aria-label="Empty image ${i + 1}">${ICON.x}</button>
+        </span>
+        <span class="slot-res">${r.w ? r.w + "×" + r.h : ""}</span></div>`;
+  }).join("") + `<button class="add-ref" id="addRef" data-act="openLibrary" aria-expanded="${state.library.open}">${ICON.plus}Add image</button>`;
+}
+// Put a picture (an Add image library entry) in a slot, or in the first empty one. Returns the slot, or -1.
+function putInSlot(ref, slot = -1) {
+  if (slot < 0) slot = state.kleinSlots.indexOf(null);
+  if (slot < 0) { say("All four slots are full. Drop it on one to replace that picture."); return -1; }
+  state.kleinSlots[slot] = ref.id;
+  render();
+  say(`@${ref.name} is image ${slot + 1}.`);
+  return slot;
+}
+
 function renderPrompt() {
   $("mirror").innerHTML = state.prompt
     ? promptHTML(state.prompt) + "​"
-    : `<span class="ph">${isImage() ? "Describe an image, for example: a neon sign that says \"OPEN ALL NIGHT\" in the rain." : "Describe a shot. Type @ to use one of your images."}</span>`;
+    : `<span class="ph">${isImage() ? "Describe an image, for example: a neon sign that says \"OPEN ALL NIGHT\" in the rain."
+      : isKlein() ? "Describe the edit. Call the pictures image 1, image 2, image 3 and image 4, for example: put the bag from image 2 in the hand of the woman in image 1."
+      : "Describe a shot. Type @ to use one of your images."}</span>`;
   if ($("prompt").value !== state.prompt) $("prompt").value = state.prompt;
   fitPrompt();
   renderMention();
@@ -398,7 +491,7 @@ function renderPrompt() {
 
 /* @-mentions */
 function mentionQuery() {
-  if (state.mentionClosed || isImage()) return null;
+  if (state.mentionClosed || isImage() || isKlein()) return null;
   const m = /(^|\s)@([A-Za-z0-9_]*)$/.exec(state.prompt.slice(0, state.caret));
   return m ? m[2] : null;
 }
@@ -554,7 +647,7 @@ function renderLibPreview() {
     $("libPreview").innerHTML = `
       <div class="lib-big" draggable="true" data-drag-gen="${c.id}" title="Drag into the prompt"><img src="${clipUrl(c)}" alt="${esc(c.prompt)}" draggable="false"></div>
       <p class="lib-caption">${esc(c.prompt)}</p>
-      <button class="btn ${inBar ? "" : "primary"} lib-add" data-act="libToggle">${inBar ? "Remove from prompt" : "Add to prompt"}</button>`;
+      ${libButton(ref?.id, inBar)}`;
     return;
   }
   const r = state.refs.find((x) => x.id === state.library.selected);
@@ -562,7 +655,17 @@ function renderLibPreview() {
   const inBar = state.attached.includes(r.id);
   $("libPreview").innerHTML = `
     <div class="lib-big" draggable="true" data-drag-ref="${r.id}" title="Drag into the prompt"><img src="${r.img}" alt="@${esc(r.name)}" draggable="false"></div>
-    <button class="btn ${inBar ? "" : "primary"} lib-add" data-act="libToggle">${inBar ? "Remove from prompt" : "Add to prompt"}</button>`;
+    ${libButton(r.id, inBar)}`;
+}
+// The button under the library's big preview: into the prompt bar, or (Klein) into a slot.
+function libButton(refId, inBar) {
+  if (isKlein()) {
+    const at = refId ? state.kleinSlots.indexOf(refId) : -1;
+    const to = state.library.slot != null ? state.library.slot : state.kleinSlots.indexOf(null);
+    if (at >= 0) return `<button class="btn lib-add" data-act="libToggle">Take out of image ${at + 1}</button>`;
+    return `<button class="btn primary lib-add" data-act="libToggle" ${to < 0 ? "disabled" : ""}>${to < 0 ? "All four slots are full" : "Put in image " + (to + 1)}</button>`;
+  }
+  return `<button class="btn ${inBar ? "" : "primary"} lib-add" data-act="libToggle">${inBar ? "Remove from prompt" : "Add to prompt"}</button>`;
 }
 
 // Move the selection up or down the list, and keep it in view.
@@ -599,6 +702,7 @@ function renderSettings() {
   const model = modelOf(s.model);
   const minSteps = model.minSteps || 1, stepSize = model.stepSize || 1;
   const recPct = ((model.steps - minSteps) / (model.maxSteps - minSteps)) * 100;
+  if (isKlein()) { box.innerHTML = kleinSettingsHTML(s, model, T, minSteps, stepSize, recPct); return; }
   box.innerHTML = `
     <div class="field">
       <label class="label" for="model">Model</label>
@@ -656,20 +760,72 @@ function renderSettings() {
       </div>
     </div>
 
-    <div class="field">
-      <div class="field-head"><span class="label">LoRAs</span><button class="link" data-act="loraPicker">+ Add LoRA</button></div>
-      ${s.loras.map((l) => `<div class="lora ${l.on ? "" : "dim"}">
-          <button class="switch ${l.on ? "on" : ""}" data-act="toggleLora" data-id="${esc(l.id)}" aria-label="${l.on ? "Switch off" : "Switch on"} ${esc(l.name)}" aria-pressed="${l.on}"></button>
-          <div class="lora-body">
-            <span class="lora-name" title="${esc(l.name)}">${esc(loraStem(l.name))}</span>
-            <input type="range" min="0" max="2" step="0.05" value="${l.strength}" data-input="loraStrength" data-id="${esc(l.id)}" aria-label="Strength of ${esc(l.name)}">
-          </div>
-          <span class="lora-val" data-strength="${esc(l.id)}">${Number(l.strength).toFixed(2)}</span>
-          <button class="lora-x" data-act="removeLora" data-id="${esc(l.id)}" aria-label="Remove ${esc(l.name)}">${ICON.x}</button>
-        </div>`).join("")}
-    </div>
+    ${lorasField(s)}
 
     ${samplingFields(s, model)}`;
+}
+
+// The Klein tab's settings: Model, Size (Match image 1 or an aspect ratio), Resolution, Steps, Guidance (Base
+// only: Distilled renders without it), Seed, LoRAs (the loras/Flux Klein folder).
+function kleinSettingsHTML(s, model, T, minSteps, stepSize, recPct) {
+  const r1 = slotRef(0), [w, h] = kleinSize(s);
+  const sizeOf = (mp) => kleinSize({ ...s, res: mp }).join("×");
+  return `
+    <div class="field">
+      <label class="label" for="model">Model</label>
+      <select class="select" id="model" data-change="model">
+        ${(T.models.length ? T.models : [model]).map((m) => `<option value="${esc(m.name)}" ${m.name === s.model ? "selected" : ""}>${esc(m.name)}</option>`).join("")}
+      </select>
+      <span class="hint">${model.base ? "Undistilled: slower and more varied, with guidance." : "Distilled: fast, 4 steps, no guidance."}</span>
+    </div>
+
+    <div class="field">
+      <span class="label">Size</span>
+      <div class="aspects five klein-sizes">
+        <button class="match ${s.size === "match" ? "on" : ""}" data-act="kleinMatch">Match image 1<small>${r1 ? (r1.w ? r1.w + "×" + r1.h : "image 1") : "image 1 is empty: 1:1"}</small></button>
+        ${Object.keys(T.aspects).map((a) => {
+          const [aw, ah] = T.aspects[a];
+          const k = 24 / Math.max(aw, ah);
+          return `<button class="${s.size !== "match" && a === s.aspect ? "on" : ""}" data-act="aspect" data-id="${a}"><i style="width:${Math.round(aw * k)}px;height:${Math.round(ah * k)}px"></i>${a}</button>`;
+        }).join("")}
+      </div>
+    </div>
+
+    <div class="field">
+      <label class="label" for="res">Resolution</label>
+      <select class="select" id="res" data-change="res">
+        ${T.megapixels.map((mp) => `<option value="${mp}" ${mp === s.res ? "selected" : ""}>${mpText(mp)} (${sizeOf(mp)})${(T.recommendedMP || []).includes(mp) ? " · recommended" : ""}</option>`).join("")}
+      </select>
+      <span class="hint">Renders at ${w}×${h}${s.size === "match" && r1 ? ", image 1's shape" : ""}.</span>
+    </div>
+
+    <div class="field">
+      <div class="field-head"><label class="label" for="steps">Steps</label><span class="value ${s.steps === model.steps ? "rec" : ""}" id="stepsVal">${stepsText(s.steps, model.steps)}</span></div>
+      <div class="steps-wrap">
+        <input id="steps" type="range" min="${minSteps}" max="${model.maxSteps}" step="${stepSize}" value="${s.steps}" data-input="steps" aria-describedby="stepsRec">
+        <span class="rec-mark" style="left:calc(${recPct}% + ${(0.5 - recPct / 100) * 16}px)" aria-hidden="true"></span>
+      </div>
+      <div class="field-head steps-foot"><span class="hint" id="stepsRec">Recommended for ${esc(model.name)}: ${model.steps}</span>
+        <button class="link" data-act="recSteps" id="recBtn" style="visibility:${s.steps === model.steps ? "hidden" : "visible"}">Use ${model.steps}</button></div>
+    </div>
+
+    ${model.base ? guidanceField(s, model) : ""}
+
+    <div class="field">
+      <span class="label">Seed</span>
+      <div class="seed-row">
+        <div class="seg">
+          <button class="${s.seedMode === "random" ? "on" : ""}" data-act="seedMode" data-id="random">Random</button>
+          <button class="${s.seedMode === "fixed" ? "on" : ""}" data-act="seedMode" data-id="fixed">Fixed</button>
+        </div>
+        ${s.seedMode === "fixed"
+          ? `<input class="seed-input" inputmode="numeric" aria-label="Seed number" value="${s.seed}" data-change="seed">
+             <button class="icon-btn" data-act="rollSeed" aria-label="New random seed">${ICON.dice}</button>`
+          : `<span class="seed-note">A new seed every run, saved with each image.</span>`}
+      </div>
+    </div>
+
+    ${lorasField(s)}`;
 }
 
 // Sampler and scheduler. "Model default" (the empty choice) uses what the model is tuned for.
@@ -694,9 +850,24 @@ function samplingFields(s, model) {
     </div>`;
 }
 
+function lorasField(s) {
+  return `<div class="field">
+      <div class="field-head"><span class="label">LoRAs</span><button class="link" data-act="loraPicker">+ Add LoRA</button></div>
+      ${s.loras.map((l) => `<div class="lora ${l.on ? "" : "dim"}">
+          <button class="switch ${l.on ? "on" : ""}" data-act="toggleLora" data-id="${esc(l.id)}" aria-label="${l.on ? "Switch off" : "Switch on"} ${esc(l.name)}" aria-pressed="${l.on}"></button>
+          <div class="lora-body">
+            <span class="lora-name" title="${esc(l.name)}">${esc(loraStem(l.name))}</span>
+            <input type="range" min="0" max="2" step="0.05" value="${l.strength}" data-input="loraStrength" data-id="${esc(l.id)}" aria-label="Strength of ${esc(l.name)}">
+          </div>
+          <span class="lora-val" data-strength="${esc(l.id)}">${Number(l.strength).toFixed(2)}</span>
+          <button class="lora-x" data-act="removeLora" data-id="${esc(l.id)}" aria-label="Remove ${esc(l.name)}">${ICON.x}</button>
+        </div>`).join("")}
+    </div>`;
+}
+
 // Guidance (CFG): how closely MOSS-Image follows the prompt. The recommended value is marked on the slider.
 function guidanceField(s, model) {
-  const g = OPT.image.cfg, rec = model.cfg;
+  const g = (isKlein() ? OPT.klein.cfg : OPT.image.cfg) || OPT.image.cfg, rec = model.cfg;
   const pct = ((rec - g.min) / (g.max - g.min)) * 100;
   return `<div class="field">
       <div class="field-head"><label class="label" for="cfg">Guidance</label><span class="value ${s.cfg === rec ? "rec" : ""}" id="cfgVal">${cfgText(s.cfg, rec)}</span></div>
@@ -725,7 +896,7 @@ function renderClip() {
     $("clipView").innerHTML = `
       <div class="clip-main">
         <div class="player still" data-clip="${c.id}">
-          <span class="pic" style="${picStyle(c.aspect, toneOf(c.id))}">${isBusy(c) && c.preview ? `<img data-live="${c.id}" src="${c.preview}" alt="">` : c.status === "done" ? `<img id="pimg" src="${clipUrl(c)}" alt="${esc(c.prompt)}">` : ""}</span>
+          <span class="pic" style="${picStyle(shapeOf(c), toneOf(c.id))}">${isBusy(c) && c.preview ? `<img data-live="${c.id}" src="${c.preview}" alt="">` : c.status === "done" ? `<img id="pimg" src="${clipUrl(c)}" alt="${esc(c.prompt)}">` : ""}</span>
           ${isBusy(c)
             ? `<span class="busy ${c.preview ? "has-live" : ""}"><span data-progtext="${c.id}">${progressText(c)}</span><span class="track"><span class="fill" data-prog="${c.id}" style="width:${barWidth(c)}"></span></span>
                 <button class="cancel" data-act="cancel" data-id="${c.id}">Cancel render</button></span>`
@@ -770,7 +941,7 @@ function renderClip() {
 }
 
 function renderTakes(c) {
-  const takes = state.clips.filter((x) => x.prompt === c.prompt && kindOf(x) === kindOf(c));
+  const takes = state.clips.filter((x) => x.prompt === c.prompt && tabOf(x) === tabOf(c));
   $("takes").innerHTML = takes.map((x) => `<button class="take ${x.id === c.id ? "on" : ""}" data-act="open" data-id="${x.id}">
       <i style="background:${toneOf(x.id)}">${kindOf(x) === "image" ? (x.status === "done" ? `<img src="${clipUrl(x)}" alt="">` : "") : x.file ? `<video src="${clipUrl(x)}" muted preload="metadata"></video>` : ""}</i>${mpText(x.res)} · Seed ${x.seed}<span data-takeprog="${x.id}">${takeProgress(x)}</span>
     </button>`).join("");
@@ -817,6 +988,7 @@ function samplingFacts(c) {
 const negativeDefault = (modelName) => (OPT.image.models.find((m) => m.name === modelName) || OPT.image.models[0] || {}).negative || "";
 
 function renderImageSide(c) {
+  if (c.family === "klein") { renderKleinSide(c); return; }
   $("clipSide").innerHTML = `
     <div class="field">
       <span class="label">Prompt</span>
@@ -837,10 +1009,52 @@ function renderImageSide(c) {
     ${c.imported ? `<p class="hint imported">Imported from ${esc(c.imported)}${c.found === "graph" ? ". Settings worked out from its ComfyUI workflow" : ""}.</p>` : ""}
     <div class="actions">
       <button class="btn accent" data-act="useInVideo" ${c.status === "done" ? "" : "disabled"}>${ICON.video}Use in a video</button>
+      <button class="btn" data-act="editThis" ${c.status === "done" ? "" : "disabled"}>${ICON.klein}Edit in Klein</button>
       <button class="btn primary" data-act="reuse">Use this prompt and settings</button>
       <button class="btn" data-act="keepSeed">Keep this seed</button>
       <div class="actions-grid">
         <button class="btn" data-act="download" ${c.status === "done" ? "" : "disabled"}>Download</button>
+        <button class="btn danger" data-act="deleteClip">Delete</button>
+      </div>
+    </div>`;
+}
+
+// A Klein image's page: its prompt, the pictures it was made from (in their slots) and its settings.
+function renderKleinSide(c) {
+  const slots = (c.slots || []).concat([null, null, null, null]).slice(0, 4);
+  const done = c.status === "done";
+  $("clipSide").innerHTML = `
+    <div class="field">
+      <span class="label">Prompt</span>
+      <div class="prompt-box"><p class="clip-prompt">${promptHTML(c.prompt, "klein", slots)}</p>
+        <button class="copy prompt-copy" data-act="copyPrompt" aria-label="Copy the prompt" title="Copy the prompt">${ICON.copy}</button></div>
+    </div>
+    <div class="field">
+      <span class="label">Pictures</span>
+      <div class="side-slots">${slots.map((x, i) => {
+        const r = x && state.refs.find((y) => y.id === x.id);
+        if (r) refSize(r);
+        return `<div class="side-slot ${x ? "" : "vacant"}" title="${x ? "image " + (i + 1) + ": @" + esc(x.name) : "image " + (i + 1) + " was empty"}">
+          <span class="side-pic" style="background:${r ? r.tone : "transparent"}">${r ? `<img src="${r.img}" alt="">` : x ? "?" : ""}</span>
+          <span class="side-name">image ${i + 1}</span><span class="slot-res">${r && r.w ? r.w + "×" + r.h : x ? "@" + esc(x.name) : "empty"}</span></div>`;
+      }).join("")}</div>
+    </div>
+    <dl class="facts">
+      <dt>Model</dt><dd>${esc(c.model)}</dd>
+      <dt>Steps</dt><dd>${c.steps}</dd>
+      <dt>Guidance</dt><dd>${Number(c.cfg).toFixed(1)}</dd>
+      <dt>Size</dt><dd>${c.size && c.size !== "match" ? esc(c.size) : "Match image 1"} · ${c.width}×${c.height} (${mpText(c.res)})</dd>
+      <dt>Seed</dt><dd class="seed-dd">${c.seed}<button class="copy" data-act="copySeed" aria-label="Copy seed">${ICON.copy}</button></dd>
+      <dt>LoRAs</dt><dd>${c.loras.length ? c.loras.map((l) => esc(loraText(l))).join("<br>") : '<span class="label">None</span>'}</dd>
+    </dl>
+    ${c.imported ? `<p class="hint imported">Imported from ${esc(c.imported)}${c.found === "graph" ? ". Settings worked out from its ComfyUI workflow" : ""}.</p>` : ""}
+    <div class="actions">
+      <button class="btn accent" data-act="editThis" ${done ? "" : "disabled"}>${ICON.klein}Edit this</button>
+      <button class="btn" data-act="useInVideo" ${done ? "" : "disabled"}>${ICON.video}Use in a video</button>
+      <button class="btn primary" data-act="reuse">Use this prompt and settings</button>
+      <button class="btn" data-act="keepSeed">Keep this seed</button>
+      <div class="actions-grid">
+        <button class="btn" data-act="download" ${done ? "" : "disabled"}>Download</button>
         <button class="btn danger" data-act="deleteClip">Delete</button>
       </div>
     </div>`;
@@ -1010,13 +1224,16 @@ async function generate() {
   const prompt = state.prompt.trim();
   if (!prompt) { say("Write a prompt first."); return; }
   const names = new Set(state.refs.map((r) => r.name));
-  const unknown = isImage() ? null : mentionsIn(prompt).find((n) => !names.has(n));
+  const unknown = isImage() || isKlein() ? null : mentionsIn(prompt).find((n) => !names.has(n));
   if (unknown) { say("There is no image called @" + unknown + "."); return; }
+  const empty = isKlein() ? emptyNamed(prompt) : [];
+  if (empty.length) { say(`The prompt names ${empty.map((n) => "image " + n).join(" and ")}, but ${empty.length > 1 ? "those slots are" : "that slot is"} empty. Fill it, or change the prompt.`); return; }
   state.settingsOpen = false;
   state.filter = "all";
   render();
   try {
-    const { clip } = await api("POST", "generate", { prompt, settings: s, kind: state.tab, negative: isImage() ? state.negative : undefined });
+    const { clip } = await api("POST", "generate", { prompt, settings: s, kind: state.tab, negative: isImage() ? state.negative : undefined,
+      slots: isKlein() ? state.kleinSlots : undefined });
     upsertClip(clip);
   } catch (error) {
     say(error.message);
@@ -1091,7 +1308,8 @@ function openMenu(id, x, y) {
       ? `<button role="menuitem" aria-disabled="true" class="off" title="This video is on the edit's timeline already.">${ICON.check}Already in the edit</button>`
       : `<button role="menuitem" data-act="menuAddToEdit" ${c.status === "done" && c.file ? "" : 'aria-disabled="true" class="off"'}>${ICON.edit}Add to edit</button>`) : ""}
     <button role="menuitem" data-act="menuReuse">${ICON.reuse}Use this prompt and settings</button>${kindOf(c) === "image" ? `
-    <button role="menuitem" data-act="menuUseInVideo" ${c.status === "done" ? "" : 'aria-disabled="true" class="off"'}>${ICON.video}Use in a video</button>` : ""}`;
+    <button role="menuitem" data-act="menuUseInVideo" ${c.status === "done" ? "" : 'aria-disabled="true" class="off"'}>${ICON.video}Use in a video</button>
+    <button role="menuitem" data-act="menuEditThis" ${c.status === "done" ? "" : 'aria-disabled="true" class="off"'}>${ICON.klein}${tabOf(c) === "klein" ? "Edit this (image 1)" : "Edit in Klein (image 1)"}</button>` : ""}`;
   m.hidden = false;
   // Keep the whole menu inside the window.
   const r = m.getBoundingClientRect();
@@ -1171,7 +1389,7 @@ function loraFamily(n) {
   if (top.includes("klein") || top.startsWith("flux")) return "klein";
   return "other";
 }
-const loraTab = () => (isImage() ? "image" : "video");
+const loraTab = () => (isImage() ? "image" : isKlein() ? "klein" : "video");
 const loraBase = (n) => n.replace(/\\/g, "/").split("/").pop();
 const loraFolder = (n) => (n.includes("/") ? n.slice(0, n.lastIndexOf("/")) : n.includes("\\") ? n.slice(0, n.lastIndexOf("\\")) : "");
 const loraStem = (n) => n.slice(Math.max(n.lastIndexOf("/"), n.lastIndexOf("\\")) + 1).replace(/\.[^.]+$/, "");
@@ -1361,15 +1579,42 @@ const ACT = {
   // The x on a prompt-bar image only takes it out of the bar; it stays in the library.
   resetPrompt: () => {
     state.prompt = ""; state.caret = 0; state.mentionClosed = true;
-    if (!isImage()) state.attached = [];
+    if (isKlein()) state.kleinSlots = [null, null, null, null];
+    else if (!isImage()) state.attached = [];
     render(); saveUi();
     $("prompt").focus();
     say(isImage() ? "Prompt cleared." : "Prompt and images cleared.");
   },
   removeRef: (id) => { state.attached = state.attached.filter((x) => x !== id); render(); },
+  // Klein's slots: the x empties one; an empty one opens Add image to fill it.
+  clearSlot: (id) => { state.kleinSlots[Number(id)] = null; render(); say(`Image ${Number(id) + 1} is empty now.`); },
+  pickSlot: (id) => {
+    state.library.slot = Number(id);
+    if (!state.library.open) ACT.openLibrary(); else render();
+    say(`Pick a picture for image ${Number(id) + 1}, or drag one onto it.`);
+  },
+  kleinMatch: () => { state.kleinSettings.size = "match"; render(); },
+  // A finished image into the Klein tab's image 1, to keep editing it.
+  editThis: async (id) => {
+    const c = clipById(id || state.openId);
+    if (!c || c.status !== "done") return;
+    try {
+      const ref = await refFromClip(c.id);
+      if (isFull()) document.exitFullscreen();
+      state.view = "gallery";
+      if (!isKlein()) ACT.tab("klein");
+      state.kleinSlots[0] = ref.id;
+      render();
+      $("prompt").focus();
+      say("It's image 1 now. Describe the next edit.");
+    } catch (error) {
+      say(error.message);
+    }
+  },
   pickMention: (id) => insertMention(state.refs.find((r) => r.id === id)),
   openLibrary: () => {
     state.library.open = !state.library.open;
+    if (!state.library.open) state.library.slot = null;
     state.settingsOpen = false;
     if (!uploadItems().some((r) => r.id === state.library.selected)) state.library.selected = uploadItems()[0]?.id || null;
     if (!generatedItems().some((c) => c.id === state.library.selectedGen)) state.library.selectedGen = generatedItems()[0]?.id || null;
@@ -1403,13 +1648,22 @@ const ACT = {
     }
     const ref = state.refs.find((r) => r.id === id);
     if (!ref) return;
+    if (isKlein()) {
+      const at = state.kleinSlots.indexOf(id);
+      if (at >= 0) { state.kleinSlots[at] = null; render(); say(`Image ${at + 1} is empty now.`); return; }
+      const target = state.library.slot;
+      // Opened from an empty slot: fill it and close. Otherwise the next empty slot, and stay open.
+      if (target != null) { state.library.slot = null; state.library.open = false; }
+      putInSlot(ref, target != null ? target : -1);
+      return;
+    }
     if (state.attached.includes(id)) { state.attached = state.attached.filter((x) => x !== id); say("@" + ref.name + " taken out of the prompt bar."); }
     else { attach(id); say("@" + ref.name + " added. Type @" + ref.name + " in the prompt to use it."); }
     const hadFocus = document.activeElement?.classList.contains("lib-item");
     renderRefs(); renderLibNav(); renderLibList(); renderLibPreview(); saveUi();
     if (hadFocus) document.querySelector(".lib-item.on")?.focus();
   },
-  closePopups: () => { state.settingsOpen = false; state.loraPicker = false; state.library.open = false; render(); },
+  closePopups: () => { state.settingsOpen = false; state.loraPicker = false; state.library.open = false; state.library.slot = null; render(); },
   toggleNegative: () => {
     state.negativeOpen = !state.negativeOpen;
     renderNegative();
@@ -1418,7 +1672,7 @@ const ACT = {
   },
   toggleSettings: () => { state.settingsOpen = !state.settingsOpen; state.loraPicker = false; state.library.open = false; render(); },
 
-  aspect: (id) => { state.settings.aspect = id; render(); },
+  aspect: (id) => { state.settings.aspect = id; if (isKlein()) state.settings.size = id; render(); },
   recSteps: () => { state.settings.steps = modelOf(state.settings.model).steps; render(); },
   seedMode: (id) => { state.settings.seedMode = id; render(); },
   rollSeed: () => { state.settings.seed = newSeed(); render(); },
@@ -1447,6 +1701,7 @@ const ACT = {
   },
   reuse: (id) => {
     const c = clipById(id || state.openId);
+    if (tabOf(c) === "klein") { reuseKlein(c); return; }
     if (kindOf(c) !== state.tab) ACT.tab(kindOf(c));
     const model = tabOpt().models.some((m) => m.name === c.model) ? c.model : state.settings.model;
     Object.assign(state.settings, { model, steps: c.steps, res: c.res, aspect: c.aspect, seedMode: "random",
@@ -1467,11 +1722,10 @@ const ACT = {
   },
   keepSeed: () => {
     const c = clipById(state.openId);
-    state.settings.seedMode = "fixed"; state.settings.seed = c.seed;
+    const s = { image: state.imageSettings, klein: state.kleinSettings }[tabOf(c)] || state.videoSettings;
+    s.seedMode = "fixed"; s.seed = c.seed;
     saveUi();
-    (kindOf(c) === "image" ? state.imageSettings : state.videoSettings).seedMode = "fixed";
-    (kindOf(c) === "image" ? state.imageSettings : state.videoSettings).seed = c.seed;
-    say("New " + (kindOf(c) === "image" ? "images" : "clips") + " now use seed " + c.seed + ".");
+    say("New " + (tabOf(c) === "klein" ? "Klein images" : kindOf(c) === "image" ? "images" : "clips") + " now use seed " + c.seed + ".");
   },
   download: (id) => {
     const c = clipById(id || state.openId);
@@ -1506,6 +1760,7 @@ const ACT = {
   menuDelete: () => { const id = closeMenu(); ACT.deleteClip(id); },
   menuReuse: () => { const id = closeMenu(); ACT.reuse(id); },
   menuUseInVideo: () => { const id = closeMenu(); ACT.useInVideo(id); },
+  menuEditThis: () => { const id = closeMenu(); ACT.editThis(id); },
 };
 
 const CHANGE = {
@@ -1530,7 +1785,7 @@ const CHANGE = {
     const m = modelOf(el.value);
     state.settings.model = el.value; state.settings.steps = m.steps;
     state.settings.sampler = ""; state.settings.scheduler = "";   // back to what the new model is tuned for
-    if (isImage()) state.settings.cfg = m.cfg;
+    if (isImage() || isKlein()) state.settings.cfg = m.cfg;
     render();
   },
   res: (el) => { state.settings.res = Number(el.value); render(); },
@@ -1577,6 +1832,25 @@ const INPUT = {
 
 function fromImage(image) {
   return { ...image, img: image.url || viewUrl("images", image.file), tone: toneOf(image.id) };
+}
+
+// Use this prompt and settings, for a Klein image: its prompt, settings and the pictures it was made from, each
+// back in its own slot (when they are still in the Add image library).
+function reuseKlein(c) {
+  if (!isKlein()) ACT.tab("klein");
+  const s = state.kleinSettings;
+  const model = OPT.klein.models.some((m) => m.name === c.model) ? c.model : s.model;
+  Object.assign(s, { model, steps: c.steps, cfg: c.cfg, res: c.res, size: c.size || "match", seedMode: "random",
+    loras: c.loras.map((l) => ({ id: l.name, name: l.name, strength: l.strength, on: true })) });
+  if (c.size && c.size !== "match") s.aspect = c.size;
+  const slots = (c.slots || []).concat([null, null, null, null]).slice(0, 4);
+  state.kleinSlots = slots.map((x) => (x && state.refs.some((r) => r.id === x.id) ? x.id : null));
+  const lost = slots.filter((x, i) => x && !state.kleinSlots[i]).length;
+  state.prompt = c.prompt; state.caret = c.prompt.length; state.mentionClosed = true;
+  if (isFull()) document.exitFullscreen();
+  state.view = "gallery";
+  render();
+  say("Prompt, settings and pictures are back, with a random seed." + (lost ? ` ${lost === 1 ? "One picture isn't" : lost + " pictures aren't"} in the Add image library any more.` : ""));
 }
 
 // Saved files are named vision_<start of the prompt>; older ones get that name when downloaded.
@@ -1647,7 +1921,7 @@ async function importFiles(files) {
     // In the Edit tab, imported videos just join its media panel.
     if (state.tab === "edit" && done.every((c) => kindOf(c) === "video")) EDIT.clipsChanged();
     else {
-      if (kindOf(done[done.length - 1]) !== state.tab) ACT.tab(kindOf(done[done.length - 1]));
+      if (tabOf(done[done.length - 1]) !== state.tab) ACT.tab(tabOf(done[done.length - 1]));
       if (done.length === 1) openClip(done[0].id); else render();
     }
   }
@@ -1763,6 +2037,7 @@ document.addEventListener("dragover", (e) => {
   if (state.view !== "gallery" || !hasFiles(e)) return;
   e.preventDefault();
   if (!isImage()) $("addRef")?.classList.add("drag");
+  if (isKlein()) markReplace(e.target.closest?.("[data-slot]") || null);
 });
 document.addEventListener("dragleave", (e) => { if (!e.relatedTarget) $("addRef")?.classList.remove("drag"); });
 document.addEventListener("drop", (e) => {
@@ -1770,6 +2045,15 @@ document.addEventListener("drop", (e) => {
   e.preventDefault();
   $("addRef")?.classList.remove("drag");
   const files = [...e.dataTransfer.files];
+  if (isKlein()) {
+    // Pictures go in the slots (the one dropped on, or the empty ones); videos and zips are still imports.
+    const slot = e.target.closest?.("[data-slot]");
+    markReplace(null);
+    const rest = files.filter((f) => f.type.startsWith("video/") || isZip(f));
+    if (rest.length) importFiles(rest);
+    uploadToSlots(files, slot ? Number(slot.dataset.slot) : -1);
+    return;
+  }
   // Videos are imports. Pictures are imports in the Image tab, and @images in the Video tab.
   const imports = files.filter((f) => f.type.startsWith("video/") || isZip(f) || (isImage() && f.type.startsWith("image/")));
   if (imports.length) importFiles(imports);
@@ -1783,11 +2067,22 @@ document.addEventListener("drop", (e) => {
    ------------------------------------------------------------------ */
 const REF_MIME = "application/x-minimax-ref";
 const GEN_MIME = "application/x-minimax-generated";
-const isRefDrag = (e) => [...(e.dataTransfer?.types || [])].some((t) => t === REF_MIME || t === GEN_MIME);
+const SLOT_MIME = "application/x-minimax-slot";   // a Klein slot's picture, dragged to another slot
+const isRefDrag = (e) => [...(e.dataTransfer?.types || [])].some((t) => t === REF_MIME || t === GEN_MIME || t === SLOT_MIME);
 const composer = document.querySelector(".composer");
 const ta = $("prompt");
 
 document.addEventListener("dragstart", (e) => {
+  const slot = e.target.closest?.("[data-drag-slot]");
+  if (slot) {
+    e.dataTransfer.clearData();
+    e.dataTransfer.setData(SLOT_MIME, slot.dataset.dragSlot);
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setDragImage(slot, 40, 40);
+    slot.closest(".slot")?.classList.add("dragging");
+    document.body.classList.add("dragging-ref");
+    return;
+  }
   const gen = e.target.closest?.("[data-drag-gen]");
   if (gen) {
     const c = clipById(gen.dataset.dragGen);
@@ -1797,7 +2092,8 @@ document.addEventListener("dragstart", (e) => {
     e.dataTransfer.setData(GEN_MIME, c.id);
     e.dataTransfer.setData("text/plain", ref ? "@" + ref.name + " " : c.prompt);
     e.dataTransfer.effectAllowed = "copy";
-    e.dataTransfer.setDragImage(gen.querySelector(".lib-thumb") || gen, 24, 24);
+    const thumb = gen.querySelector(".lib-thumb") || gen.querySelector(".pic img");
+    if (thumb) e.dataTransfer.setDragImage(thumb, 24, 24);
     document.body.classList.add("dragging-ref");
     return;
   }
@@ -1814,19 +2110,21 @@ document.addEventListener("dragstart", (e) => {
 });
 document.addEventListener("dragend", () => {
   document.body.classList.remove("dragging-ref");
+  document.querySelectorAll(".slot.dragging").forEach((x) => x.classList.remove("dragging"));
   composer.classList.remove("drop-on");
   markReplace(null);
 });
 // An image dropped on an image in the strip (or on a missing one) replaces it, in the strip and in the prompt.
-const replaceTarget = (e) => e.target.closest?.("[data-replace-ref], [data-replace-name]");
+const replaceTarget = (e) => e.target.closest?.(isKlein() ? "[data-slot]" : "[data-replace-ref], [data-replace-name]");
 function markReplace(el) {
-  document.querySelectorAll(".ref-pic.replace-on").forEach((x) => { if (x !== el) x.classList.remove("replace-on"); });
+  document.querySelectorAll(".replace-on").forEach((x) => { if (x !== el) x.classList.remove("replace-on"); });
   el?.classList.add("replace-on");
 }
 composer.addEventListener("dragover", (e) => {
   if (!isRefDrag(e)) return;
   e.preventDefault();
-  e.dataTransfer.dropEffect = "copy";
+  // A slot's picture moves (it is "move" only); everything else is copied in.
+  e.dataTransfer.dropEffect = [...e.dataTransfer.types].includes(SLOT_MIME) ? "move" : "copy";
   composer.classList.add("drop-on");
   markReplace(replaceTarget(e));
 });
@@ -1835,6 +2133,7 @@ composer.addEventListener("drop", async (e) => {
   if (!isRefDrag(e)) return;
   e.preventDefault();
   composer.classList.remove("drop-on");
+  if (isKlein()) { dropOnSlots(e); return; }
   const genId = e.dataTransfer.getData(GEN_MIME);
   // Work out where it was dropped now: the drop event's position is only valid during it.
   const dropAt = e.target === ta ? textOffsetAt(e.clientX, e.clientY) : null;
@@ -1859,6 +2158,56 @@ composer.addEventListener("drop", async (e) => {
   ta.focus();
   ta.setSelectionRange(state.caret, state.caret);
 });
+
+// Klein: a picture dropped on a slot goes in that slot (a slot's picture swaps places with what's there); dropped
+// anywhere else on the prompt bar, it goes in the first empty slot. The prompt stays as it is.
+async function dropOnSlots(e) {
+  const target = e.target.closest?.("[data-slot]");
+  const to = target ? Number(target.dataset.slot) : -1;
+  markReplace(null);
+  const from = e.dataTransfer.getData(SLOT_MIME);
+  if (from !== "") {
+    const a = Number(from);
+    if (to < 0 || a === to) return;
+    [state.kleinSlots[a], state.kleinSlots[to]] = [state.kleinSlots[to], state.kleinSlots[a]];
+    render();
+    say(state.kleinSlots[a] ? `Swapped image ${a + 1} and image ${to + 1}.` : `Moved to image ${to + 1}.`);
+    return;
+  }
+  const genId = e.dataTransfer.getData(GEN_MIME);
+  let r;
+  if (genId) { try { r = await refFromClip(genId); } catch (error) { say(error.message); return; } }
+  else r = state.refs.find((x) => x.id === e.dataTransfer.getData(REF_MIME));
+  if (!r) return;
+  const replaced = to >= 0 && state.kleinSlots[to] && state.kleinSlots[to] !== r.id;
+  const at = putInSlot(r, to);
+  if (replaced && at >= 0) say(`@${r.name} is image ${at + 1} now (replaced).`);
+  if (state.library.open) { renderLibNav(); renderLibList(); renderLibPreview(); }
+}
+
+// Files from your computer, for Klein: into the slot they were dropped on, or the empty slots in order.
+async function uploadToSlots(files, slot = -1) {
+  files = files.filter((f) => f.type.startsWith("image/"));
+  if (!files.length) return;
+  const form = new FormData();
+  files.forEach((f) => form.append("file", f, f.name));
+  say(files.length === 1 ? "Uploading…" : "Uploading " + files.length + " images…");
+  try {
+    const { images } = await api("POST", "images", form);
+    const added = images.map(fromImage);
+    state.refs.push(...added);
+    const placed = [];
+    added.forEach((r, n) => {
+      const at = n === 0 && slot >= 0 ? slot : state.kleinSlots.indexOf(null);
+      if (at >= 0) { state.kleinSlots[at] = r.id; placed.push(`@${r.name} is image ${at + 1}`); }
+    });
+    render();
+    say(placed.length ? placed.join(", ") + "." + (placed.length < added.length ? " The rest are in Add image (all four slots are full)." : "")
+      : "All four slots are full: the pictures are in Add image.");
+  } catch (error) {
+    say("Upload failed: " + error.message);
+  }
+}
 
 // Put image r where another was: in the strip at its place, and as @r.name wherever the prompt named the old one.
 function replaceRef(oldId, oldName, r) {
@@ -1928,6 +2277,7 @@ ta.addEventListener("input", () => {
 });
 ta.addEventListener("paste", (e) => {
   const files = [...(e.clipboardData?.files || [])];
+  if (isKlein() && files.some((f) => f.type.startsWith("image/"))) { e.preventDefault(); uploadToSlots(files); return; }
   if (!isImage() && files.some((f) => f.type.startsWith("image/"))) { e.preventDefault(); uploadImages(files); }
 });
 const syncCaret = () => { if (ta.selectionStart !== state.caret) { state.caret = ta.selectionStart; renderMention(); } };
@@ -1960,16 +2310,21 @@ async function load(first = true) {
       const ui = data.ui || {};
       Object.assign(state.videoSettings, ui.settings || {});
       Object.assign(state.imageSettings, ui.imageSettings || {});
-      // Settings saved earlier must still suit what is installed, in both tabs.
-      for (const tab of ["video", "image"]) {
+      Object.assign(state.kleinSettings, ui.kleinSettings || {});
+      // Settings saved earlier must still suit what is installed, in every tab.
+      for (const tab of ["video", "image", "klein"]) {
         state.tab = tab;
         const T = tabOpt(), s = state.settings;
         if (T.models.length && !T.models.some((m) => m.name === s.model)) s.model = T.models[0].name;
         const m = modelOf(s.model), lo = m.minSteps || 1, every = m.stepSize || 1;
         if (s.steps < lo || s.steps > m.maxSteps || (s.steps - lo) % every) s.steps = m.steps;
-        if (!T.megapixels.includes(s.res)) s.res = tab === "image" ? 1.0 : 0.6;
-        if (!T.aspects[s.aspect]) s.aspect = tab === "image" ? "1:1" : "16:9";
-        if (tab === "image" && !(s.cfg >= OPT.image.cfg.min && s.cfg <= OPT.image.cfg.max)) s.cfg = m.cfg;
+        if (!T.megapixels.includes(s.res)) s.res = tab === "video" ? 0.6 : 1.0;
+        if (!T.aspects[s.aspect]) s.aspect = tab === "video" ? "16:9" : "1:1";
+        if (tab !== "video" && !(s.cfg >= OPT.image.cfg.min && s.cfg <= OPT.image.cfg.max)) s.cfg = m.cfg;
+        if (tab === "klein") {
+          if (s.size !== "match" && !T.aspects[s.size]) s.size = "match";
+          if (!m.base) s.cfg = m.cfg;   // Distilled renders without guidance
+        }
       }
       // The first time the app opens in this browser tab, the Video tab starts on HyperFlow (when
       // installed), 5 seconds and 0.6 MP. After that (a reload, closing and opening it again) it keeps
@@ -1984,7 +2339,8 @@ async function load(first = true) {
       }
       EDIT.load(data.edit);
       state.tab = "video";   // the app always opens on the Video tab
-      state.drafts = { video: ui.prompt || "", image: ui.imagePrompt || "" };
+      state.drafts = { video: ui.prompt || "", image: ui.imagePrompt || "", klein: ui.kleinPrompt || "" };
+      state.kleinSlots = [0, 1, 2, 3].map((i) => { const id = (ui.kleinSlots || [])[i]; return id && state.refs.some((r) => r.id === id) ? id : null; });
       state.negative = typeof ui.imageNegative === "string" ? ui.imageNegative : "";
       state.negativeOpen = !!ui.negativeOpen;
       state.attached = (ui.attached || []).filter((id) => state.refs.some((r) => r.id === id));
@@ -2022,7 +2378,9 @@ document.addEventListener("mouseover", (e) => {
   const place = () => {
     const box = pic.getBoundingClientRect();
     const ratio = img.naturalWidth && img.naturalHeight ? img.naturalWidth / img.naturalHeight : 1.5;
-    const h = Math.min(300, box.top - 24), w = Math.min(420, h * ratio, innerWidth - 24);
+    // Klein's slots get a big view (up to 560 px), below the top bar.
+    const big = pic.classList.contains("slot-pic");
+    const h = Math.min(big ? 560 : 300, box.top - (big ? belowTop() + 12 : 24)), w = Math.min(big ? 760 : 420, h * ratio, innerWidth - 24);
     peek.style.width = w + "px"; peek.style.height = w / ratio + "px";
     peek.style.left = Math.max(12, Math.min(innerWidth - w - 12, box.left + box.width / 2 - w / 2)) + "px";
     peek.style.top = box.top - w / ratio - 12 + "px";
