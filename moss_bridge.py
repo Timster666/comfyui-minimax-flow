@@ -28,12 +28,12 @@ DEFAULT_STEPS, DEFAULT_CFG = 50, 3.0
 FULL = {"steps": DEFAULT_STEPS, "cfg": DEFAULT_CFG, "sampler": SAMPLER, "scheduler": SCHEDULER, "negative": NEGATIVE}
 TURBO = {"steps": 8, "cfg": 1.0, "sampler": "euler", "scheduler": "simple", "negative": ""}
 # Editing one picture with Comfy-Org's MOSS-Image edit LoRA, as in ComfyUI's image_moss_image_edit workflow:
-# the LoRA (strength 1) and Skip Layer Guidance on single layer 22, the instruction and the negative encoded
+# the LoRA (strength 1; the workflow's Skip Layer Guidance is left out), the instruction and the negative encoded
 # together with the picture (TextEncodeMOSSImageEdit, format Moss-Image-Edit), 30 steps, cfg 4, euler/normal.
 # The picture is scaled to the chosen megapixels in steps of 16 px, and the new image is made at that same size.
 EDIT_LORA = "moss_image_edit_lora_rank_64_bf16.safetensors"
 EDIT = {"steps": 30, "cfg": 4.0, "sampler": "euler", "scheduler": "normal", "minSteps": 1, "maxSteps": 60,
-        "format": "Moss-Image-Edit", "slg_layers": "22"}
+        "format": "Moss-Image-Edit"}
 
 # Names for the checkpoints Comfy-Org publishes; anything else is named after its file.
 KNOWN = {
@@ -201,10 +201,8 @@ def _edit_graph(clip, name, source):
         graph[key] = {"class_type": "LoraLoaderModelOnly",
                       "inputs": {"model": model, "lora_name": lora_file(extra["name"]), "strength_model": float(extra["strength"])}}
         model = [key, 0]
-    graph["18"] = {"class_type": "SkipLayerGuidanceDiTSimple", "inputs": {
-        "model": model, "double_layers": "", "single_layers": EDIT["slg_layers"], "start_percent": 0.0, "end_percent": 1.0}}
     graph[SAMPLER_NODE] = {"class_type": "KSampler", "inputs": {
-        "model": ["18", 0], "seed": int(clip["seed"]), "steps": int(clip["steps"]), "cfg": float(clip["cfg"]),
+        "model": model, "seed": int(clip["seed"]), "steps": int(clip["steps"]), "cfg": float(clip["cfg"]),
         "sampler_name": clip.get("sampler") or EDIT["sampler"], "scheduler": clip.get("scheduler") or EDIT["scheduler"],
         "positive": ["4", 0], "negative": ["5", 0], "latent_image": ["6", 0], "denoise": 1.0}}
     graph["8"] = {"class_type": "VAEDecode", "inputs": {"samples": [SAMPLER_NODE, 0], "vae": ["3", 0]}}
