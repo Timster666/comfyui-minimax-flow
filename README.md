@@ -162,12 +162,17 @@ Finished files are named after the start of their prompt, like
 `vision_a_detective_in_a_long_coat_walks_00001_.mp4`, and downloads keep that name.
 
 Each file also carries its prompt and settings inside it (ComfyUI's metadata, under `mmflow`).
-**Import**, next to the All and Starred filters, brings a video or image back into the grid with
+**Import**, above the grid, brings a video or image back into the grid with
 them, ready for **Use this prompt and settings**. You can also drop files on the page: videos
 anywhere, images in the Image tab. Older files without `mmflow` work too when ComfyUI saved its
 workflow in them: clips from earlier versions of this app or from the H3 editor, and MOSS-Image
 images. Their settings are worked out from that workflow. Files saved with ComfyUI's
 `--disable-metadata` have nothing to read.
+
+**Delete**, to the right of Import, deletes several videos or images at once. Tick them with the
+box in a tile's top-right corner, or ⌘-click (Ctrl-click on Windows) to add or take out one and
+Shift-click to tick a range. While anything is ticked, a plain click ticks too; Esc or **Clear
+selection** lets go. Delete asks before it deletes, and the files go from the output folder too.
 
 To move a video together with its reference images, open it and click **Export .zip** (or
 right-click it). The `.zip` holds the video and the pictures its `@images` name, and downloads. Import it
