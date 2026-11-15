@@ -266,14 +266,42 @@ function renderGrid() {
   $("perRowLabel").textContent = isImage() ? "Images per row" : "Videos per row";
   const clips = filteredClips();
   if (!clips.length) {
+    tileKeys = new WeakMap();
     grid.innerHTML = `<div class="empty">${state.ready ? (state.filter === "starred" ? (isImage() ? "No starred images yet." : "No starred clips yet.") : isImage() ? "No images yet. Describe one below and press the arrow button." : "Nothing here yet. Write a prompt below and press the arrow button.")
       : state.loadError ? `The MiniMax H3 Vision server answered with an error, so nothing could be loaded. Trying again…<br><span class="fail-why">${esc(state.loadError.slice(0, 300))}</span>` : "Loading…"}</div>`;
     return;
   }
-  grid.innerHTML = clips.map((c) => {
-    if (kindOf(c) === "image") return imageTile(c);
-    const busy = isBusy(c), failed = c.status === "failed";
-    return `<div class="tile" data-clip="${c.id}">
+  patchGrid(grid, clips.map((c) => [c.id, kindOf(c) === "image" ? imageTile(c) : videoTile(c)]));
+  if (hover.id) requestAnimationFrame(hoverFrame);
+}
+
+// Tiles are only rebuilt when what they show changed. Rebuilding every tile reloaded every video, so
+// opening or closing a pop-up made the whole grid blink. Progress text and bar width are left out of
+// the comparison: they are updated in place as a render goes.
+let tileKeys = new WeakMap();
+const tileKey = (html) => html.replace(/(data-progtext="[^"]*">)[^<]*/, "$1").replace(/(data-prog="[^"]*" style=")[^"]*/, "$1");
+function patchGrid(grid, tiles) {
+  const old = new Map([...grid.children].filter((el) => el.dataset.clip).map((el) => [el.dataset.clip, el]));
+  const nodes = tiles.map(([id, html]) => {
+    const el = old.get(id), key = tileKey(html);
+    if (el && tileKeys.get(el) === key) return el;
+    const t = document.createElement("template");
+    t.innerHTML = html.trim();
+    const fresh = t.content.firstElementChild;
+    tileKeys.set(fresh, key);
+    return fresh;
+  });
+  // Leave the grid alone when nothing changed; otherwise put the tiles in order, moving only what moved.
+  const now = [...grid.children];
+  if (now.length === nodes.length && nodes.every((n, i) => now[i] === n)) return;
+  [...grid.children].forEach((el) => { if (!nodes.includes(el)) el.remove(); });
+  nodes.forEach((n, i) => { if (grid.children[i] !== n) grid.insertBefore(n, grid.children[i] || null); });
+}
+
+// A video in the grid.
+function videoTile(c) {
+  const busy = isBusy(c), failed = c.status === "failed";
+  return `<div class="tile" data-clip="${c.id}">
       <div class="frame">
         <span class="pic" style="${picStyle(c.aspect, toneOf(c.id))}">${busy && c.preview ? liveVideo(c) : c.file ? `<video src="${clipUrl(c)}" muted loop playsinline preload="metadata"></video>` : ""}</span>
         <button class="tile-hit" data-act="open" data-id="${c.id}" aria-label="Open clip: ${esc(c.prompt)}"></button>
@@ -287,8 +315,6 @@ function renderGrid() {
         <button class="star ${c.starred ? "on" : ""}" data-act="star" data-id="${c.id}" aria-label="${c.starred ? "Unstar" : "Star"}">${ICON.star(c.starred)}</button>
       </div>
     </div>`;
-  }).join("");
-  if (hover.id) requestAnimationFrame(hoverFrame);
 }
 
 // An image in the grid: the picture, or its live preview while it renders.
