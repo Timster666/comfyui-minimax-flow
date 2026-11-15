@@ -3,6 +3,9 @@
 A simple prompt-and-gallery studio for MiniMax H3 videos and MOSS-Image pictures, inside ComfyUI.
 
 Open it from the **MiniMax H3 Vision** button in ComfyUI's sidebar (or View → Open MiniMax H3 Vision).
+It also opens by itself the first time ComfyUI loads in a browser tab (a reload in the same tab doesn't
+open it again); its **×** goes back to ComfyUI. Switch that off in ComfyUI's settings under
+**MiniMax H3 Vision → Open MiniMax H3 Vision when ComfyUI opens**.
 It opens full screen over ComfyUI; the × in the top-right corner brings you back.
 
 ## Install
@@ -186,7 +189,7 @@ In ComfyUI's output folder, under `minimax_flow/`:
 - `edit_project.py`: edit projects as zip files (export and import)
 - `clip_info.py`: the prompt and settings saved in each file, and reading them back on import
 - `comfy_link.py`: sending jobs to ComfyUI's queue, following and stopping them
-- `web/minimax_flow_launcher.js`: the sidebar button
+- `web/minimax_flow_launcher.js`: the sidebar button, and opening on start
 - `app/index.html`, `app/app.js`: the app itself, and `app/edit.js`: its Edit tab
 
 ## License
