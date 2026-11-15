@@ -133,7 +133,7 @@ has "dmd", "turbo" or "8step" gets these turbo settings.
 
 **Edit (optional).** Comfy-Org's edit LoRA, [`moss_image_edit_lora_rank_64_bf16.safetensors`](https://huggingface.co/Comfy-Org/MOSS-Image/blob/main/loras/moss_image_edit_lora_rank_64_bf16.safetensors)
 (297 MB), goes in `models/loras/` (best in `MOSS Image/`). Edits follow ComfyUI's MOSS-Image edit
-workflow: the LoRA at strength 1, Skip Layer Guidance on single layer 22, the instruction and the
+workflow, without its Skip Layer Guidance: the LoRA at strength 1, the instruction and the
 negative encoded together with the picture (`TextEncodeMOSSImageEdit`, format Moss-Image-Edit), 30
 steps, guidance 4, euler/normal. The picture is scaled to the chosen resolution in steps of 16 px, and
 the new image is made at that size. It needs ComfyUI 0.43.0 or newer.
