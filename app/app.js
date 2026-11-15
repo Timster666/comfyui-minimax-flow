@@ -272,12 +272,20 @@ function renderGrid() {
     return;
   }
   patchGrid(grid, clips.map((c) => [c.id, kindOf(c) === "image" ? imageTile(c) : videoTile(c)]));
+  // A kept tile's progress (Waiting… → Loading the model… → Step n of m) is brought up to date here.
+  clips.forEach((c) => {
+    if (!isBusy(c)) return;
+    const tile = grid.querySelector(`[data-clip="${c.id}"]`);
+    const text = tile?.querySelector("[data-progtext]"), fill = tile?.querySelector("[data-prog]");
+    if (text && text.textContent !== progressText(c)) text.textContent = progressText(c);
+    if (fill) fill.style.width = barWidth(c);
+  });
   if (hover.id) requestAnimationFrame(hoverFrame);
 }
 
 // Tiles are only rebuilt when what they show changed. Rebuilding every tile reloaded every video, so
 // opening or closing a pop-up made the whole grid blink. Progress text and bar width are left out of
-// the comparison: they are updated in place as a render goes.
+// the comparison: renderGrid sets them on the kept tiles.
 let tileKeys = new WeakMap();
 const tileKey = (html) => html.replace(/(data-progtext="[^"]*">)[^<]*/, "$1").replace(/(data-prog="[^"]*" style=")[^"]*/, "$1");
 function patchGrid(grid, tiles) {
