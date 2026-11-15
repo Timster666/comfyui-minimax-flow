@@ -2334,7 +2334,20 @@ const CHANGE = {
     r.name = next;
     render();
   },
-  addImages: (el) => { uploadImages([...el.files]); el.value = ""; },
+  // Upload in Add image: into the slots on Klein, Pruna and Edit (the one Add image was opened from, or the
+  // empty ones), into the image strip on the Video tab.
+  addImages: (el) => {
+    const files = [...el.files];
+    el.value = "";
+    if (hasSlots()) {
+      const slot = state.library.slot;
+      // From a slot: the picture goes there, and Add image closes, as when picking one.
+      if (slot != null) { state.library.slot = null; state.library.open = false; }
+      uploadToSlots(files, slot != null ? slot : -1);
+      return;
+    }
+    uploadImages(files);
+  },
   importFiles: (el) => { importFiles([...el.files]); el.value = ""; },
   libSort: (el) => { state.library.sort = el.value; renderLibList(); },
   // A new model starts at its recommended steps (and, for images, its recommended guidance).
@@ -2541,11 +2554,14 @@ async function uploadImages(files) {
     const { images } = await api("POST", "images", form);
     const added = images.map(fromImage);
     state.refs.push(...added);
-    added.forEach((a) => attach(a.id));
+    // Only the Video tab has an image strip: elsewhere the pictures just join Add image.
+    const video = state.tab === "video";
+    if (video) added.forEach((a) => attach(a.id));
     state.library.selected = added[0]?.id || state.library.selected;
     render();
     document.querySelector(".lib-item.on")?.scrollIntoView({ block: "nearest" });
-    say("Added @" + added.map((a) => a.name).join(", @") + " to the prompt bar. Drag it onto the text, or type @, to use it.");
+    say(video ? "Added @" + added.map((a) => a.name).join(", @") + " to the prompt bar. Drag it onto the text, or type @, to use it."
+      : added.length === 1 ? "@" + added[0].name + " is in Add image." : added.length + " pictures are in Add image.");
   } catch (error) {
     say("Upload failed: " + error.message);
   }
