@@ -605,8 +605,13 @@ const belowTop = () => (document.querySelector(".top")?.getBoundingClientRect().
 
 function renderLibrary() {
   const box = $("library");
-  box.hidden = !state.library.open;
-  if (!state.library.open) return;
+  // Closing, its lists go back to the top (before it hides: a hidden list can't scroll), so it opens at the top.
+  if (!state.library.open) {
+    if (!box.hidden) box.querySelectorAll("#libList, #libNav, #libPreview").forEach((el) => { el.scrollTop = 0; });
+    box.hidden = true;
+    return;
+  }
+  box.hidden = false;
   box.style.maxHeight = Math.max(320, document.querySelector(".composer").getBoundingClientRect().top - 12 - belowTop()) + "px";
   if (!box.firstChild) {
     // The frame is drawn once, so the search field keeps focus while you type.
