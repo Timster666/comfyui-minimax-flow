@@ -25,7 +25,7 @@ import uuid
 
 from aiohttp import web
 
-from . import clip_info, comfy_link, edit_media, edit_project, h3_graph, moss_bridge
+from . import clip_info, comfy_link, edit_media, edit_project, h3_graph, klein_bridge, moss_bridge
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 APP_DIR = os.path.join(HERE, "app")
@@ -41,6 +41,8 @@ IMAGE_ASPECTS = {"1:1": [1, 1], "4:5": [4, 5], "3:4": [3, 4], "2:3": [2, 3], "9:
 IMAGE_MEGAPIXELS = [0.25, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0]
 IMAGE_RECOMMENDED_MP = [1.0, 1.5, 2.0]
 CFG = {"min": 1, "max": 10, "step": 0.5}
+KLEIN_MEGAPIXELS = [0.5, 1.0, 1.5, 2.0, 3.0, 4.0]
+KLEIN_RECOMMENDED_MP = [1.0, 1.5, 2.0]
 MEGAPIXELS = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.5, 2.0]
 LENGTH = {"min": 2, "max": 20, "fps": 24}
 IMAGE_TYPES = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
@@ -61,6 +63,12 @@ DEFAULT_UI = {
     "perRow": 3,
     "prompt": "",
     "imagePrompt": "",
+    # The Klein tab: its settings, prompt and four slots (image ids from the Add image library, or None).
+    # size is "match" (image 1's shape) or an aspect ratio.
+    "kleinSettings": {"model": "Klein 9B Distilled (BF16)", "steps": 4, "cfg": 1.0, "res": 1.0, "size": "match", "aspect": "1:1",
+                      "seedMode": "random", "seed": 48213, "loras": []},
+    "kleinPrompt": "",
+    "kleinSlots": [None, None, None, None],
     "imageNegative": moss_bridge.NEGATIVE,   # the Image tab's negative prompt box starts with this text
     "negativeOpen": False,
     "negativeShown": True,
@@ -132,6 +140,17 @@ def image_models():
         return [], "MiniMax H3 Vision couldn't check for MOSS-Image: %s: %s" % (type(error).__name__, error)
 
 
+def klein_models():
+    """The installed Klein 9B models, and why there are none when there are none."""
+    try:
+        return klein_bridge.models(), None
+    except klein_bridge.Missing as error:
+        return [], str(error)
+    except Exception as error:
+        LOG.exception("MiniMax H3 Vision couldn't check for Klein")
+        return [], "MiniMax H3 Vision couldn't check for Klein: %s: %s" % (type(error).__name__, error)
+
+
 def read_project():
     try:
         with open(project_file(), encoding="utf-8") as f:
@@ -197,6 +216,7 @@ async def get_state(request):
     loras = lora_list()
     models, why = video_models()
     imodels, iwhy = image_models()
+    kmodels, kwhy = klein_models()
     if any(c.get("status") in ("queued", "rendering") and c.get("prompt_id") for c in data["clips"]):
         ensure_watcher()
     return web.json_response({
@@ -206,7 +226,10 @@ async def get_state(request):
                     "loras": loras, "missing": why, "root": ROOT,
                     "image": {"models": imodels, "aspects": IMAGE_ASPECTS, "megapixels": IMAGE_MEGAPIXELS,
                               "recommendedMP": IMAGE_RECOMMENDED_MP, "cfg": CFG,
-                              "missing": iwhy}},
+                              "missing": iwhy},
+                    "klein": {"models": kmodels, "aspects": IMAGE_ASPECTS, "megapixels": KLEIN_MEGAPIXELS,
+                              "recommendedMP": KLEIN_RECOMMENDED_MP, "cfg": CFG, "slots": klein_bridge.SLOTS,
+                              "missing": kwhy}},
     })
 
 
@@ -314,6 +337,8 @@ async def generate(request):
         raise web.HTTPBadRequest(text="Write a prompt first.")
     if body.get("kind") == "image":
         return await generate_image(prompt, s, body.get("negative"))
+    if body.get("kind") == "klein":
+        return await generate_klein(prompt, s, body.get("slots") or [], body.get("negative"))
     models, why = video_models()
     model = next((m for m in models if m["name"] == s.get("model")), None)
     if not model:
@@ -416,6 +441,95 @@ async def generate_image(prompt, s, negative=None):
     return web.json_response({"clip": clip})
 
 
+def picture_size(path):
+    """A picture's width and height, or None."""
+    try:
+        from PIL import Image
+        with Image.open(path) as image:
+            return image.size
+    except Exception:
+        return None
+
+
+def size_like(w0, h0, mp, grid=16):
+    """Width and height with the shape of a w0 x h0 picture, at about mp megapixels, in steps of grid."""
+    pixels = mp * 1024 * 1024
+    k = math.sqrt(pixels / (w0 * h0))
+    return max(grid, round(w0 * k / grid) * grid), max(grid, round(h0 * k / grid) * grid)
+
+
+async def generate_klein(prompt, s, slots, negative=None):
+    """A Klein 9B image: an edit of up to four pictures (the slots image 1-4), or from the prompt alone."""
+    models, why = klein_models()
+    model = next((m for m in models if m["name"] == s.get("model")), None)
+    if not model:
+        raise web.HTTPBadRequest(text=why or "That Klein model isn't installed.")
+    res = float(s.get("res", 1.0))
+    if res not in KLEIN_MEGAPIXELS:
+        raise web.HTTPBadRequest(text="Unknown size.")
+    steps = int(s.get("steps", model["steps"]))
+    if not model["minSteps"] <= steps <= model["maxSteps"]:
+        raise web.HTTPBadRequest(text="%s takes %d to %d steps." % (model["name"], model["minSteps"], model["maxSteps"]))
+    cfg = float(s.get("cfg", model["cfg"])) if model["base"] else model["cfg"]
+    if not CFG["min"] <= cfg <= CFG["max"]:
+        raise web.HTTPBadRequest(text="Guidance must be %s to %s." % (CFG["min"], CFG["max"]))
+    size = s.get("size") if s.get("size") == "match" or s.get("size") in IMAGE_ASPECTS else "match"
+    seed = int(s.get("seed", 0)) if s.get("seedMode") == "fixed" else random.randrange(2 ** 31)
+    loras = [{"name": str(l["name"]), "strength": float(l["strength"])} for l in s.get("loras", []) if l.get("on", True)]
+    slots = (list(slots) + [None] * klein_bridge.SLOTS)[:klein_bridge.SLOTS]
+
+    async with _lock:
+        data = read_project()
+        by_id = {i["id"]: i for i in data["images"]}
+    pictures = []
+    for n, image_id in enumerate(slots, 1):
+        if not image_id:
+            continue
+        image = by_id.get(image_id)
+        if not image:
+            raise web.HTTPBadRequest(text="The picture in image %d isn't in the Add image library any more." % n)
+        if not os.path.exists(image_path(image)):
+            raise web.HTTPBadRequest(text="The picture in image %d (%s) is missing its file." % (n, image["name"]))
+        pictures.append((n, image))
+    empty = sorted({int(m) for m in re.findall(r"\bimage\s?([1-4])\b", prompt, re.I)} - {n for n, _ in pictures})
+    if empty:
+        raise web.HTTPBadRequest(text="The prompt mentions %s, but %s empty." % (
+            " and ".join("image %d" % n for n in empty), "those slots are" if len(empty) > 1 else "that slot is"))
+
+    # Size: image 1's shape (as the Klein templates do), or an aspect ratio. With no image 1, square.
+    first = picture_size(image_path(pictures[0][1])) if pictures and pictures[0][0] == 1 else None
+    if size == "match" and first:
+        w, h = size_like(first[0], first[1], res)
+        aspect = nearest_aspect(w, h, IMAGE_ASPECTS)
+    else:
+        aspect = size if size != "match" else "1:1"
+        w, h = dims(aspect, res, 16, IMAGE_ASPECTS)
+    clip = {"id": "k" + uuid.uuid4().hex[:10], "kind": "image", "family": "klein", "prompt": prompt, "model": model["name"],
+            "profile": model["id"], "steps": steps, "cfg": cfg, "res": res, "size": size, "aspect": aspect, "width": w,
+            "height": h, "seed": seed, "loras": loras, "status": "queued", "step": 0, "file": None,
+            "subfolder": ROOT + "/stills", "starred": False, "created": time.time(),
+            "slots": [next(({"id": i["id"], "name": i["name"]} for k, i in pictures if k == n), None)
+                      for n in range(1, klein_bridge.SLOTS + 1)]}
+    if model["base"] and negative is not None:
+        clip["negative"] = str(negative).strip()[:2000]
+    refs = [(n, "%s/images/%s" % (ROOT, image["file"])) for n, image in pictures]
+    try:
+        graph = klein_bridge.build_graph(clip, refs, name=clip_info.file_stem(clip))
+        clip["prompt_id"] = await comfy_link.queue_prompt(graph, clip_info.extra_data(clip, klein_bridge.EXTRA_DATA))
+    except klein_bridge.Missing as error:
+        raise web.HTTPBadRequest(text=str(error))
+    except Exception as error:
+        LOG.exception("MiniMax H3 Vision couldn't queue a Klein image")
+        raise web.HTTPBadRequest(text="ComfyUI refused the image: %s" % error)
+    async with _lock:
+        data = read_project()
+        data["clips"].insert(0, clip)
+        write_project(data)
+    ensure_watcher()
+    broadcast(clip)
+    return web.json_response({"clip": clip})
+
+
 def name_from(prompt, taken):
     """An @name for a picture, from its quoted words (or its first words), cut at a whole word."""
     quoted = re.search(r'["\u201c]([^"\u201d]{1,60})["\u201d]', prompt)
@@ -498,7 +612,8 @@ async def import_clip(request):
     clip = clip_from_settings(found, kind)
     file = numbered(root_dir(folder), clip_info.file_stem(clip), ext)
     os.replace(temp, root_dir(folder, file))
-    clip.update({"id": ("c" if kind == "video" else "s") + uuid.uuid4().hex[:10], "status": "done", "step": clip["steps"],
+    clip.update({"id": ("c" if kind == "video" else "k" if clip.get("family") == "klein" else "s") + uuid.uuid4().hex[:10],
+                 "status": "done", "step": clip["steps"],
                  "file": file, "subfolder": ROOT + "/" + folder, "starred": False, "created": time.time(),
                  "mode": "imported", "imported": part.filename, "found": found["from"]})
     async with _lock:
@@ -511,7 +626,11 @@ async def import_clip(request):
 
 def clip_from_settings(found, kind):
     """A clip record from what a file says, filled in to match this app's settings."""
-    if kind == "image":
+    klein = kind == "image" and found.get("family") == "klein"
+    if klein:
+        models, _ = klein_models()
+        table, sizes, default_aspect = IMAGE_ASPECTS, KLEIN_MEGAPIXELS, "1:1"
+    elif kind == "image":
         models, _ = image_models()
         table, sizes, default_aspect = IMAGE_ASPECTS, IMAGE_MEGAPIXELS, "1:1"
     else:
@@ -535,7 +654,11 @@ def clip_from_settings(found, kind):
             "loras": [{"name": str(l["name"]), "strength": float(l.get("strength", 1.0))} for l in found.get("loras") or []]}
     if kind == "image":
         clip["cfg"] = float(found.get("cfg") or (model or {}).get("cfg") or 3.0)
-    else:
+    if klein:
+        # Its pictures are named; they are found again by id when this machine has them.
+        clip.update({"family": "klein", "size": found.get("size") or "match",
+                     "slots": (list(found.get("slots") or []) + [None] * klein_bridge.SLOTS)[:klein_bridge.SLOTS]})
+    if kind != "image":
         clip["len"] = int(min(LENGTH["max"], max(LENGTH["min"], found.get("len") or 6)))
     return clip
 

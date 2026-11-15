@@ -95,6 +95,8 @@ svg { display: block; }
 .scrim { position: fixed; inset: 0; background: rgba(0,0,0,.7); z-index: 8; }
 body.popup-open .dock { z-index: 9; }
 .composer-dim { position: absolute; inset: -1px; border-radius: inherit; background: rgba(0,0,0,.7); z-index: 5; }
+/* While a picture is dragged from Add image, the prompt bar takes the drop: the dim lets it through and lightens. */
+body.dragging-ref .composer-dim { pointer-events: none; opacity: .35; transition: opacity .12s; }
 body.popup-open .pill[aria-expanded="true"] { position: relative; z-index: 6; }
 /* Add image: the whole image strip stays lit (its button, the images and Missing tiles), so you see
    where you drop an image to replace one. */
@@ -124,6 +126,22 @@ button.add-ref { background: transparent; font: inherit; font-size: 11px; }
 .add-ref[aria-expanded="true"] { border-color: var(--accent); color: var(--accent-text); }
 .add-ref.drag { border-color: var(--accent); color: var(--accent-text); }
 .add-ref input { position: absolute; width: 1px; height: 1px; opacity: 0; overflow: hidden; }
+
+/* Klein's four slots: image 1-4, square, with the picture's own size under each */
+.ref.slot { opacity: 1; gap: 3px; }
+.slot .ref-pic { height: 92px; border-color: var(--line-strong); cursor: grab; }
+.slot.used .ref-pic { border-color: var(--accent); }
+.slot.dragging { opacity: .35; }
+.slot-name { position: absolute; left: 4px; top: 4px; font-size: 11px; font-weight: 600; background: rgba(10,11,13,.72); color: var(--accent-text); padding: 1px 6px; border-radius: 6px; pointer-events: none; }
+.slot .ref-x { display: none; }
+.slot .ref-pic:hover .ref-x { display: flex; }
+.slot-empty { width: 92px; height: 92px; border-radius: 10px; border: 1px dashed var(--line-strong); background: transparent; color: var(--muted); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; font: 500 12px var(--font); }
+.slot-empty:hover { color: var(--text); border-color: var(--muted); }
+.slot-empty.replace-on { border: 2px solid var(--accent); color: var(--accent-text); background: rgba(224,162,74,.08); }
+.slot-res { min-height: 13px; font-size: 10px; color: var(--faint); text-align: center; font-variant-numeric: tabular-nums; letter-spacing: .01em; }
+.slot .add-ref, .refs > .add-ref { height: 92px; }
+body.dragging-ref .slot-empty { border-color: var(--muted); }
+.bar .hint.warn { color: var(--danger); }
 
 /* Prompt: a coloured mirror under a transparent textarea */
 /* The box has a fixed height (fitPrompt in app.js): it grows with the text up to half the window, or
@@ -378,6 +396,21 @@ body.dragging-ref .composer { border-color: var(--line-strong); }
 .player.still .pic img { object-fit: contain; }
 .still-fs { position: absolute; right: 14px; bottom: 14px; background: rgba(10,11,13,.78); }
 .aspects.five { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.klein-sizes .match { grid-column: span 2; gap: 2px; }
+.klein-sizes .match small { font-size: 11px; color: var(--faint); font-weight: 400; }
+/* A Klein image's page: the pictures it was made from, in their slots */
+.side-slots { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.side-slot { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.side-pic { aspect-ratio: 1; border-radius: 8px; overflow: hidden; border: 1px solid var(--line-strong); display: flex; align-items: center; justify-content: center; color: var(--faint); }
+.side-pic img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.side-slot.vacant .side-pic { border-style: dashed; }
+.side-name { font-size: 12px; color: var(--accent-text); font-weight: 500; }
+.side-slot.vacant .side-name { color: var(--faint); }
+.side-slot .slot-res { text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Edit this, on a Klein image in the grid (on hover) */
+.edit-this { position: absolute; z-index: 3; left: 50%; bottom: 10px; transform: translateX(-50%); border: 1px solid var(--line-strong); background: rgba(10,11,13,.85); color: var(--text); border-radius: 999px; padding: 5px 14px; font-size: 12px; font-weight: 500; opacity: 0; transition: opacity .12s; }
+.tile:hover .edit-this, .edit-this:focus-visible { opacity: 1; }
+.tile[draggable="true"] { cursor: grab; }
 .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; }
 
 /* App additions */
