@@ -2444,7 +2444,7 @@ document.addEventListener("pointerdown", hidePeek, true);
 // scrolls. Dragging the handle in its top-right corner sets a height of your own (up makes it taller)
 // and a width (sideways; it stays centred), smaller than the text if you like. They last for the session.
 const PROMPT_SIZE = "mmvision.prompt-size";
-const PROMPT_MIN = 78;
+const PROMPT_MIN = 64;   // two lines of text
 let promptSize = null;   // {width, height} you dragged to, or null
 try { promptSize = JSON.parse(sessionStorage.getItem(PROMPT_SIZE) || "null"); } catch {}
 function fitPrompt() {
@@ -2478,7 +2478,7 @@ addEventListener("resize", () => fitPrompt());
       moved = true;
       promptSize = {
         width: Math.round(Math.max(520, Math.min(innerWidth - 64, start.w + 2 * (ev.clientX - start.x)))),
-        height: Math.round(Math.max(PROMPT_MIN - 40, Math.min(innerHeight * 0.75, start.h - (ev.clientY - start.y)))),
+        height: Math.round(Math.max(38, Math.min(innerHeight * 0.75, start.h - (ev.clientY - start.y)))),
       };
       fitPrompt();
       if (state.settingsOpen) renderSettings();
