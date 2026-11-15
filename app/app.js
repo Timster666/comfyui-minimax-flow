@@ -416,7 +416,7 @@ function renderRefs() {
       <span class="ref-name bad-name">@${esc(n)}</span>
     </div>`).join("") + strip.map((r) => `
     <div class="ref ${used.has(r.name) ? "used" : ""}">
-      <span class="ref-pic" style="background:${r.tone}" draggable="true" data-drag-ref="${r.id}" data-replace-ref="${r.id}" data-act="insertRef" data-id="${r.id}" title="Click to put @${esc(r.name)} in the prompt at the cursor, or drag it in. Drop another image here to replace this one."><img src="${r.img}" alt="" draggable="false">
+      <span class="ref-pic" style="background:${r.tone}" draggable="true" data-drag-ref="${r.id}" data-replace-ref="${r.id}" data-act="showRef" data-id="${r.id}" title="Click to see it in Add image. Drag it into the prompt to put @${esc(r.name)} at the cursor. Drop another image here to replace this one."><img src="${r.img}" alt="" draggable="false">
         <button class="ref-x" data-act="removeRef" data-id="${r.id}" aria-label="Take @${esc(r.name)} out of the prompt bar">${ICON.x}</button>
       </span>
       <label class="ref-name">@<input value="${esc(r.name)}" data-change="renameRef" data-id="${r.id}" aria-label="Name of @${esc(r.name)}"></label>
@@ -461,7 +461,7 @@ function renderSlots() {
         <span class="slot-res"></span></div>`;
     refSize(r);
     return `<div class="ref slot used">
-        <span class="ref-pic slot-pic" style="background:${r.tone}" draggable="true" data-drag-slot="${i}" data-slot="${i}" data-act="insertSlot" data-id="${i}" title="image ${i + 1}: @${esc(r.name)}. Click to put “image ${i + 1}” in the prompt at the cursor, or drag it into the prompt. Drag onto another slot to swap them.">
+        <span class="ref-pic slot-pic" style="background:${r.tone}" draggable="true" data-drag-slot="${i}" data-slot="${i}" data-act="showSlot" data-id="${i}" title="image ${i + 1}: @${esc(r.name)}. Click to open Add image and replace it. Drag it into the prompt to put “image ${i + 1}” at the cursor, or onto another slot to swap them.">
           <img src="${r.img}" alt="" draggable="false"><span class="slot-name">image ${i + 1}</span>
           <button class="ref-x" data-act="clearSlot" data-id="${i}" aria-label="Empty image ${i + 1}">${ICON.x}</button>
         </span>
@@ -517,6 +517,17 @@ function renderMention() {
         <span>@${esc(r.name)}<span class="mention-sub">${used.has(r.name) ? "Already in the prompt" : "Image"}</span></span>
       </button>`).join("")
     + `<span class="mention-help">↑ ↓ to pick · Enter to insert · Esc to close</span>`;
+}
+
+// Open Add image (if it isn't open) with this picture picked, from wherever it came.
+function showInLibrary(r) {
+  if (!r) return;
+  state.library.open = true;
+  state.settingsOpen = false; state.loraPicker = false;
+  if (r.from_clip && clipById(r.from_clip)) { state.library.source = "generated"; state.library.selectedGen = r.from_clip; }
+  else { state.library.source = "uploads"; state.library.selected = r.id; }
+  render();
+  document.querySelector("#libList .lib-item.on")?.scrollIntoView({ block: "nearest" });
 }
 
 // Put a word (an @name, or Klein's "image 2") in the prompt where the cursor was, with spaces around it,
@@ -1602,8 +1613,14 @@ const ACT = {
   },
   removeRef: (id) => { state.attached = state.attached.filter((x) => x !== id); render(); },
   // A click on an image in the strip (Video) or a filled slot (Klein) puts its name in the prompt at the cursor.
-  insertRef: (id) => { const r = state.refs.find((x) => x.id === id); if (r) { attach(r.id); insertWord("@" + r.name); } },
-  insertSlot: (id) => insertWord("image " + (Number(id) + 1)),
+  // A click on an image in the prompt bar (Video) or a filled slot (Klein) opens Add image on that picture.
+  // From a slot, picking another picture there puts it in that slot.
+  showRef: (id) => showInLibrary(state.refs.find((x) => x.id === id)),
+  showSlot: (id) => {
+    state.library.slot = Number(id);
+    showInLibrary(slotRef(Number(id)));
+    say(`Pick a picture to put in image ${Number(id) + 1}.`);
+  },
   // Klein's slots: the x empties one; an empty one opens Add image to fill it.
   clearSlot: (id) => { state.kleinSlots[Number(id)] = null; render(); say(`Image ${Number(id) + 1} is empty now.`); },
   pickSlot: (id) => {
@@ -2090,7 +2107,9 @@ const isRefDrag = (e) => [...(e.dataTransfer?.types || [])].some((t) => t === RE
 const composer = document.querySelector(".composer");
 const ta = $("prompt");
 
+let dragFromBar = false;   // a drag that started in the prompt bar (its image strip or Klein's slots)
 document.addEventListener("dragstart", (e) => {
+  dragFromBar = !!e.target.closest?.("#refs");
   const slot = e.target.closest?.("[data-drag-slot]");
   if (slot) {
     e.dataTransfer.clearData();
@@ -2154,7 +2173,8 @@ composer.addEventListener("drop", async (e) => {
   if (isKlein()) { dropOnSlots(e); return; }
   const genId = e.dataTransfer.getData(GEN_MIME);
   // Work out where it was dropped now: the drop event's position is only valid during it.
-  const dropAt = e.target === ta ? textOffsetAt(e.clientX, e.clientY) : null;
+  // An image from the prompt bar's own strip goes in at the cursor; one from Add image where it was dropped.
+  const dropAt = e.target === ta ? (dragFromBar ? state.caret : textOffsetAt(e.clientX, e.clientY)) : null;
   const target = replaceTarget(e);
   const oldId = target?.dataset.replaceRef, oldName = target?.dataset.replaceName;
   markReplace(null);
@@ -2162,7 +2182,12 @@ composer.addEventListener("drop", async (e) => {
   if (genId) { try { r = await refFromClip(genId); } catch (error) { say(error.message); return; } }
   else r = state.refs.find((x) => x.id === e.dataTransfer.getData(REF_MIME));
   if (!r) return;
-  if (target) { replaceRef(oldId, oldName, r); return; }
+  if (target) {
+    replaceRef(oldId, oldName, r);
+    // Replaced from Add image: that's done, so it closes.
+    if (state.library.open && !dragFromBar) ACT.closePopups();
+    return;
+  }
   attach(r.id);
   const pos = dropAt !== null ? wordEdge(state.prompt, dropAt) : state.prompt.length;
   const before = state.prompt.slice(0, pos), after = state.prompt.slice(pos);
@@ -2187,7 +2212,7 @@ async function dropOnSlots(e) {
   if (from !== "") {
     const a = Number(from);
     // Dropped on the prompt text: its name goes where you let go.
-    if (to < 0 && e.target === ta) { insertWord("image " + (a + 1), textOffsetAt(e.clientX, e.clientY)); return; }
+    if (to < 0 && e.target === ta) { insertWord("image " + (a + 1)); return; }
     if (to < 0 || a === to) return;
     [state.kleinSlots[a], state.kleinSlots[to]] = [state.kleinSlots[to], state.kleinSlots[a]];
     render();
@@ -2202,6 +2227,8 @@ async function dropOnSlots(e) {
   const replaced = to >= 0 && state.kleinSlots[to] && state.kleinSlots[to] !== r.id;
   const at = putInSlot(r, to);
   if (replaced && at >= 0) say(`@${r.name} is image ${at + 1} now (replaced).`);
+  // Replaced from Add image: that's done, so it closes.
+  if (replaced && state.library.open) { ACT.closePopups(); return; }
   if (state.library.open) { renderLibNav(); renderLibList(); renderLibPreview(); }
 }
 
@@ -2476,6 +2503,11 @@ addEventListener("resize", () => fitPrompt());
   new ResizeObserver(() => document.documentElement.style.setProperty("--dock-space", $("dock").offsetHeight + 60 + "px")).observe($("dock"));
 })();
 
+
+// With Add image open, a click on the empty part of the image strip (right of Add image) closes it.
+$("refs").addEventListener("click", (e) => {
+  if (state.library.open && !e.target.closest("button, input, label, .ref-pic, .slot-empty, .add-ref")) ACT.closePopups();
+});
 
 $("negative").addEventListener("input", (e) => { state.negative = e.target.value; renderNegative(); saveUi(); });
 
