@@ -416,7 +416,7 @@ function renderRefs() {
       <span class="ref-name bad-name">@${esc(n)}</span>
     </div>`).join("") + strip.map((r) => `
     <div class="ref ${used.has(r.name) ? "used" : ""}">
-      <span class="ref-pic" style="background:${r.tone}" draggable="true" data-drag-ref="${r.id}" data-replace-ref="${r.id}" title="Drag into the prompt. Drop another image here to replace this one."><img src="${r.img}" alt="" draggable="false">
+      <span class="ref-pic" style="background:${r.tone}" draggable="true" data-drag-ref="${r.id}" data-replace-ref="${r.id}" data-act="insertRef" data-id="${r.id}" title="Click to put @${esc(r.name)} in the prompt at the cursor, or drag it in. Drop another image here to replace this one."><img src="${r.img}" alt="" draggable="false">
         <button class="ref-x" data-act="removeRef" data-id="${r.id}" aria-label="Take @${esc(r.name)} out of the prompt bar">${ICON.x}</button>
       </span>
       <label class="ref-name">@<input value="${esc(r.name)}" data-change="renameRef" data-id="${r.id}" aria-label="Name of @${esc(r.name)}"></label>
@@ -461,7 +461,7 @@ function renderSlots() {
         <span class="slot-res"></span></div>`;
     refSize(r);
     return `<div class="ref slot used">
-        <span class="ref-pic slot-pic" style="background:${r.tone}" draggable="true" data-drag-slot="${i}" data-slot="${i}" title="image ${i + 1}: @${esc(r.name)}. Drag onto another slot to swap them.">
+        <span class="ref-pic slot-pic" style="background:${r.tone}" draggable="true" data-drag-slot="${i}" data-slot="${i}" data-act="insertSlot" data-id="${i}" title="image ${i + 1}: @${esc(r.name)}. Click to put “image ${i + 1}” in the prompt at the cursor, or drag it into the prompt. Drag onto another slot to swap them.">
           <img src="${r.img}" alt="" draggable="false"><span class="slot-name">image ${i + 1}</span>
           <button class="ref-x" data-act="clearSlot" data-id="${i}" aria-label="Empty image ${i + 1}">${ICON.x}</button>
         </span>
@@ -517,6 +517,21 @@ function renderMention() {
         <span>@${esc(r.name)}<span class="mention-sub">${used.has(r.name) ? "Already in the prompt" : "Image"}</span></span>
       </button>`).join("")
     + `<span class="mention-help">↑ ↓ to pick · Enter to insert · Esc to close</span>`;
+}
+
+// Put a word (an @name, or Klein's "image 2") in the prompt where the cursor was, with spaces around it,
+// and put the cursor after it. at: a position in the prompt instead (where something was dropped).
+function insertWord(word, at = null) {
+  const pos = wordEdge(state.prompt, Math.min(at ?? state.caret ?? state.prompt.length, state.prompt.length));
+  const before = state.prompt.slice(0, pos), after = state.prompt.slice(pos);
+  const insert = (before && !/\s$/.test(before) ? " " : "") + word + (/^\s/.test(after) ? "" : " ");
+  state.prompt = before + insert + after;
+  state.caret = before.length + insert.length;
+  state.mentionClosed = true;
+  renderPrompt(); renderRefs();
+  saveUi();
+  ta.focus();
+  ta.setSelectionRange(state.caret, state.caret);
 }
 
 function insertMention(ref) {
@@ -1586,6 +1601,9 @@ const ACT = {
     say(isImage() ? "Prompt cleared." : "Prompt and images cleared.");
   },
   removeRef: (id) => { state.attached = state.attached.filter((x) => x !== id); render(); },
+  // A click on an image in the strip (Video) or a filled slot (Klein) puts its name in the prompt at the cursor.
+  insertRef: (id) => { const r = state.refs.find((x) => x.id === id); if (r) { attach(r.id); insertWord("@" + r.name); } },
+  insertSlot: (id) => insertWord("image " + (Number(id) + 1)),
   // Klein's slots: the x empties one; an empty one opens Add image to fill it.
   clearSlot: (id) => { state.kleinSlots[Number(id)] = null; render(); say(`Image ${Number(id) + 1} is empty now.`); },
   pickSlot: (id) => {
@@ -2168,6 +2186,8 @@ async function dropOnSlots(e) {
   const from = e.dataTransfer.getData(SLOT_MIME);
   if (from !== "") {
     const a = Number(from);
+    // Dropped on the prompt text: its name goes where you let go.
+    if (to < 0 && e.target === ta) { insertWord("image " + (a + 1), textOffsetAt(e.clientX, e.clientY)); return; }
     if (to < 0 || a === to) return;
     [state.kleinSlots[a], state.kleinSlots[to]] = [state.kleinSlots[to], state.kleinSlots[a]];
     render();
