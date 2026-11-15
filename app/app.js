@@ -416,7 +416,6 @@ function videoTile(c) {
           <button class="cancel" data-act="cancel" data-id="${c.id}">Cancel</button></span>` : ""}
         ${failed ? `<span class="busy failed"><span>Render failed</span><span class="fail-why">${esc(c.error || "")}</span>
           <button class="cancel" data-act="deleteClip" data-id="${c.id}">Remove</button></span>` : ""}
-        <span class="badge">${mpText(c.res)}</span>
         <span class="len" data-len="${c.id}">${c.len} s</span>
         ${c.file ? `<span class="hover-line" aria-hidden="true"><span data-hoverbar="${c.id}"></span></span>` : ""}
         <button class="pick ${state.picked.has(c.id) ? "on" : ""}" data-act="pick" data-id="${c.id}" role="checkbox" aria-checked="${state.picked.has(c.id)}" aria-label="Select for Delete" title="Select (⌘-click or Shift-click the tiles for more)">${ICON.check}</button>
@@ -437,7 +436,6 @@ function imageTile(c) {
           <button class="cancel" data-act="cancel" data-id="${c.id}">Cancel</button></span>` : ""}
         ${failed ? `<span class="busy failed"><span>Render failed</span><span class="fail-why">${esc(c.error || "")}</span>
           <button class="cancel" data-act="deleteClip" data-id="${c.id}">Remove</button></span>` : ""}
-        <span class="badge">${mpText(c.res)}</span>
         <span class="len">${c.family === "klein" && c.width ? c.width + "×" + c.height : c.aspect}</span>
         ${done && isKlein() ? `<button class="edit-this" data-act="editThis" data-id="${c.id}" title="Put this image in image 1 and keep editing it">Edit this</button>` : ""}
         <button class="pick ${state.picked.has(c.id) ? "on" : ""}" data-act="pick" data-id="${c.id}" role="checkbox" aria-checked="${state.picked.has(c.id)}" aria-label="Select for Delete" title="Select (⌘-click or Shift-click the tiles for more)">${ICON.check}</button>
