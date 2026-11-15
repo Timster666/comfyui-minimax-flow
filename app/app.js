@@ -600,25 +600,6 @@ function renderSettings() {
     </div>
 
     <div class="field">
-      <div class="field-head"><label class="label" for="steps">Steps</label><span class="value ${s.steps === model.steps ? "rec" : ""}" id="stepsVal">${stepsText(s.steps, model.steps)}</span></div>
-      <div class="steps-wrap">
-        <input id="steps" type="range" min="${minSteps}" max="${model.maxSteps}" step="${stepSize}" value="${s.steps}" data-input="steps" aria-describedby="stepsRec">
-        <span class="rec-mark" style="left:calc(${recPct}% + ${(0.5 - recPct / 100) * 16}px)" aria-hidden="true"></span>
-      </div>
-      <div class="field-head steps-foot"><span class="hint" id="stepsRec">Recommended for ${esc(model.name)}: ${model.steps}${stepSize > 1 ? ` · takes ${minSteps}–${model.maxSteps} in steps of ${stepSize}` : ""}</span>
-        <button class="link" data-act="recSteps" id="recBtn" style="visibility:${s.steps === model.steps ? "hidden" : "visible"}">Use ${model.steps}</button></div>
-    </div>
-
-    ${isImage() ? guidanceField(s, model) : ""}
-
-    <div class="field">
-      <label class="label" for="res">Resolution</label>
-      <select class="select" id="res" data-change="res">
-        ${T.megapixels.map((mp) => `<option value="${mp}" ${mp === s.res ? "selected" : ""}>${mpText(mp)} (${sizeText(s.aspect, mp)})${(T.recommendedMP || []).includes(mp) ? " · recommended" : ""}</option>`).join("")}
-      </select>
-    </div>
-
-    <div class="field">
       <span class="label">Aspect ratio</span>
       <div class="aspects ${isImage() ? "five" : ""}">
         ${Object.keys(T.aspects).map((a) => {
@@ -633,6 +614,25 @@ function renderSettings() {
       <div class="field-head"><label class="label" for="len">Length</label><span class="value" id="lenVal">${s.len} s</span></div>
       <input id="len" type="range" min="${OPT.length.min}" max="${OPT.length.max}" step="1" value="${s.len}" data-input="len">
     </div>`}
+
+    <div class="field">
+      <label class="label" for="res">Resolution</label>
+      <select class="select" id="res" data-change="res">
+        ${T.megapixels.map((mp) => `<option value="${mp}" ${mp === s.res ? "selected" : ""}>${mpText(mp)} (${sizeText(s.aspect, mp)})${(T.recommendedMP || []).includes(mp) ? " · recommended" : ""}</option>`).join("")}
+      </select>
+    </div>
+
+    <div class="field">
+      <div class="field-head"><label class="label" for="steps">Steps</label><span class="value ${s.steps === model.steps ? "rec" : ""}" id="stepsVal">${stepsText(s.steps, model.steps)}</span></div>
+      <div class="steps-wrap">
+        <input id="steps" type="range" min="${minSteps}" max="${model.maxSteps}" step="${stepSize}" value="${s.steps}" data-input="steps" aria-describedby="stepsRec">
+        <span class="rec-mark" style="left:calc(${recPct}% + ${(0.5 - recPct / 100) * 16}px)" aria-hidden="true"></span>
+      </div>
+      <div class="field-head steps-foot"><span class="hint" id="stepsRec">Recommended for ${esc(model.name)}: ${model.steps}${stepSize > 1 ? ` · takes ${minSteps}–${model.maxSteps} in steps of ${stepSize}` : ""}</span>
+        <button class="link" data-act="recSteps" id="recBtn" style="visibility:${s.steps === model.steps ? "hidden" : "visible"}">Use ${model.steps}</button></div>
+    </div>
+
+    ${isImage() ? guidanceField(s, model) : ""}
 
     <div class="field">
       <span class="label">Seed</span>
