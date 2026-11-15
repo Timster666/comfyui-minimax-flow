@@ -67,7 +67,6 @@ svg { display: block; }
 .empty { padding: 80px 0; text-align: center; color: var(--muted); font-size: 15px; grid-column: 1 / -1; }
 .tile { display: flex; flex-direction: column; gap: 8px; }
 .tile-hit { position: absolute; inset: 0; background: transparent; border: 0; padding: 0; z-index: 1; }
-.tile-text { background: none; border: 0; padding: 0; text-align: left; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .frame { position: relative; display: flex; align-items: center; justify-content: center; width: 100%; aspect-ratio: 16 / 9; border-radius: var(--radius); background: var(--bg-deep); border: 1px solid #24262b; overflow: hidden; }
 .pic { display: block; overflow: hidden; }
 .pic img, .pic video { width: 100%; height: 100%; object-fit: cover; display: block; }
@@ -84,8 +83,6 @@ svg { display: block; }
 .hover-line { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; z-index: 2; pointer-events: none; opacity: 0; }
 .hover-line span { display: block; width: 0; height: 100%; background: var(--accent); }
 .tile.hovering .hover-line { opacity: 1; }
-.tile-prompt { color: var(--text-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tile-meta { font-size: 12px; color: var(--muted); }
 .star { position: absolute; z-index: 3; right: 8px; top: 8px; width: 36px; height: 36px; border-radius: 18px; border: 0; background: rgba(10,11,13,.78); display: flex; align-items: center; justify-content: center; }
 .star.on { color: var(--accent-text); }
 

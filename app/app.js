@@ -281,10 +281,6 @@ function renderGrid() {
         ${c.file ? `<span class="hover-line" aria-hidden="true"><span data-hoverbar="${c.id}"></span></span>` : ""}
         <button class="star ${c.starred ? "on" : ""}" data-act="star" data-id="${c.id}" aria-label="${c.starred ? "Unstar" : "Star"}">${ICON.star(c.starred)}</button>
       </div>
-      <button class="tile-text" data-act="open" data-id="${c.id}" tabindex="-1">
-        <span class="tile-prompt">${esc(c.prompt)}</span>
-        <span class="tile-meta">${esc(c.model)} · Seed ${c.seed} · ${c.width}×${c.height}</span>
-      </button>
     </div>`;
   }).join("");
   if (hover.id) requestAnimationFrame(hoverFrame);
@@ -306,10 +302,6 @@ function imageTile(c) {
         <span class="len">${c.aspect}</span>
         <button class="star ${c.starred ? "on" : ""}" data-act="star" data-id="${c.id}" aria-label="${c.starred ? "Unstar" : "Star"}">${ICON.star(c.starred)}</button>
       </div>
-      <button class="tile-text" data-act="open" data-id="${c.id}" tabindex="-1">
-        <span class="tile-prompt">${esc(c.prompt)}</span>
-        <span class="tile-meta">${esc(c.model)} · Seed ${c.seed} · ${c.width}×${c.height}</span>
-      </button>
     </div>`;
 }
 
