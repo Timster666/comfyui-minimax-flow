@@ -96,7 +96,9 @@ svg { display: block; }
 body.popup-open .dock { z-index: 9; }
 .composer-dim { position: absolute; inset: -1px; border-radius: inherit; background: rgba(0,0,0,.7); z-index: 5; }
 body.popup-open .pill[aria-expanded="true"] { position: relative; z-index: 6; }
-body.library-open .add-ref { z-index: 6; background: var(--surface); }
+/* Add image: the whole image strip stays lit (its button, the images and Missing tiles), so you see
+   where you drop an image to replace one. */
+body.library-open .refs { position: relative; z-index: 6; }
 
 /* Reference images */
 .refs { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-start; }
