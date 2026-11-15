@@ -23,9 +23,9 @@ packages beyond ComfyUI's own.
 The repository used to be called `comfyui-minimax-flow`; that address still leads here, and a copy
 cloned under the old name keeps working.
 
-## Video, Image, Klein 9b and Edit
+## Video, Image, Klein 9b, Pruna and Edit
 
-The app has four tabs, and it always opens on **Video**.
+The app has five tabs, and it always opens on **Video**.
 
 - **Video** makes clips with MiniMax H3. Every `@image` in the prompt is a reference picture. Drag an image
   from the prompt bar onto the text to put its `@name` where the cursor was; click it to see it in
@@ -48,6 +48,20 @@ The app has four tabs, and it always opens on **Video**.
   Klein makes one from the prompt alone. **Size** in the settings is **Match image 1** (its shape) or an
   aspect ratio. **Edit this** on a result puts it in image 1, to keep editing; the Image tab's pictures
   have **Edit in Klein**. A prompt that names an empty slot isn't sent.
+- **Pruna** makes and edits pictures with Pruna AI's P-H3-Image. It has two modes, switched at the top of
+  the prompt bar:
+  - **Image**: up to nine slots, **picture 1** to **picture 9** (more appear as you fill them). With no
+    pictures it makes one from the prompt; with pictures, picture 1 is the one edited and the others are
+    references ("put the lamp from picture 2 on the table in picture 1"). The slots work like Klein's.
+  - **Character sheet**: the character's picture in the first slot, and up to three more that help with
+    its **Face**, **Outfit** or **Details**. Pick the views (head and full body from the front, ¾, side and
+    back, and close-ups of the hands and feet) or a preset. The app writes the sheet's prompt; the text
+    box is for notes. The sheet's shape follows the views, at 8 MP.
+
+  **Enhance prompt** (in the bar, off by default) runs Pruna's prompt upsampler first: it rewrites the
+  text into a long, detailed prompt. **What the model gets** shows the exact text that is sent, and a
+  picture's page shows what the upsampler wrote, with **Use the upsampled prompt**. Sampling is always
+  8 steps. Every image has **Edit in Pruna**.
 - **LoRAs** are added in the settings pop-up with **+ Add LoRA**: a window lists the LoRA files to
   search and pick from. **Refresh** looks in the folders again, so LoRAs you download while ComfyUI runs
   show up without a restart. Sort your LoRAs by model in folders inside `models/loras`:
@@ -57,6 +71,7 @@ The app has four tabs, and it always opens on **Video**.
     MiniMax H3/    the Video tab's LoRAs
     MOSS Image/    the Image tab's LoRAs
     Flux Klein/    the Klein 9b tab's LoRAs
+    P-H3 Image/    the Pruna tab's LoRAs
   ```
 
   Each tab lists its own folder first, then **Not sorted**: files loose in `loras` and any folder that
@@ -156,6 +171,25 @@ Klein numbers the pictures in the order it gets them, so when a slot before it i
 model reads is renumbered to match (slots 1 and 3 filled: "image 3" is sent as "image 2"). MOSS-Image's
 `flux2-vae_small` isn't used for Klein: its pictures need the full VAE encoder.
 
+## P-H3-Image files (Pruna tab)
+
+ComfyUI 0.44 or newer (it has P-H3-Image's nodes built in). From
+[PrunaAI/P-H3-Image-Comfy](https://huggingface.co/PrunaAI/P-H3-Image-Comfy), plus MiniMax H3's FL2VA model:
+
+| File | Folder |
+|---|---|
+| `minimax_h3_fl2va_pruned_int8_convrot.safetensors` ([Comfy-Org/MiniMax-H3](https://huggingface.co/Comfy-Org/MiniMax-H3)) | `models/diffusion_models/` |
+| `p-h3-image_lora_bf16.safetensors` | `models/loras/` (any folder) |
+| `p-h3-image_text_encoder_int8_convrot.safetensors` | `models/text_encoders/` |
+| `p-h3-image_vae_int8_convrot.safetensors` | `models/vae/` |
+| `p-h3-image_prompt_upsampler_bf16.safetensors` (for Enhance prompt; the INT8 or W4A8 one works too) | `models/text_encoders/` |
+
+The graph follows ComfyUI's P-H3-Image templates: the LoRA at 1.0 on FL2VA, ModelSamplingMiniMaxH3 at 1.0,
+"p-h3-image Conditioning" with the pictures, and a fixed 8-step schedule (er_sde, guidance 1). If Pruna's
+full checkpoint (`p-h3-image_int8_convrot.safetensors` or another) is in `models/diffusion_models`, the
+settings offer it as a second model. The model calls the pictures `<Picture 1>`, `<Picture 2>` … in the
+order it gets them, so "picture 3" with slot 2 empty is sent as `<Picture 2>`.
+
 ## File names and importing
 
 Finished files are named after the start of their prompt, like
@@ -201,6 +235,7 @@ In ComfyUI's output folder, under `minimax_flow/`:
   and `live_preview.py` (the moving preview)
 - `moss_bridge.py`: image graphs, with MOSS-Image
 - `klein_bridge.py`: Klein 9B graphs, with up to four reference pictures
+- `ph3_bridge.py`: P-H3-Image graphs (Pruna tab), with up to nine pictures and the prompt upsampler
 - `edit_media.py`: the Edit tab's filmstrips, waveforms and export, with PyAV
 - `edit_project.py`: edit projects as zip files (export and import)
 - `clip_info.py`: the prompt and settings saved in each file, and reading them back on import

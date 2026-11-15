@@ -14,7 +14,7 @@ import re
 KEY = "mmflow"
 VERSION = 1
 FIELDS = ("kind", "prompt", "model", "profile", "steps", "cfg", "res", "aspect", "len", "width", "height", "seed", "loras",
-          "sampler", "scheduler", "negative", "family", "size", "slots", "edit")
+          "sampler", "scheduler", "negative", "family", "size", "slots", "edit", "mode", "sheet", "enhance", "sent")
 VIDEO_TYPES = {".mp4", ".mov", ".webm", ".mkv"}
 IMAGE_TYPES = {".png", ".jpg", ".jpeg", ".webp"}
 
