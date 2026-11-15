@@ -63,6 +63,9 @@ const state = {
   // The Klein tab's four slots, image 1-4: ids of images from the Add image library, or null. The slots keep
   // their names: whatever is in slot 3 is "image 3" in the prompt.
   kleinSlots: [null, null, null, null],
+  // The Image tab's Edit switch: one picture to edit (an Add image library id) with MOSS-Image's edit LoRA.
+  imageEdit: false,
+  imageEditSlot: [null],
   settingsOpen: false,
   loraPicker: false,
 };
@@ -82,14 +85,25 @@ const clipById = (id) => state.clips.find((c) => c.id === id);
 const mpText = (mp) => (Math.round(mp * 10) === mp * 10 ? Number(mp).toFixed(1) : String(mp)) + " MP";
 const isImage = () => state.tab === "image";
 const isKlein = () => state.tab === "klein";
+// The Image tab with Edit on: one slot, the picture to edit.
+const editOn = () => isImage() && state.imageEdit;
+// The tabs with picture slots in the prompt bar: Klein (image 1-4) and the Image tab's Edit (one picture).
+const hasSlots = () => isKlein() || editOn();
+const slots = () => (isKlein() ? state.kleinSlots : state.imageEditSlot);
+const slotWord = (i) => (isKlein() ? "image " + (i + 1) : "the picture to edit");
 const kindOf = (c) => c.kind || "video";
 // Which tab a clip belongs to: Klein's images are images too (page, download, Use in a video), in their own tab.
 const tabOf = (c) => (c.family === "klein" ? "klein" : kindOf(c));
 // The options of the tab you're on: models, aspect ratios and sizes.
 const tabOpt = () => (isImage() ? OPT.image : isKlein() ? OPT.klein : { models: OPT.models, aspects: OPT.aspects, megapixels: OPT.megapixels });
 // With nothing installed, the settings keep the saved model so the pop-up still works.
-const modelOf = (name) => tabOpt().models.find((m) => m.name === name) || tabOpt().models[0]
-  || { name: name || "Not installed", steps: state.settings.steps || 20, minSteps: 1, maxSteps: 80, stepSize: 1, cfg: state.settings.cfg || 3 };
+const modelOf = (name) => {
+  const m = tabOpt().models.find((x) => x.name === name) || tabOpt().models[0]
+    || { name: name || "Not installed", steps: state.settings.steps || 20, minSteps: 1, maxSteps: 80, stepSize: 1, cfg: state.settings.cfg || 3 };
+  // Editing uses the edit LoRA's settings, whatever the checkpoint.
+  const e = OPT.image.edit;
+  return editOn() && e ? { ...m, steps: e.steps, cfg: e.cfg, minSteps: e.minSteps, maxSteps: e.maxSteps, stepSize: 1, sampler: e.sampler, scheduler: e.scheduler, edit: true } : m;
+};
 const aspectOf = (a) => OPT.aspects[a] || OPT.image.aspects[a] || (/^\d+:\d+$/.test(a || "") ? a.split(":").map(Number) : [16, 9]);
 // A clip's shape: its aspect ratio, or (Klein's Match image 1) its exact width and height.
 const shapeOf = (c) => (c.family === "klein" && c.width && c.height ? c.width + ":" + c.height : c.aspect);
@@ -187,6 +201,11 @@ function summary() {
     return [s.model, s.steps + " steps", ...(m.base ? ["Guidance " + s.cfg] : []), s.size === "match" ? "Match image 1" : s.aspect,
       w + "×" + h, s.seedMode === "fixed" ? "Seed " + s.seed : "Random seed", n + (n === 1 ? " LoRA" : " LoRAs")].join(" · ");
   }
+  if (editOn()) {
+    const size = editSize();
+    return ["Edit", s.model, s.steps + " steps", "Guidance " + s.cfg, size ? size.join("×") : mpText(s.res),
+      s.seedMode === "fixed" ? "Seed " + s.seed : "Random seed", n + (n === 1 ? " LoRA" : " LoRAs")].join(" · ");
+  }
   return [s.model, s.steps + " steps", ...(isImage() ? ["Guidance " + s.cfg] : []), mpText(s.res), s.aspect, ...(isImage() ? [] : [s.len + " s"]),
     s.seedMode === "fixed" ? "Seed " + s.seed : "Random seed", n + (n === 1 ? " LoRA" : " LoRAs")].join(" · ");
 }
@@ -220,6 +239,7 @@ function saveUi() {
     api("PUT", "ui", { settings: state.videoSettings, imageSettings: state.imageSettings, attached: state.attached, perRow: state.perRow,
       prompt: state.drafts.video, imagePrompt: state.drafts.image, imageNegative: state.negative, negativeOpen: state.negativeOpen,
       kleinSettings: state.kleinSettings, kleinPrompt: state.drafts.klein, kleinSlots: state.kleinSlots,
+      imageEdit: state.imageEdit, imageEditSource: state.imageEditSlot[0],
       tab: state.tab }).catch(() => {});
   }, 400);
 }
@@ -384,6 +404,15 @@ function imageTile(c) {
 function renderNegative() {
   const on = isImage();
   $("negToggle").hidden = !on;
+  const e = OPT.image.edit;
+  $("editToggle").hidden = !on;
+  $("editToggle").classList.toggle("on", editOn());
+  $("editToggle").setAttribute("aria-pressed", editOn());
+  $("editToggle").disabled = !(e && e.available) && !editOn();
+  $("editToggle").title = e && e.available
+    ? (editOn() ? "Editing a picture with the MOSS-Image edit LoRA. Click to make new images again." : "Edit one picture with the MOSS-Image edit LoRA: describe only the change.")
+    : `Edit needs the MOSS-Image edit LoRA (${(e && e.lora) || "moss_image_edit_lora_rank_64_bf16.safetensors"}) in models/loras.`;
+  $("editToggle").innerHTML = (editOn() ? "− " : "+ ") + "Edit" + (editOn() ? " · on" : "");
   $("negBox").hidden = !(on && state.negativeOpen);
   if (!on) return;
   $("negToggle").innerHTML = (state.negativeOpen ? "− " : "+ ") + "Negative prompt" + (state.negative.trim() ? "" : " · none");
@@ -396,8 +425,8 @@ function renderNegative() {
 function renderRefs() {
   renderNegative();
   // Reset (top right of the prompt) shows when there is something to clear.
-  $("resetPrompt").hidden = !(state.prompt.trim() || (isKlein() ? state.kleinSlots.some(Boolean) : !isImage() && state.attached.length));
-  if (isKlein()) { renderSlots(); return; }
+  $("resetPrompt").hidden = !(state.prompt.trim() || (hasSlots() ? slots().some(Boolean) : !isImage() && state.attached.length));
+  if (hasSlots()) { renderSlots(); return; }
   document.querySelector(".composer").classList.toggle("no-refs", isImage());
   // MOSS-Image takes no reference pictures, so the Image tab has no image strip.
   $("refs").hidden = isImage();
@@ -426,17 +455,29 @@ function renderRefs() {
 
 /* Klein's four slots, image 1-4. They keep their names: swapping two pictures (drag one onto another) or
    putting a new one in doesn't change the prompt. Each shows the picture's own size under it. */
-const slotRef = (i) => state.refs.find((r) => r.id === state.kleinSlots[i]) || null;
+const slotRef = (i, list = slots()) => state.refs.find((r) => r.id === list[i]) || null;
 function refSize(r) {
   if (r.w || r.sizing) return;
   r.sizing = true;
   const im = new Image();
-  im.onload = () => { r.w = im.naturalWidth; r.h = im.naturalHeight; if (isKlein() && state.view === "gallery") renderRefs(); if (state.view === "clip") renderClip(); };
+  im.onload = () => {
+    r.w = im.naturalWidth; r.h = im.naturalHeight;
+    if (hasSlots() && state.view === "gallery") { renderRefs(); $("pill").textContent = summary(); }
+    if (state.view === "clip") renderClip();
+  };
   im.src = r.img;
 }
 // The size a Klein render comes out at: image 1's shape (Match image 1), or an aspect ratio, at the resolution.
+// An edit is made at the picture's own shape, scaled to the resolution in steps of 16 px. null until its size is known.
+function editSize(res = state.imageSettings.res) {
+  const r = slotRef(0, state.imageEditSlot);
+  if (!r || !r.w) return null;
+  const k = Math.sqrt((res * 1024 * 1024) / (r.w * r.h));
+  return [Math.round((r.w * k) / 16) * 16, Math.round((r.h * k) / 16) * 16];
+}
+
 function kleinSize(s = state.kleinSettings) {
-  const r = slotRef(0);
+  const r = slotRef(0, state.kleinSlots);
   if (s.size === "match" && r && r.w) {
     const k = Math.sqrt((s.res * 1024 * 1024) / (r.w * r.h));
     return [Math.max(16, Math.round((r.w * k) / 16) * 16), Math.max(16, Math.round((r.h * k) / 16) * 16)];
@@ -449,6 +490,7 @@ const emptyNamed = (text = state.prompt) => [...new Set([...text.matchAll(/\bima
 function renderSlots() {
   $("refs").hidden = false;
   document.querySelector(".composer").classList.remove("no-refs");
+  if (editOn()) { renderEditSlot(); return; }
   const filled = state.kleinSlots.filter(Boolean).length, empty = emptyNamed();
   $("hint").textContent = empty.length
     ? `The prompt names ${empty.map((n) => "image " + n).join(" and ")}, but ${empty.length > 1 ? "those slots are" : "that slot is"} empty`
@@ -468,20 +510,44 @@ function renderSlots() {
         <span class="slot-res">${r.w ? r.w + "×" + r.h : ""}</span></div>`;
   }).join("") + `<button class="add-ref" id="addRef" data-act="openLibrary" aria-expanded="${state.library.open}">${ICON.plus}Add image</button>`;
 }
+// The Image tab's Edit slot: the picture to edit, with its size under it.
+function renderEditSlot() {
+  const r = slotRef(0);
+  $("hint").classList.remove("warn");
+  $("hint").textContent = r ? "Edit: describe only the change, e.g. “Change only the jacket to a black wool coat. Keep everything else unchanged.”"
+    : "Edit: pick the picture to edit";
+  if (!r) {
+    $("refs").innerHTML = `<div class="ref slot">
+        <button class="slot-empty edit-slot" data-act="pickSlot" data-id="0" data-slot="0" aria-label="Add the picture to edit" title="Add the picture to edit: click, or drag one in from the grid, Add image or your computer">${ICON.plus}Picture<br>to edit</button>
+        <span class="slot-res"></span></div>`;
+    return;
+  }
+  refSize(r);
+  $("refs").innerHTML = `<div class="ref slot used">
+      <span class="ref-pic slot-pic" style="background:${r.tone}" draggable="true" data-drag-slot="0" data-slot="0" data-act="showSlot" data-id="0" title="The picture to edit: @${esc(r.name)}. Click to open Add image and pick another, or drop one here.">
+        <img src="${r.img}" alt="" draggable="false"><span class="slot-name">Edit</span>
+        <button class="ref-x" data-act="clearSlot" data-id="0" aria-label="Take out the picture to edit">${ICON.x}</button>
+      </span>
+      <span class="slot-res">${r.w ? r.w + "×" + r.h : ""}</span></div>`;
+}
+
 // Put a picture (an Add image library entry) in a slot, or in the first empty one. Returns the slot, or -1.
 function putInSlot(ref, slot = -1) {
-  if (slot < 0) slot = state.kleinSlots.indexOf(null);
+  const list = slots();
+  if (slot < 0) slot = list.indexOf(null);
+  if (slot < 0 && editOn()) slot = 0;   // Edit has one slot: a new picture replaces it
   if (slot < 0) { say("All four slots are full. Drop it on one to replace that picture."); return -1; }
-  state.kleinSlots[slot] = ref.id;
+  list[slot] = ref.id;
   render();
-  say(`@${ref.name} is image ${slot + 1}.`);
+  say(isKlein() ? `@${ref.name} is image ${slot + 1}.` : `Editing @${ref.name}.`);
   return slot;
 }
 
 function renderPrompt() {
   $("mirror").innerHTML = state.prompt
     ? promptHTML(state.prompt) + "​"
-    : `<span class="ph">${isImage() ? "Describe an image, for example: a neon sign that says \"OPEN ALL NIGHT\" in the rain."
+    : `<span class="ph">${editOn() ? "Describe only the change, for example: Change only the pink blazer to a plain black wool coat. Keep the faces, poses and background unchanged."
+      : isImage() ? "Describe an image, for example: a neon sign that says \"OPEN ALL NIGHT\" in the rain."
       : isKlein() ? "Describe the edit. Call the pictures image 1, image 2, image 3 and image 4, for example: put the bag from image 2 in the hand of the woman in image 1."
       : "Describe a shot. Type @ to use one of your images."}</span>`;
   if ($("prompt").value !== state.prompt) $("prompt").value = state.prompt;
@@ -690,6 +756,10 @@ function renderLibPreview() {
 }
 // The button under the library's big preview: into the prompt bar, or (Klein) into a slot.
 function libButton(refId, inBar) {
+  if (editOn()) {
+    if (refId && state.imageEditSlot[0] === refId) return `<button class="btn lib-add" data-act="libToggle">Don't edit this picture</button>`;
+    return `<button class="btn primary lib-add" data-act="libToggle">Edit this picture</button>`;
+  }
   if (isKlein()) {
     const at = refId ? state.kleinSlots.indexOf(refId) : -1;
     const to = state.library.slot != null ? state.library.slot : state.kleinSlots.indexOf(null);
@@ -742,7 +812,10 @@ function renderSettings() {
       </select>
     </div>
 
-    <div class="field">
+    ${editOn() ? `<div class="field">
+      <span class="label">Size</span>
+      <span class="hint">${editSize() ? `The picture's shape: ${editSize().join("×")} at ${mpText(s.res)}.` : "The picture's shape, at the resolution below."}</span>
+    </div>` : `<div class="field">
       <span class="label">Aspect ratio</span>
       <div class="aspects ${isImage() ? "five" : ""}">
         ${Object.keys(T.aspects).map((a) => {
@@ -751,7 +824,7 @@ function renderSettings() {
           return `<button class="${a === s.aspect ? "on" : ""}" data-act="aspect" data-id="${a}"><i style="width:${Math.round(w * k)}px;height:${Math.round(h * k)}px"></i>${a}</button>`;
         }).join("")}
       </div>
-    </div>
+    </div>`}
 
     ${isImage() ? "" : `<div class="field">
       <div class="field-head"><label class="label" for="len">Length</label><span class="value" id="lenVal">${s.len} s</span></div>
@@ -1011,7 +1084,8 @@ function renderClipSide(c) {
 // A clip's sampler and scheduler: its own choice, or (in grey) its model's.
 function samplingFacts(c) {
   const models = kindOf(c) === "image" ? OPT.image.models : OPT.models;
-  const m = models.find((x) => x.name === c.model) || {};
+  // An edit's defaults are the edit LoRA's (euler/normal), whatever the checkpoint.
+  const m = c.edit && OPT.image.edit ? OPT.image.edit : models.find((x) => x.name === c.model) || {};
   const one = (own, dflt) => own ? esc(own) : dflt ? `${esc(dflt === "hyperflow" ? "HyperFlow's own" : dflt)} <span class="label">· model default</span>` : '<span class="label">Model default</span>';
   return `<dt>Sampler</dt><dd>${one(c.sampler, m.sampler)}</dd><dt>Scheduler</dt><dd>${one(c.scheduler, m.scheduler)}</dd>`;
 }
@@ -1026,12 +1100,13 @@ function renderImageSide(c) {
       <div class="prompt-box"><p class="clip-prompt">${esc(c.prompt)}</p>
         <button class="copy prompt-copy" data-act="copyPrompt" aria-label="Copy the prompt" title="Copy the prompt">${ICON.copy}</button></div>
     </div>
+    ${c.edit ? editedFrom(c) : ""}
     <dl class="facts">
-      <dt>Model</dt><dd>${esc(c.model)}</dd>
+      <dt>Model</dt><dd>${esc(c.model)}${c.edit ? " · Edit" : ""}</dd>
       <dt>Steps</dt><dd>${c.steps}</dd>
       <dt>Guidance</dt><dd>${Number(c.cfg).toFixed(1)}</dd>
       <dt>Resolution</dt><dd>${mpText(c.res)} (${c.width}×${c.height})</dd>
-      <dt>Aspect</dt><dd>${c.aspect}</dd>
+      <dt>Aspect</dt><dd>${c.edit ? "The picture's shape" : c.aspect}</dd>
       <dt>Seed</dt><dd class="seed-dd">${c.seed}<button class="copy" data-act="copySeed" aria-label="Copy seed">${ICON.copy}</button></dd>
       <dt>LoRAs</dt><dd>${c.loras.length ? c.loras.map((l) => esc(loraText(l))).join("<br>") : '<span class="label">None</span>'}</dd>
       ${samplingFacts(c)}
@@ -1047,6 +1122,18 @@ function renderImageSide(c) {
         <button class="btn" data-act="download" ${c.status === "done" ? "" : "disabled"}>Download</button>
         <button class="btn danger" data-act="deleteClip">Delete</button>
       </div>
+    </div>`;
+}
+
+// An edited image's page: the picture it was made from.
+function editedFrom(c) {
+  const r = c.edit.id && state.refs.find((x) => x.id === c.edit.id);
+  if (r) refSize(r);
+  return `<div class="field">
+      <span class="label">Edited picture</span>
+      <div class="side-slots"><div class="side-slot" title="@${esc(c.edit.name)}">
+        <span class="side-pic" style="background:${r ? r.tone : "transparent"}">${r ? `<img src="${r.img}" alt="">` : "?"}</span>
+        <span class="slot-res">${r ? (r.w ? r.w + "×" + r.h : "") : esc(c.edit.name)}</span></div></div>
     </div>`;
 }
 
@@ -1257,6 +1344,7 @@ async function generate() {
   const names = new Set(state.refs.map((r) => r.name));
   const unknown = isImage() || isKlein() ? null : mentionsIn(prompt).find((n) => !names.has(n));
   if (unknown) { say("There is no image called @" + unknown + "."); return; }
+  if (editOn() && !state.imageEditSlot[0]) { say("Add the picture to edit first (or switch Edit off)."); return; }
   const empty = isKlein() ? emptyNamed(prompt) : [];
   if (empty.length) { say(`The prompt names ${empty.map((n) => "image " + n).join(" and ")}, but ${empty.length > 1 ? "those slots are" : "that slot is"} empty. Fill it, or change the prompt.`); return; }
   state.settingsOpen = false;
@@ -1264,7 +1352,7 @@ async function generate() {
   render();
   try {
     const { clip } = await api("POST", "generate", { prompt, settings: s, kind: state.tab, negative: isImage() ? state.negative : undefined,
-      slots: isKlein() ? state.kleinSlots : undefined });
+      slots: isKlein() ? state.kleinSlots : undefined, edit: editOn() ? state.imageEditSlot[0] : undefined });
     upsertClip(clip);
   } catch (error) {
     say(error.message);
@@ -1611,6 +1699,7 @@ const ACT = {
   resetPrompt: () => {
     state.prompt = ""; state.caret = 0; state.mentionClosed = true;
     if (isKlein()) state.kleinSlots = [null, null, null, null];
+    else if (editOn()) state.imageEditSlot = [null];
     else if (!isImage()) state.attached = [];
     render(); saveUi();
     $("prompt").focus();
@@ -1624,14 +1713,18 @@ const ACT = {
   showSlot: (id) => {
     state.library.slot = Number(id);
     showInLibrary(slotRef(Number(id)));
-    say(`Pick a picture to put in image ${Number(id) + 1}.`);
+    say(`Pick a picture to put in ${slotWord(Number(id))}.`);
   },
   // Klein's slots: the x empties one; an empty one opens Add image to fill it.
-  clearSlot: (id) => { state.kleinSlots[Number(id)] = null; render(); say(`Image ${Number(id) + 1} is empty now.`); },
+  clearSlot: (id) => {
+    slots()[Number(id)] = null;
+    render();
+    say(isKlein() ? `Image ${Number(id) + 1} is empty now.` : "No picture to edit now.");
+  },
   pickSlot: (id) => {
     state.library.slot = Number(id);
     if (!state.library.open) ACT.openLibrary(); else render();
-    say(`Pick a picture for image ${Number(id) + 1}, or drag one onto it.`);
+    say(`Pick a picture for ${slotWord(Number(id))}, or drag one onto it.`);
   },
   kleinMatch: () => { state.kleinSettings.size = "match"; render(); },
   // A finished image into the Klein tab's image 1, to keep editing it.
@@ -1688,6 +1781,12 @@ const ACT = {
     }
     const ref = state.refs.find((r) => r.id === id);
     if (!ref) return;
+    if (editOn()) {
+      if (state.imageEditSlot[0] === id) { state.imageEditSlot = [null]; render(); say("No picture to edit now."); return; }
+      state.library.slot = null; state.library.open = false;
+      putInSlot(ref, 0);
+      return;
+    }
     if (isKlein()) {
       const at = state.kleinSlots.indexOf(id);
       if (at >= 0) { state.kleinSlots[at] = null; render(); say(`Image ${at + 1} is empty now.`); return; }
@@ -1704,6 +1803,16 @@ const ACT = {
     if (hadFocus) document.querySelector(".lib-item.on")?.focus();
   },
   closePopups: () => { state.settingsOpen = false; state.loraPicker = false; state.library.open = false; state.library.slot = null; render(); },
+  // The Image tab's Edit switch: one picture to edit, with the edit LoRA's settings (30 steps, guidance 4).
+  toggleEdit: () => {
+    if (!isImage()) return;
+    state.imageEdit = !state.imageEdit;
+    const s = state.imageSettings, m = modelOf(s.model);
+    s.steps = m.steps; s.cfg = m.cfg; s.sampler = ""; s.scheduler = "";
+    render();
+    say(state.imageEdit ? (state.imageEditSlot[0] ? "Edit is on: describe only the change." : "Edit is on: add the picture to edit, then describe the change.")
+      : "Edit is off: new images again.");
+  },
   toggleNegative: () => {
     state.negativeOpen = !state.negativeOpen;
     renderNegative();
@@ -1747,7 +1856,12 @@ const ACT = {
     Object.assign(state.settings, { model, steps: c.steps, res: c.res, aspect: c.aspect, seedMode: "random",
       loras: c.loras.map((l) => ({ id: l.name, name: l.name, strength: l.strength, on: true })) },
       kindOf(c) === "image" ? { cfg: c.cfg } : { len: c.len }, { sampler: c.sampler || "", scheduler: c.scheduler || "" });
-    if (kindOf(c) === "image") state.negative = c.negative != null ? c.negative : negativeDefault(c.model);
+    if (kindOf(c) === "image") {
+      state.negative = c.negative != null ? c.negative : negativeDefault(c.model);
+      // An edit comes back as an edit, with its picture when it's still in Add image.
+      state.imageEdit = !!c.edit && !!OPT.image.edit?.available;
+      if (c.edit) state.imageEditSlot = [state.refs.some((r) => r.id === c.edit.id) ? c.edit.id : null];
+    }
     state.prompt = c.prompt; state.caret = c.prompt.length; state.mentionClosed = true;
     // Only this clip's reference images: the ones it recorded, else the @names in its prompt.
     if (kindOf(c) === "video") {
@@ -1758,7 +1872,8 @@ const ACT = {
     if (isFull()) document.exitFullscreen();
     state.view = "gallery";
     render();
-    say("Prompt and settings are back in the prompt bar, with a random seed.");
+    say("Prompt and settings are back in the prompt bar, with a random seed."
+      + (c.edit && !state.imageEditSlot[0] ? " Its picture isn't in Add image any more: add the picture to edit." : ""));
   },
   keepSeed: () => {
     const c = clipById(state.openId);
@@ -2077,7 +2192,7 @@ document.addEventListener("dragover", (e) => {
   if (state.view !== "gallery" || !hasFiles(e)) return;
   e.preventDefault();
   if (!isImage()) $("addRef")?.classList.add("drag");
-  if (isKlein()) markReplace(e.target.closest?.("[data-slot]") || null);
+  if (hasSlots()) markReplace(e.target.closest?.("[data-slot]") || null);
 });
 document.addEventListener("dragleave", (e) => { if (!e.relatedTarget) $("addRef")?.classList.remove("drag"); });
 document.addEventListener("drop", (e) => {
@@ -2085,7 +2200,7 @@ document.addEventListener("drop", (e) => {
   e.preventDefault();
   $("addRef")?.classList.remove("drag");
   const files = [...e.dataTransfer.files];
-  if (isKlein()) {
+  if (hasSlots()) {
     // Pictures go in the slots (the one dropped on, or the empty ones); videos and zips are still imports.
     const slot = e.target.closest?.("[data-slot]");
     markReplace(null);
@@ -2157,7 +2272,7 @@ document.addEventListener("dragend", () => {
   markReplace(null);
 });
 // An image dropped on an image in the strip (or on a missing one) replaces it, in the strip and in the prompt.
-const replaceTarget = (e) => e.target.closest?.(isKlein() ? "[data-slot]" : "[data-replace-ref], [data-replace-name]");
+const replaceTarget = (e) => e.target.closest?.(hasSlots() ? "[data-slot]" : "[data-replace-ref], [data-replace-name]");
 function markReplace(el) {
   document.querySelectorAll(".replace-on").forEach((x) => { if (x !== el) x.classList.remove("replace-on"); });
   el?.classList.add("replace-on");
@@ -2175,7 +2290,7 @@ composer.addEventListener("drop", async (e) => {
   if (!isRefDrag(e)) return;
   e.preventDefault();
   composer.classList.remove("drop-on");
-  if (isKlein()) { dropOnSlots(e); return; }
+  if (hasSlots()) { dropOnSlots(e); return; }
   const genId = e.dataTransfer.getData(GEN_MIME);
   const onText = e.target === ta;
   const target = replaceTarget(e);
@@ -2211,12 +2326,13 @@ async function dropOnSlots(e) {
   const from = e.dataTransfer.getData(SLOT_MIME);
   if (from !== "") {
     const a = Number(from);
-    // Dropped on the prompt text: its name goes where you let go.
-    if (to < 0 && e.target === ta) { insertWord("image " + (a + 1)); return; }
+    // Dropped on the prompt text: its name goes where the cursor was (Klein: the pictures have names).
+    if (to < 0 && e.target === ta) { if (isKlein()) insertWord("image " + (a + 1)); return; }
     if (to < 0 || a === to) return;
-    [state.kleinSlots[a], state.kleinSlots[to]] = [state.kleinSlots[to], state.kleinSlots[a]];
+    const list = slots();
+    [list[a], list[to]] = [list[to], list[a]];
     render();
-    say(state.kleinSlots[a] ? `Swapped image ${a + 1} and image ${to + 1}.` : `Moved to image ${to + 1}.`);
+    say(list[a] ? `Swapped image ${a + 1} and image ${to + 1}.` : `Moved to image ${to + 1}.`);
     return;
   }
   const genId = e.dataTransfer.getData(GEN_MIME);
@@ -2224,9 +2340,9 @@ async function dropOnSlots(e) {
   if (genId) { try { r = await refFromClip(genId); } catch (error) { say(error.message); return; } }
   else r = state.refs.find((x) => x.id === e.dataTransfer.getData(REF_MIME));
   if (!r) return;
-  const replaced = to >= 0 && state.kleinSlots[to] && state.kleinSlots[to] !== r.id;
+  const replaced = (to >= 0 || editOn()) && slots()[Math.max(0, to)] && slots()[Math.max(0, to)] !== r.id;
   const at = putInSlot(r, to);
-  if (replaced && at >= 0) say(`@${r.name} is image ${at + 1} now (replaced).`);
+  if (replaced && at >= 0) say(isKlein() ? `@${r.name} is image ${at + 1} now (replaced).` : `Editing @${r.name} now (replaced).`);
   // Replaced from Add image: that's done, so it closes.
   if (replaced && state.library.open) { ACT.closePopups(); return; }
   if (state.library.open) { renderLibNav(); renderLibList(); renderLibPreview(); }
@@ -2245,8 +2361,9 @@ async function uploadToSlots(files, slot = -1) {
     state.refs.push(...added);
     const placed = [];
     added.forEach((r, n) => {
-      const at = n === 0 && slot >= 0 ? slot : state.kleinSlots.indexOf(null);
-      if (at >= 0) { state.kleinSlots[at] = r.id; placed.push(`@${r.name} is image ${at + 1}`); }
+      const list = slots();
+      const at = n === 0 && slot >= 0 ? slot : editOn() ? (n === 0 ? 0 : -1) : list.indexOf(null);
+      if (at >= 0) { list[at] = r.id; placed.push(isKlein() ? `@${r.name} is image ${at + 1}` : `Editing @${r.name}`); }
     });
     render();
     say(placed.length ? placed.join(", ") + "." + (placed.length < added.length ? " The rest are in Add image (all four slots are full)." : "")
@@ -2324,7 +2441,7 @@ ta.addEventListener("input", () => {
 });
 ta.addEventListener("paste", (e) => {
   const files = [...(e.clipboardData?.files || [])];
-  if (isKlein() && files.some((f) => f.type.startsWith("image/"))) { e.preventDefault(); uploadToSlots(files); return; }
+  if (hasSlots() && files.some((f) => f.type.startsWith("image/"))) { e.preventDefault(); uploadToSlots(files); return; }
   if (!isImage() && files.some((f) => f.type.startsWith("image/"))) { e.preventDefault(); uploadImages(files); }
 });
 const syncCaret = () => { if (ta.selectionStart !== state.caret) { state.caret = ta.selectionStart; renderMention(); } };
@@ -2358,6 +2475,7 @@ async function load(first = true) {
       Object.assign(state.videoSettings, ui.settings || {});
       Object.assign(state.imageSettings, ui.imageSettings || {});
       Object.assign(state.kleinSettings, ui.kleinSettings || {});
+      state.imageEdit = !!ui.imageEdit && !!OPT.image.edit?.available;
       // Settings saved earlier must still suit what is installed, in every tab.
       for (const tab of ["video", "image", "klein"]) {
         state.tab = tab;
@@ -2388,6 +2506,7 @@ async function load(first = true) {
       state.tab = "video";   // the app always opens on the Video tab
       state.drafts = { video: ui.prompt || "", image: ui.imagePrompt || "", klein: ui.kleinPrompt || "" };
       state.kleinSlots = [0, 1, 2, 3].map((i) => { const id = (ui.kleinSlots || [])[i]; return id && state.refs.some((r) => r.id === id) ? id : null; });
+      state.imageEditSlot = [state.refs.some((r) => r.id === ui.imageEditSource) ? ui.imageEditSource : null];
       state.negative = typeof ui.imageNegative === "string" ? ui.imageNegative : "";
       state.negativeOpen = !!ui.negativeOpen;
       state.attached = (ui.attached || []).filter((id) => state.refs.some((r) => r.id === id));

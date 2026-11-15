@@ -33,6 +33,10 @@ The app has four tabs, and it always opens on **Video**.
 - **Image** makes pictures with MOSS-Image. It's good at words in pictures: put the text you want
   in quotes. A finished image can be sent to the Video tab with **Use in a video**, and the Video
   tab's **Add image** pop-up lists all of them under **Generated images**.
+  **Edit** (next to Negative prompt) edits one picture instead: a slot for the picture appears in the
+  prompt bar (click it, or drag one in from the grid, Add image or your computer), and the prompt
+  describes only the change ("Change only the pink blazer to a black wool coat. Keep everything else
+  unchanged."). The new image keeps the picture's shape, at the chosen resolution.
 - **Klein 9b** edits pictures with FLUX.2 [klein] 9B. The prompt bar has four slots, **image 1** to
   **image 4**, and the prompt calls the pictures by those names ("put the bag from image 2 in the hand
   of the woman in image 1"). The slots keep their names: drag a picture onto another slot to swap
@@ -126,6 +130,13 @@ in the Image tab's model list as well.
 and uses the same text encoder and VAE. It shows up as "MOSS-Image SFT Turbo 8-step (INT8)" and
 renders with 8 steps, guidance 1, Euler and no negative prompt. Any checkpoint whose file name
 has "dmd", "turbo" or "8step" gets these turbo settings.
+
+**Edit (optional).** Comfy-Org's edit LoRA, [`moss_image_edit_lora_rank_64_bf16.safetensors`](https://huggingface.co/Comfy-Org/MOSS-Image/blob/main/loras/moss_image_edit_lora_rank_64_bf16.safetensors)
+(297 MB), goes in `models/loras/` (best in `MOSS Image/`). Edits follow ComfyUI's MOSS-Image edit
+workflow: the LoRA at strength 1, Skip Layer Guidance on single layer 22, the instruction and the
+negative encoded together with the picture (`TextEncodeMOSSImageEdit`, format Moss-Image-Edit), 30
+steps, guidance 4, euler/normal. The picture is scaled to the chosen resolution in steps of 16 px, and
+the new image is made at that size. It needs ComfyUI 0.43.0 or newer.
 
 ## Klein 9B files
 
