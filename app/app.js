@@ -32,6 +32,14 @@ let OPT = {
     slots: 4,
     missing: null,
   },
+  // The Pruna tab's options (P-H3-Image). The server sends the real lists.
+  pruna: {
+    models: [{ id: "lora", name: "MiniMax H3 + P-H3-Image LoRA", steps: 8, minSteps: 8, maxSteps: 8, stepSize: 1, cfg: 1.0 }],
+    aspects: { "1:1": [1, 1], "4:3": [4, 3], "3:2": [3, 2], "16:9": [16, 9], "21:9": [21, 9], "3:4": [3, 4], "2:3": [2, 3], "9:16": [9, 16] },
+    megapixels: [1.0, 2.0, 4.0, 8.0],
+    slots: 9, steps: 8, enhance: false,
+    missing: null,
+  },
 };
 const TONES = ["#2a3a37", "#33302a", "#2b2d3a", "#3b3328", "#26332f", "#30262a", "#222a33", "#2f2a36"];
 
@@ -55,7 +63,7 @@ const state = {
   tab: "video",              // "video" | "image" | "klein" | "edit": "edit" is the editor (edit.js), the others the gallery and prompt
   negative: "",              // the Image tab's negative prompt (empty: the model's recommended one)
   negativeOpen: false,
-  drafts: { video: "", image: "", klein: "", edit: "" },   // each tab keeps its own prompt
+  drafts: { video: "", image: "", klein: "", pruna: "", prunaSheet: "", edit: "" },   // each tab keeps its own prompt
   videoSettings: { model: "HyperFlow H3 Flash", steps: 6, res: 0.6, aspect: "16:9", len: 5, seedMode: "random", seed: 48213, loras: [] },
   imageSettings: { model: "MOSS-Image SFT (INT8)", steps: 50, cfg: 3.0, res: 1.0, aspect: "1:1", seedMode: "random", seed: 48213, loras: [] },
   // size: "match" (image 1's shape) or an aspect ratio, which is also kept in aspect.
@@ -63,6 +71,13 @@ const state = {
   // The Klein tab's four slots, image 1-4: ids of images from the Add image library, or null. The slots keep
   // their names: whatever is in slot 3 is "image 3" in the prompt.
   kleinSlots: [null, null, null, null],
+  // The Pruna tab (P-H3-Image): Image (slots picture 1-9) or Character sheet (the character, then up to three
+  // pictures that help with its face, outfit or details, and the views to draw). res is Image's size, sheetRes the sheet's.
+  prunaSettings: { model: "MiniMax H3 + P-H3-Image LoRA", steps: 8, res: 4.0, sheetRes: 8.0, size: "match", aspect: "1:1", seedMode: "random", seed: 48213, loras: [], enhance: false },
+  prunaMode: "image",
+  prunaSlots: Array(9).fill(null),
+  prunaSheetSlots: [null, null, null, null],
+  prunaSheet: { preset: "standard", views: ["head_front", "head_side", "body_front", "body_side", "body_back"], roles: ["character", "face", "outfit", "detail"], bg: "white" },
   // Grid selection, for Delete: ids of the tiles that are ticked, and the last one clicked (for Shift ranges).
   picked: new Set(),
   lastPicked: null,
@@ -74,7 +89,7 @@ const state = {
 };
 // state.settings is the settings of the tab you're on.
 Object.defineProperty(state, "settings", {
-  get: () => (state.tab === "image" ? state.imageSettings : state.tab === "klein" ? state.kleinSettings : state.videoSettings),
+  get: () => (state.tab === "image" ? state.imageSettings : state.tab === "klein" ? state.kleinSettings : state.tab === "pruna" ? state.prunaSettings : state.videoSettings),
 });
 const deleted = new Set();   // clips deleted here, so a late progress message can't bring one back
 
@@ -88,17 +103,29 @@ const clipById = (id) => state.clips.find((c) => c.id === id);
 const mpText = (mp) => (Math.round(mp * 10) === mp * 10 ? Number(mp).toFixed(1) : String(mp)) + " MP";
 const isImage = () => state.tab === "image";
 const isKlein = () => state.tab === "klein";
+const isPruna = () => state.tab === "pruna";
+const sheetOn = () => isPruna() && state.prunaMode === "sheet";
+// The tabs whose results are pictures, and the tabs with named slots (Klein's image 1-4, Pruna's picture 1-9).
+const imageTab = () => isImage() || isKlein() || isPruna();
+const isSlotTab = () => isKlein() || isPruna();
+// Where the prompt box's text is kept: each tab, and Pruna's sheet notes apart from its image prompt.
+const draftKey = () => (sheetOn() ? "prunaSheet" : state.tab);
 // The Image tab with Edit on: one slot, the picture to edit.
 const editOn = () => isImage() && state.imageEdit;
 // The tabs with picture slots in the prompt bar: Klein (image 1-4) and the Image tab's Edit (one picture).
-const hasSlots = () => isKlein() || editOn();
-const slots = () => (isKlein() ? state.kleinSlots : state.imageEditSlot);
-const slotWord = (i) => (isKlein() ? "image " + (i + 1) : "the picture to edit");
+const hasSlots = () => isSlotTab() || editOn();
+const slots = () => (isKlein() ? state.kleinSlots : isPruna() ? (sheetOn() ? state.prunaSheetSlots : state.prunaSlots) : state.imageEditSlot);
+const ROLE_NAMES = { character: "character", face: "face", outfit: "outfit", detail: "detail" };
+const slotWord = (i) => (isKlein() ? "image " + (i + 1) : sheetOn() ? (i ? ROLE_NAMES[state.prunaSheet.roles[i]] || "detail" : "character")
+  : isPruna() ? "picture " + (i + 1) : "the picture to edit");
+const SlotWord = (i) => slotWord(i).replace(/^./, (ch) => ch.toUpperCase());
+// "image 2" (Klein) or "picture 2" (Pruna) in a prompt.
+const slotRe = (tab = state.tab) => (tab === "pruna" ? /\bpicture\s?([1-9])\b/gi : /\bimage\s?([1-4])\b/gi);
 const kindOf = (c) => c.kind || "video";
 // Which tab a clip belongs to: Klein's images are images too (page, download, Use in a video), in their own tab.
-const tabOf = (c) => (c.family === "klein" ? "klein" : kindOf(c));
+const tabOf = (c) => (c.family === "klein" ? "klein" : c.family === "ph3" ? "pruna" : kindOf(c));
 // The options of the tab you're on: models, aspect ratios and sizes.
-const tabOpt = () => (isImage() ? OPT.image : isKlein() ? OPT.klein : { models: OPT.models, aspects: OPT.aspects, megapixels: OPT.megapixels });
+const tabOpt = () => (isImage() ? OPT.image : isKlein() ? OPT.klein : isPruna() ? OPT.pruna : { models: OPT.models, aspects: OPT.aspects, megapixels: OPT.megapixels });
 // With nothing installed, the settings keep the saved model so the pop-up still works.
 const modelOf = (name) => {
   const m = tabOpt().models.find((x) => x.name === name) || tabOpt().models[0]
@@ -107,9 +134,9 @@ const modelOf = (name) => {
   const e = OPT.image.edit;
   return editOn() && e ? { ...m, steps: e.steps, cfg: e.cfg, minSteps: e.minSteps, maxSteps: e.maxSteps, stepSize: 1, sampler: e.sampler, scheduler: e.scheduler, edit: true } : m;
 };
-const aspectOf = (a) => OPT.aspects[a] || OPT.image.aspects[a] || (/^\d+:\d+$/.test(a || "") ? a.split(":").map(Number) : [16, 9]);
+const aspectOf = (a) => OPT.aspects[a] || OPT.image.aspects[a] || OPT.pruna.aspects[a] || (/^\d+:\d+$/.test(a || "") ? a.split(":").map(Number) : [16, 9]);
 // A clip's shape: its aspect ratio, or (Klein's Match image 1) its exact width and height.
-const shapeOf = (c) => (c.family === "klein" && c.width && c.height ? c.width + ":" + c.height : c.aspect);
+const shapeOf = (c) => ((c.family === "klein" || c.family === "ph3") && c.width && c.height ? c.width + ":" + c.height : c.aspect);
 const clock = (s) => Math.floor(s / 60) + ":" + String(Math.floor(s % 60)).padStart(2, "0");
 const toneOf = (id) => TONES[[...id].reduce((a, ch) => a + ch.charCodeAt(0), 0) % TONES.length];
 const viewUrl = (folder, file) => `/view?type=output&subfolder=${encodeURIComponent(OPT.root + "/" + folder)}&filename=${encodeURIComponent(file)}`;
@@ -162,6 +189,7 @@ const ICON = {
   video: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3"/></svg>',
   image: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-9 9"/></svg>',
   check: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M5 12l5 5 9-10"/></svg>',
+  pruna: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8z"/><path d="M18 15l.9 2.1L21 18l-2.1.9L18 21l-.9-2.1L15 18l2.1-.9z"/></svg>',
   klein: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="8" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/><path d="M17 13v8M13 17h8"/></svg>',
   edit: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 15h18M8 15v4M14 15v4"/></svg>',
   copy: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a1 1 0 0 1 1-1h10"/></svg>',
@@ -172,11 +200,12 @@ function mentionsIn(text) {
 }
 
 // The prompt as HTML, with known @names highlighted and unknown ones underlined.
-function promptHTML(text, kind = state.tab, slots = state.kleinSlots) {
-  if (kind === "image") return esc(text);
-  // Klein: "image 1" to "image 4" name the slots; a slot with nothing in it is underlined.
-  if (kind === "klein") {
-    return text.split(/\b(image\s?[1-4])\b/i).map((part, i) => i % 2
+function promptHTML(text, kind = state.tab, slots = kind === "pruna" ? state.prunaSlots : state.kleinSlots) {
+  if (kind === "image" || kind === "prunaSheet") return esc(text);
+  // Klein: "image 1" to "image 4" name the slots, Pruna "picture 1" to "picture 9"; a slot with nothing in it is underlined.
+  if (kind === "klein" || kind === "pruna") {
+    const split = kind === "pruna" ? /\b(picture\s?[1-9])\b/i : /\b(image\s?[1-4])\b/i;
+    return text.split(split).map((part, i) => i % 2
       ? `<span class="${slots[Number(part.slice(-1)) - 1] ? "m" : "bad"}">${esc(part)}</span>` : esc(part)).join("");
   }
   const names = new Set(state.refs.map((r) => r.name));
@@ -204,6 +233,12 @@ function summary() {
     return [s.model, s.steps + " steps", ...(m.base ? ["Guidance " + s.cfg] : []), s.size === "match" ? "Match image 1" : s.aspect,
       w + "×" + h, s.seedMode === "fixed" ? "Seed " + s.seed : "Random seed", n + (n === 1 ? " LoRA" : " LoRAs")].join(" · ");
   }
+  if (isPruna()) {
+    const [w, h] = prunaSize();
+    return [s.model === OPT.pruna.models[0]?.name && OPT.pruna.models.length < 2 ? "P-H3-Image" : s.model,
+      sheetOn() ? "Sheet " + sheetLayout().ratioText : s.size === "match" ? (state.prunaSlots[0] ? "Match picture 1" : "1:1") : s.aspect,
+      w + "×" + h, s.seedMode === "fixed" ? "Seed " + s.seed : "Random seed", ...(n ? [n + (n === 1 ? " LoRA" : " LoRAs")] : [])].join(" · ");
+  }
   if (editOn()) {
     const size = editSize();
     return ["Edit", s.model, s.steps + " steps", "Guidance " + s.cfg, size ? size.join("×") : mpText(s.res),
@@ -216,7 +251,7 @@ function summary() {
 function progressText(c) {
   if (c.status === "queued") return "Waiting…";
   if (c.status === "failed") return "Render failed";
-  if (!c.step) return "Loading the model…";
+  if (!c.step) return c.enhance ? "Enhancing the prompt, loading the model…" : "Loading the model…";
   if (c.step >= c.steps) return kindOf(c) === "image" ? "Finishing the image…" : "Finishing the video…";
   return "Step " + c.step + " of " + c.steps;
 }
@@ -238,10 +273,12 @@ function saveUi() {
   if (!state.ready) return;
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
-    state.drafts[state.tab] = state.prompt;
+    state.drafts[draftKey()] = state.prompt;
     api("PUT", "ui", { settings: state.videoSettings, imageSettings: state.imageSettings, attached: state.attached, perRow: state.perRow,
       prompt: state.drafts.video, imagePrompt: state.drafts.image, imageNegative: state.negative, negativeOpen: state.negativeOpen,
       kleinSettings: state.kleinSettings, kleinPrompt: state.drafts.klein, kleinSlots: state.kleinSlots,
+      prunaSettings: state.prunaSettings, prunaPrompt: state.drafts.pruna, prunaSheetPrompt: state.drafts.prunaSheet, prunaMode: state.prunaMode,
+      prunaSlots: state.prunaSlots, prunaSheetSlots: state.prunaSheetSlots, prunaSheet: state.prunaSheet,
       imageEdit: state.imageEdit, imageEditSource: state.imageEditSlot[0],
       tab: state.tab }).catch(() => {});
   }, 400);
@@ -288,7 +325,7 @@ function render() {
 
 function renderHeader() {
   $("tabs").hidden = state.view !== "gallery";
-  $("tabs").innerHTML = [["video", "Video", ICON.video], ["image", "Image", ICON.image], ["klein", "Klein 9b", ICON.klein], ["edit", "Edit", ICON.edit]].map(([id, label, icon]) => {
+  $("tabs").innerHTML = [["video", "Video", ICON.video], ["image", "Image", ICON.image], ["klein", "Klein 9b", ICON.klein], ["pruna", "Pruna", ICON.pruna], ["edit", "Edit", ICON.edit]].map(([id, label, icon]) => {
     const busy = state.clips.filter((c) => tabOf(c) === id && isBusy(c)).length;
     return `<button class="tab ${state.tab === id ? "on" : ""}" data-act="tab" data-id="${id}" role="tab" aria-selected="${state.tab === id}">${icon}${label}${busy ? `<span class="tab-busy" title="${busy} rendering">${busy}</span>` : ""}</button>`;
   }).join("");
@@ -302,14 +339,14 @@ function renderHeader() {
 }
 
 // Why this tab can't render, when its models aren't installed.
-const missingWhy = () => (isImage() ? OPT.image.missing : isKlein() ? OPT.klein.missing : OPT.missing) || "";
+const missingWhy = () => (isImage() ? OPT.image.missing : isKlein() ? OPT.klein.missing : isPruna() ? OPT.pruna.missing : OPT.missing) || "";
 
 const tabClips = () => state.clips.filter((c) => tabOf(c) === state.tab);
 // Starred is hidden for now (the stars are kept with each clip): the grid shows everything.
 const filteredClips = () => tabClips();
 
 function renderFilters() {
-  const n = pickedHere().length, what = isImage() || isKlein() ? (n === 1 ? "image" : "images") : n === 1 ? "video" : "videos";
+  const n = pickedHere().length, what = imageTab() ? (n === 1 ? "image" : "images") : n === 1 ? "video" : "videos";
   $("filters").innerHTML = `<span class="chip on count">All · ${tabClips().length}</span>`
     + `<label class="chip import" title="Bring in a video or image made earlier. Its prompt and settings are read from the file. A .zip from Export .zip brings its reference images too. You can also drop files on the page.">${ICON.upload}Import
         <input type="file" accept="video/*,image/png,image/jpeg,image/webp,.zip,application/zip" multiple data-change="importFiles"></label>`
@@ -362,11 +399,11 @@ function renderGrid() {
   grid.classList.toggle("picking", pickedHere().length > 0);
   $("perRow").value = state.perRow;
   $("perRowVal").textContent = state.perRow;
-  $("perRowLabel").textContent = isImage() ? "Images per row" : "Videos per row";
+  $("perRowLabel").textContent = imageTab() ? "Images per row" : "Videos per row";
   const clips = filteredClips();
   if (!clips.length) {
     tileKeys = new WeakMap();
-    grid.innerHTML = `<div class="empty">${state.ready ? (state.filter === "starred" ? (isImage() ? "No starred images yet." : "No starred clips yet.") : isImage() ? "No images yet. Describe one below and press the arrow button." : "Nothing here yet. Write a prompt below and press the arrow button.")
+    grid.innerHTML = `<div class="empty">${state.ready ? (state.filter === "starred" ? (isImage() ? "No starred images yet." : "No starred clips yet.") : imageTab() ? (sheetOn() ? "No sheets yet. Add a character picture below, pick the views and press the arrow button." : "No images yet. Describe one below and press the arrow button.") : "Nothing here yet. Write a prompt below and press the arrow button.")
       : state.loadError ? `The MiniMax H3 Vision server answered with an error, so nothing could be loaded. Trying again…<br><span class="fail-why">${esc(state.loadError.slice(0, 300))}</span>` : "Loading…"}</div>`;
     return;
   }
@@ -436,8 +473,8 @@ function imageTile(c) {
           <button class="cancel" data-act="cancel" data-id="${c.id}">Cancel</button></span>` : ""}
         ${failed ? `<span class="busy failed"><span>Render failed</span><span class="fail-why">${esc(c.error || "")}</span>
           <button class="cancel" data-act="deleteClip" data-id="${c.id}">Remove</button></span>` : ""}
-        <span class="len">${c.family === "klein" && c.width ? c.width + "×" + c.height : c.aspect}</span>
-        ${done && isKlein() ? `<button class="edit-this" data-act="editThis" data-id="${c.id}" title="Put this image in image 1 and keep editing it">Edit this</button>` : ""}
+        <span class="len">${c.mode === "sheet" ? "Sheet" : (c.family === "klein" || c.family === "ph3") && c.width ? c.width + "×" + c.height : c.aspect}</span>
+        ${done && isSlotTab() ? `<button class="edit-this" data-act="editThis" data-id="${c.id}" title="Put this image in ${isPruna() ? "picture 1" : "image 1"} and keep editing it">Edit this</button>` : ""}
         <button class="pick ${state.picked.has(c.id) ? "on" : ""}" data-act="pick" data-id="${c.id}" role="checkbox" aria-checked="${state.picked.has(c.id)}" aria-label="Select for Delete" title="Select (⌘-click or Shift-click the tiles for more)">${ICON.check}</button>
       </div>
     </div>`;
@@ -465,8 +502,52 @@ function renderNegative() {
   box.placeholder = "No negative prompt";
 }
 
+// The Pruna tab's parts of the prompt bar: the Image / Character sheet switch, the sheet's views, the Enhance
+// prompt switch and "What the model gets".
+function renderPrunaBar() {
+  const on = isPruna();
+  $("prunaMode").hidden = !on;
+  $("sheetViews").hidden = !sheetOn();
+  $("enhanceToggle").hidden = !on;
+  $("prunaSent").hidden = !on;
+  if (!on) return;
+  $("prunaMode").innerHTML = `<div class="seg">${[["image", "Image"], ["sheet", "Character sheet"]].map(([id, label]) =>
+    `<button class="${state.prunaMode === id ? "on" : ""}" data-act="prunaMode" data-id="${id}" aria-pressed="${state.prunaMode === id}">${label}</button>`).join("")}</div>
+    <span class="hint">${sheetOn() ? "A sheet of one character from several sides, drawn from its picture." : "Make a picture, or edit picture 1 with up to eight more as references."}</span>`;
+  const en = state.prunaSettings.enhance;
+  $("enhanceToggle").innerHTML = (en ? "− " : "+ ") + "Enhance prompt" + (en ? " · on" : "");
+  $("enhanceToggle").classList.toggle("on", en);
+  $("enhanceToggle").setAttribute("aria-pressed", en);
+  $("enhanceToggle").disabled = !OPT.pruna.enhance && !en;
+  $("enhanceToggle").title = OPT.pruna.enhance
+    ? "Runs Pruna's prompt upsampler first: it rewrites your text into a long, detailed prompt for the model (a few seconds more). Off, your text goes to the model as it is."
+    : "Enhance prompt needs Pruna's prompt upsampler (p-h3-image_prompt_upsampler_bf16.safetensors) in models/text_encoders.";
+  const sent = prunaSent();
+  $("prunaSentText").textContent = sent ? sent + (en ? "\n\n→ Pruna's upsampler rewrites this first. What it wrote is on the picture's page afterwards." : "")
+    : sheetOn() ? "Pick at least one view." : "Write a prompt.";
+  if (!sheetOn()) return;
+  const sh = state.prunaSheet, L = sheetLayout();
+  const row = (label, keys) => `<div class="view-row"><span class="view-label">${label}</span>${keys.map((k) =>
+    `<button class="chip ${sh.views.includes(k) ? "on" : ""}" data-act="sheetView" data-id="${k}" aria-pressed="${sh.views.includes(k)}">${SHEET_VIEWS[k][1]}</button>`).join("")}</div>`;
+  // A small drawing of the sheet: heads (two to a column when stacked), tall full-body panels, a close-up column.
+  const u = 34, cell = (w) => `<i style="width:${w}px"></i>`;
+  let lay = "";
+  if (L.stacked) for (let c = 0; c < Math.ceil(L.heads.length / 2); c++) lay += `<span class="col" style="width:${0.5 * u}px"><i></i>${L.heads[c * 2 + 1] ? "<i></i>" : '<i class="none"></i>'}</span>`;
+  else lay += L.heads.map(() => cell(0.62 * u)).join("");
+  lay += L.bodies.map(() => cell(0.46 * u)).join("");
+  if (L.close.length) lay += `<span class="col" style="width:${0.5 * u}px">${L.close.map(() => "<i></i>").join("")}</span>`;
+  $("sheetViews").innerHTML = `
+    <div class="view-row"><span class="view-label">Preset</span>${Object.entries(SHEET_PRESETS).map(([k, p]) =>
+      `<button class="chip preset ${sh.preset === k ? "on" : ""}" data-act="sheetPreset" data-id="${k}">${p.name}</button>`).join("")}
+      <span class="sheet-layout" title="The sheet's layout: ${L.ratioText}">${lay}</span></div>
+    ${row("Head", ["head_front", "head_3q", "head_side", "head_back"])}
+    ${row("Full body", ["body_front", "body_3q", "body_side", "body_back"])}
+    ${row("Close-ups", ["hands", "feet"])}`;
+}
+
 function renderRefs() {
   renderNegative();
+  renderPrunaBar();
   // Reset (top right of the prompt) shows when there is something to clear.
   $("resetPrompt").hidden = !(state.prompt.trim() || (hasSlots() ? slots().some(Boolean) : !isImage() && state.attached.length));
   if (hasSlots()) { renderSlots(); return; }
@@ -527,30 +608,105 @@ function kleinSize(s = state.kleinSettings) {
   }
   return dims(s.size === "match" ? "1:1" : s.aspect, s.res, "klein");
 }
+// The size a Pruna picture comes out at: picture 1's shape (Match picture 1) or an aspect ratio, in steps of 32;
+// a character sheet's shape comes from its views. 1 MP is 1024×1024, as in ComfyUI's Resolution Selector.
+function prunaSize(s = state.prunaSettings) {
+  const fit = (w0, h0, mp) => { const k = Math.sqrt((mp * 1024 * 1024) / (w0 * h0)); return [Math.max(32, Math.round((w0 * k) / 32) * 32), Math.max(32, Math.round((h0 * k) / 32) * 32)]; };
+  if (sheetOn()) return fit(sheetLayout().ratio * 1000, 1000, s.sheetRes);
+  const r = slotRef(0, state.prunaSlots);
+  if (s.size === "match" && r && r.w) return fit(r.w, r.h, s.res);
+  return dims(s.size === "match" ? "1:1" : s.aspect, s.res, "pruna");
+}
+
+/* The Pruna tab's character sheet: the views to draw, as one row on a plain background. */
+const SHEET_VIEWS = {
+  head_front: ["Head", "Front", "a front-facing head-and-shoulders portrait, both eyes visible"],
+  head_3q: ["Head", "¾", "a three-quarter head-and-shoulders portrait, turned 45 degrees"],
+  head_side: ["Head", "Profile", "a strict side-profile head-and-shoulders portrait, one eye visible"],
+  head_back: ["Head", "Back", "the back of the head and shoulders, no face visible"],
+  body_front: ["Full body", "Front", "a full-body front view, neutral standing pose"],
+  body_3q: ["Full body", "¾", "a full-body three-quarter view"],
+  body_side: ["Full body", "Side", "a full-body side view, facing right"],
+  body_back: ["Full body", "Back", "a full-body back view, no face visible"],
+  hands: ["Close-up", "Hands", "a close-up of both hands"],
+  feet: ["Close-up", "Feet / shoes", "a close-up of both feet or shoes"],
+};
+const SHEET_PRESETS = {
+  turnaround: { name: "Turnaround · 4", views: ["body_front", "body_3q", "body_side", "body_back"] },
+  standard: { name: "Standard · 5", views: ["head_front", "head_side", "body_front", "body_side", "body_back"] },
+  full: { name: "Full · 8", views: ["head_front", "head_3q", "head_side", "head_back", "body_front", "body_3q", "body_side", "body_back"] },
+  faces: { name: "Faces · 4", views: ["head_front", "head_3q", "head_side", "head_back"] },
+};
+const SHEET_ROLES = { face: "Face", outfit: "Outfit", detail: "Detail" };
+const SHEET_BGS = ["white", "light grey", "neutral studio"];
+// Heads stack two to a column when there are more than two, full-body views are tall panels and the close-ups
+// share one column. ratio is the sheet's width over its height.
+function sheetLayout(views = state.prunaSheet.views) {
+  const heads = views.filter((v) => v.startsWith("head")), bodies = views.filter((v) => v.startsWith("body")), close = views.filter((v) => v === "hands" || v === "feet");
+  const stacked = heads.length > 2;
+  const ratio = Math.max(0.6, (stacked ? Math.ceil(heads.length / 2) * 0.5 : heads.length * 0.62) + bodies.length * 0.46 + (close.length ? 0.5 : 0));
+  return { heads, bodies, close, stacked, ratio, ratioText: ratio >= 1 ? ratio.toFixed(1).replace(/\.0$/, "") + ":1" : "1:" + (1 / ratio).toFixed(1).replace(/\.0$/, "") };
+}
+// The slots in the order the model gets them: <Picture 1> is the first filled one.
+const filledSlots = (list = slots()) => list.map((id, i) => (id ? i : -1)).filter((i) => i >= 0);
+// The sheet's text, as the model reads it.
+function sheetText(sh = state.prunaSheet, list = state.prunaSheetSlots, notes = state.drafts.prunaSheet) {
+  if (sheetOn()) notes = state.prompt;
+  const order = filledSlots(list), L = sheetLayout(sh.views);
+  const views = Object.keys(SHEET_VIEWS).filter((v) => sh.views.includes(v)).map((v) => SHEET_VIEWS[v][2]);
+  if (!views.length) return "";
+  const helps = order.filter((i) => i > 0).map((i) => `Use <Picture ${order.indexOf(i) + 1}> for the ${sh.roles[i] === "detail" ? "details" : sh.roles[i]}.`);
+  // It starts "Edit <Picture 1>", as P-H3-Image expects when it gets pictures, so the model doesn't add it again.
+  return `Edit <Picture 1>: make a character reference sheet of this character, on a plain ${sh.bg} background with clear gaps between the views. `
+    + `From left to right: ${views.join("; ")}. `
+    + (L.stacked ? "The head views are stacked in two rows on the left. " : "")
+    + "Same identity, face, hair, outfit, colours and proportions in every view; full figures from the top of the head to the soles with space above and below. No text, labels or borders."
+    + (helps.length ? " " + helps.join(" ") : "") + ((notes || "").trim() ? " " + notes.trim().replace(/[^.!?]$/, "$&.") : "");
+}
+// What P-H3-Image (or with Enhance, its prompt upsampler) gets, as the server sends it.
+const PH3_RATIOS = { "1:1": 1, "4:3": 4 / 3, "3:2": 1.5, "16:9": 16 / 9, "21:9": 21 / 9, "3:1": 3, "4:1": 4, "3:4": 3 / 4, "2:3": 2 / 3, "9:16": 9 / 16 };
+function prunaSent() {
+  const [w, h] = prunaSize(), enhance = state.prunaSettings.enhance;
+  const order = filledSlots();
+  let text = sheetOn() ? sheetText()
+    : state.prompt.trim().replace(/\bpicture\s?([1-9])\b/gi, (m, n) => { const k = order.indexOf(n - 1); return k < 0 ? m : `<Picture ${k + 1}>`; });
+  if (!text) return "";
+  if (enhance) {
+    const ar = Object.keys(PH3_RATIOS).reduce((a, b) => (Math.abs(Math.log(PH3_RATIOS[b] / (w / h))) < Math.abs(Math.log(PH3_RATIOS[a] / (w / h))) ? b : a));
+    return `Aspect ratio: ${ar}\nRequest: ${text}`;
+  }
+  return order.length && !/^\s*(Edit <Picture \d+>|subject_definitions:)/.test(text) ? "Edit <Picture 1>. " + text : text;
+}
+
 // The slots the prompt names that have nothing in them.
-const emptyNamed = (text = state.prompt) => [...new Set([...text.matchAll(/\bimage\s?([1-4])\b/gi)].map((m) => Number(m[1])))]
-  .filter((n) => !state.kleinSlots[n - 1]).sort();
+const emptyNamed = (text = state.prompt) => (sheetOn() || !isSlotTab() ? []
+  : [...new Set([...text.matchAll(slotRe())].map((m) => Number(m[1])))].filter((n) => !slots()[n - 1]).sort());
 function renderSlots() {
   $("refs").hidden = false;
   document.querySelector(".composer").classList.remove("no-refs");
   if (editOn()) { renderEditSlot(); return; }
-  const filled = state.kleinSlots.filter(Boolean).length, empty = emptyNamed();
+  const list = slots(), filled = list.filter(Boolean).length, empty = emptyNamed(), word = isPruna() ? "picture" : "image";
   $("hint").textContent = empty.length
-    ? `The prompt names ${empty.map((n) => "image " + n).join(" and ")}, but ${empty.length > 1 ? "those slots are" : "that slot is"} empty`
+    ? `The prompt names ${empty.map((n) => word + " " + n).join(" and ")}, but ${empty.length > 1 ? "those slots are" : "that slot is"} empty`
+    : sheetOn() ? (list[0] ? `${state.prunaSheet.views.length} view${state.prunaSheet.views.length === 1 ? "" : "s"} · the extra pictures help with the face, outfit or details` : "Add the character to draw")
+    : isPruna() ? (filled ? `${filled} of 9 pictures · picture 1 is edited, the others are references` : "No pictures: it makes one from the prompt alone")
     : filled ? `${filled} of 4 pictures · drag one onto another slot to swap them` : "No pictures: Klein makes one from the prompt alone";
   $("hint").classList.toggle("warn", empty.length > 0);
-  $("refs").innerHTML = state.kleinSlots.map((id, i) => {
-    const r = slotRef(i);
-    if (!r) return `<div class="ref slot">
-        <button class="slot-empty" data-act="pickSlot" data-id="${i}" data-slot="${i}" aria-label="Add image ${i + 1}" title="Add a picture here: click, or drag one in from the grid, Add image or your computer">${ICON.plus}image ${i + 1}</button>
-        <span class="slot-res"></span></div>`;
+  // Pruna's Image shows every filled slot and one more (at least four, at most nine).
+  const shown = isPruna() && !sheetOn() ? Math.min(9, Math.max(4, list.map(Boolean).lastIndexOf(true) + 2)) : list.length;
+  $("refs").innerHTML = list.slice(0, shown).map((id, i) => {
+    const r = slotRef(i), name = slotWord(i);
+    const role = sheetOn() && i > 0 ? `<select class="slot-role" data-change="sheetRole" data-id="${i}" aria-label="What picture ${i + 1} shows">${Object.entries(SHEET_ROLES).map(([k, v]) => `<option value="${k}" ${state.prunaSheet.roles[i] === k ? "selected" : ""}>${v}</option>`).join("")}</select>` : "";
+    if (!r) return `<div class="ref slot ${sheetOn() && !i ? "first" : ""}">
+        <button class="slot-empty" data-act="pickSlot" data-id="${i}" data-slot="${i}" aria-label="Add ${name}" title="Add a picture here: click, or drag one in from the grid, Add image or your computer">${ICON.plus}${name}</button>
+        <span class="slot-res"></span>${role}</div>`;
     refSize(r);
     return `<div class="ref slot used">
-        <span class="ref-pic slot-pic" style="background:${r.tone}" draggable="true" data-drag-slot="${i}" data-slot="${i}" data-act="showSlot" data-id="${i}" title="image ${i + 1}: @${esc(r.name)}. Click to open Add image and replace it. Drag it into the prompt to put “image ${i + 1}” at the cursor, or onto another slot to swap them.">
-          <img src="${r.img}" alt="" draggable="false"><span class="slot-name">image ${i + 1}</span>
-          <button class="ref-x" data-act="clearSlot" data-id="${i}" aria-label="Empty image ${i + 1}">${ICON.x}</button>
+        <span class="ref-pic slot-pic" style="background:${r.tone}" draggable="true" data-drag-slot="${i}" data-slot="${i}" data-act="showSlot" data-id="${i}" title="${name}: @${esc(r.name)}. Click to open Add image and replace it.${sheetOn() ? "" : ` Drag it into the prompt to put “${name}” at the cursor, or onto another slot to swap them.`}">
+          <img src="${r.img}" alt="" draggable="false"><span class="slot-name">${name}</span>
+          <button class="ref-x" data-act="clearSlot" data-id="${i}" aria-label="Empty ${name}">${ICON.x}</button>
         </span>
-        <span class="slot-res">${r.w ? r.w + "×" + r.h : ""}</span></div>`;
+        <span class="slot-res">${r.w ? r.w + "×" + r.h : ""}</span>${role}</div>`;
   }).join("") + `<button class="add-ref" id="addRef" data-act="openLibrary" aria-expanded="${state.library.open}">${ICON.plus}Add image</button>`;
 }
 // The Image tab's Edit slot: the picture to edit, with its size under it.
@@ -579,10 +735,10 @@ function putInSlot(ref, slot = -1) {
   const list = slots();
   if (slot < 0) slot = list.indexOf(null);
   if (slot < 0 && editOn()) slot = 0;   // Edit has one slot: a new picture replaces it
-  if (slot < 0) { say("All four slots are full. Drop it on one to replace that picture."); return -1; }
+  if (slot < 0) { say("All the slots are full. Drop it on one to replace that picture."); return -1; }
   list[slot] = ref.id;
   render();
-  say(isKlein() ? `@${ref.name} is image ${slot + 1}.` : `Editing @${ref.name}.`);
+  say(isSlotTab() ? `@${ref.name} is ${sheetOn() ? "the " : ""}${slotWord(slot)}.` : `Editing @${ref.name}.`);
   return slot;
 }
 
@@ -592,6 +748,8 @@ function renderPrompt() {
     : `<span class="ph">${editOn() ? "Describe only the change, for example: Change only the pink blazer to a plain black wool coat. Keep the faces, poses and background unchanged."
       : isImage() ? "Describe an image, for example: a neon sign that says \"OPEN ALL NIGHT\" in the rain."
       : isKlein() ? "Describe the edit. Call the pictures image 1, image 2, image 3 and image 4, for example: put the bag from image 2 in the hand of the woman in image 1."
+      : sheetOn() ? "Optional notes for the sheet, for example: keep the scarf, no weapon."
+      : isPruna() ? "Describe a picture, or the edit to picture 1. Call the pictures picture 1, picture 2 …, for example: put the lamp from picture 2 on the table in picture 1."
       : "Describe a shot. Type @ to use one of your images."}</span>`;
   if ($("prompt").value !== state.prompt) $("prompt").value = state.prompt;
   fitPrompt();
@@ -600,7 +758,7 @@ function renderPrompt() {
 
 /* @-mentions */
 function mentionQuery() {
-  if (state.mentionClosed || isImage() || isKlein()) return null;
+  if (state.mentionClosed || imageTab()) return null;
   const m = /(^|\s)@([A-Za-z0-9_]*)$/.exec(state.prompt.slice(0, state.caret));
   return m ? m[2] : null;
 }
@@ -803,11 +961,12 @@ function libButton(refId, inBar) {
     if (refId && state.imageEditSlot[0] === refId) return `<button class="btn lib-add" data-act="libToggle">Don't edit this picture</button>`;
     return `<button class="btn primary lib-add" data-act="libToggle">Edit this picture</button>`;
   }
-  if (isKlein()) {
-    const at = refId ? state.kleinSlots.indexOf(refId) : -1;
-    const to = state.library.slot != null ? state.library.slot : state.kleinSlots.indexOf(null);
-    if (at >= 0) return `<button class="btn lib-add" data-act="libToggle">Take out of image ${at + 1}</button>`;
-    return `<button class="btn primary lib-add" data-act="libToggle" ${to < 0 ? "disabled" : ""}>${to < 0 ? "All four slots are full" : "Put in image " + (to + 1)}</button>`;
+  if (isSlotTab()) {
+    const list = slots();
+    const at = refId ? list.indexOf(refId) : -1;
+    const to = state.library.slot != null ? state.library.slot : list.indexOf(null);
+    if (at >= 0) return `<button class="btn lib-add" data-act="libToggle">Take out of ${sheetOn() ? "the " : ""}${slotWord(at)}</button>`;
+    return `<button class="btn primary lib-add" data-act="libToggle" ${to < 0 ? "disabled" : ""}>${to < 0 ? "All the slots are full" : "Put in " + (sheetOn() ? "the " : "") + slotWord(to)}</button>`;
   }
   return `<button class="btn ${inBar ? "" : "primary"} lib-add" data-act="libToggle">${inBar ? "Remove from prompt" : "Add to prompt"}</button>`;
 }
@@ -847,6 +1006,7 @@ function renderSettings() {
   const minSteps = model.minSteps || 1, stepSize = model.stepSize || 1;
   const recPct = ((model.steps - minSteps) / (model.maxSteps - minSteps)) * 100;
   if (isKlein()) { box.innerHTML = kleinSettingsHTML(s, model, T, minSteps, stepSize, recPct); return; }
+  if (isPruna()) { box.innerHTML = prunaSettingsHTML(s, model, T); return; }
   box.innerHTML = `
     <div class="field">
       <label class="label" for="model">Model</label>
@@ -957,6 +1117,69 @@ function kleinSettingsHTML(s, model, T, minSteps, stepSize, recPct) {
     </div>
 
     ${model.base ? guidanceField(s, model) : ""}
+
+    <div class="field">
+      <span class="label">Seed</span>
+      <div class="seed-row">
+        <div class="seg">
+          <button class="${s.seedMode === "random" ? "on" : ""}" data-act="seedMode" data-id="random">Random</button>
+          <button class="${s.seedMode === "fixed" ? "on" : ""}" data-act="seedMode" data-id="fixed">Fixed</button>
+        </div>
+        ${s.seedMode === "fixed"
+          ? `<input class="seed-input" inputmode="numeric" aria-label="Seed number" value="${s.seed}" data-change="seed">
+             <button class="icon-btn" data-act="rollSeed" aria-label="New random seed">${ICON.dice}</button>`
+          : `<span class="seed-note">A new seed every run, saved with each image.</span>`}
+      </div>
+    </div>
+
+    ${lorasField(s)}`;
+}
+
+// The Pruna tab's settings: Model, Aspect ratio (Match picture 1) or the sheet's shape and background,
+// Resolution (1-8 MP), Steps (always 8), Seed, LoRAs (the loras/P-H3 Image folder).
+function prunaSettingsHTML(s, model, T) {
+  const r1 = slotRef(0, state.prunaSlots), [w, h] = prunaSize(s), mp = sheetOn() ? s.sheetRes : s.res;
+  const sizeOf = (v) => prunaSize({ ...s, res: v, sheetRes: v }).join("×");
+  return `
+    <div class="field">
+      <label class="label" for="model">Model</label>
+      ${T.models.length > 1 ? `<select class="select" id="model" data-change="model">
+        ${T.models.map((m) => `<option value="${esc(m.name)}" ${m.name === s.model ? "selected" : ""}>${esc(m.name)}</option>`).join("")}
+      </select>` : `<div class="fixed-field">${esc(model.name)}</div>`}
+      <span class="hint">${model.id === "lora" ? "MiniMax H3's FL2VA model with Pruna's P-H3-Image LoRA." : "Pruna's full P-H3-Image model."}</span>
+    </div>
+
+    ${sheetOn() ? `<div class="field">
+      <span class="label">Sheet shape</span>
+      <div class="fixed-field">${sheetLayout().ratioText}<small>set by the views you pick</small></div>
+    </div>
+    <div class="field">
+      <span class="label">Background</span>
+      <div class="seg">${SHEET_BGS.map((b) => `<button class="${state.prunaSheet.bg === b ? "on" : ""}" data-act="sheetBg" data-id="${b}">${b[0].toUpperCase() + b.slice(1)}</button>`).join("")}</div>
+    </div>` : `<div class="field">
+      <span class="label">Aspect ratio</span>
+      <div class="aspects five klein-sizes">
+        <button class="match ${s.size === "match" ? "on" : ""}" data-act="sizeMatch">Match picture 1<small>${r1 ? (r1.w ? r1.w + "×" + r1.h : "picture 1") : "picture 1 is empty: 1:1"}</small></button>
+        ${Object.keys(T.aspects).map((a) => {
+          const [aw, ah] = T.aspects[a];
+          const k = 24 / Math.max(aw, ah);
+          return `<button class="${s.size !== "match" && a === s.aspect ? "on" : ""}" data-act="aspect" data-id="${a}"><i style="width:${Math.round(aw * k)}px;height:${Math.round(ah * k)}px"></i>${a}</button>`;
+        }).join("")}
+      </div>
+    </div>`}
+
+    <div class="field">
+      <label class="label" for="res">Resolution</label>
+      <select class="select" id="res" data-change="res">
+        ${T.megapixels.map((v) => `<option value="${v}" ${v === mp ? "selected" : ""}>${mpText(v)} (${sizeOf(v)})${v === (sheetOn() ? 8 : 4) ? " · recommended" : ""}</option>`).join("")}
+      </select>
+      <span class="hint">Renders at ${w}×${h}. ${sheetOn() ? "8 MP keeps the faces sharp on a wide sheet." : "8 MP is the model's own size, and the slowest."}</span>
+    </div>
+
+    <div class="field">
+      <span class="label">Steps</span>
+      <div class="fixed-field">${OPT.pruna.steps || 8}<small>a fixed schedule: more steps don't help</small></div>
+    </div>
 
     <div class="field">
       <span class="label">Seed</span>
@@ -1137,6 +1360,7 @@ const negativeDefault = (modelName) => (OPT.image.models.find((m) => m.name === 
 
 function renderImageSide(c) {
   if (c.family === "klein") { renderKleinSide(c); return; }
+  if (c.family === "ph3") { renderPrunaSide(c); return; }
   $("clipSide").innerHTML = `
     <div class="field">
       <span class="label">Prompt</span>
@@ -1159,6 +1383,7 @@ function renderImageSide(c) {
     <div class="actions">
       <button class="btn accent" data-act="useInVideo" ${c.status === "done" ? "" : "disabled"}>${ICON.video}Use in a video</button>
       <button class="btn" data-act="editThis" ${c.status === "done" ? "" : "disabled"}>${ICON.klein}Edit in Klein</button>
+      <button class="btn" data-act="editInPruna" ${c.status === "done" ? "" : "disabled"}>${ICON.pruna}Edit in Pruna</button>
       <button class="btn primary" data-act="reuse">Use this prompt and settings</button>
       <button class="btn" data-act="keepSeed">Keep this seed</button>
       <div class="actions-grid">
@@ -1213,6 +1438,58 @@ function renderKleinSide(c) {
       <button class="btn accent" data-act="editThis" ${done ? "" : "disabled"}>${ICON.klein}Edit this</button>
       <button class="btn" data-act="useInVideo" ${done ? "" : "disabled"}>${ICON.video}Use in a video</button>
       <button class="btn primary" data-act="reuse">Use this prompt and settings</button>
+      <button class="btn" data-act="keepSeed">Keep this seed</button>
+      <div class="actions-grid">
+        <button class="btn" data-act="download" ${done ? "" : "disabled"}>Download</button>
+        <button class="btn danger" data-act="deleteClip">Delete</button>
+      </div>
+    </div>`;
+}
+
+// A Pruna image's page: what you wrote (or the sheet's views), the pictures, what the model got (and with Enhance,
+// what the upsampler wrote), and the settings.
+function renderPrunaSide(c) {
+  const sheet = c.mode === "sheet", done = c.status === "done";
+  const count = sheet ? 4 : 9, list = (c.slots || []).concat(Array(count).fill(null)).slice(0, count);
+  const roles = (c.sheet && c.sheet.roles) || ["character", "face", "outfit", "detail"];
+  const name = (i) => (sheet ? (i ? roles[i] : "character") : "picture " + (i + 1));
+  const shown = sheet ? list : list.slice(0, Math.max(1, list.map(Boolean).lastIndexOf(true) + 1));
+  const views = sheet && c.sheet ? Object.keys(SHEET_VIEWS).filter((v) => c.sheet.views.includes(v)).map((v) => SHEET_VIEWS[v][0] + " " + SHEET_VIEWS[v][1].toLowerCase()) : [];
+  $("clipSide").innerHTML = `
+    <div class="field">
+      <span class="label">${sheet ? "Notes" : "Prompt"}</span>
+      <div class="prompt-box"><p class="clip-prompt">${sheet && c.prompt === "Character sheet" ? '<span class="label">None</span>' : promptHTML(c.prompt, sheet ? "prunaSheet" : "pruna", list.map((x) => x && x.id))}</p>
+        <button class="copy prompt-copy" data-act="copyPrompt" aria-label="Copy the prompt" title="Copy the prompt">${ICON.copy}</button></div>
+    </div>
+    ${sheet ? `<div class="field"><span class="label">Views</span><p class="sheet-views-text">${views.map(esc).join(" · ")}</p></div>` : ""}
+    ${list.some(Boolean) ? `<div class="field">
+      <span class="label">Pictures</span>
+      <div class="side-slots">${shown.map((x, i) => {
+        const r = x && state.refs.find((y) => y.id === x.id);
+        if (r) refSize(r);
+        return `<div class="side-slot ${x ? "" : "vacant"}" title="${x ? name(i) + ": @" + esc(x.name) : name(i) + " was empty"}">
+          <span class="side-pic" style="background:${r ? r.tone : "transparent"}">${r ? `<img src="${r.img}" alt="">` : x ? "?" : ""}</span>
+          <span class="side-name">${esc(name(i))}</span><span class="slot-res">${r && r.w ? r.w + "×" + r.h : x ? "@" + esc(x.name) : "empty"}</span></div>`;
+      }).join("")}</div>
+    </div>` : ""}
+    ${c.sent ? `<details class="sent-box" ${c.upsampled ? "" : "open"}><summary>${c.enhance ? "Your request, as the upsampler got it" : "What the model got"}</summary><pre>${esc(c.sent)}</pre></details>` : ""}
+    ${c.enhance ? `<div class="field"><span class="label">What the upsampler wrote (what the model got)</span>
+      ${c.upsampled ? `<pre class="upsampled">${esc(c.upsampled)}</pre>` : `<span class="hint">${isBusy(c) ? "Shows here when the picture is done." : "Not recorded."}</span>`}</div>` : ""}
+    <dl class="facts">
+      <dt>Model</dt><dd>${esc(c.model)}</dd>
+      <dt>Kind</dt><dd>${sheet ? "Character sheet" : list.some(Boolean) ? "Edit of picture 1" : "From the prompt"}</dd>
+      <dt>Enhance</dt><dd>${c.enhance ? "On" : "Off"}</dd>
+      <dt>Steps</dt><dd>${c.steps}</dd>
+      <dt>Size</dt><dd>${sheet ? "Sheet" : c.size && c.size !== "match" ? esc(c.size) : list[0] ? "Match picture 1" : "1:1"} · ${c.width}×${c.height} (${mpText(c.res)})</dd>
+      <dt>Seed</dt><dd class="seed-dd">${c.seed}<button class="copy" data-act="copySeed" aria-label="Copy seed">${ICON.copy}</button></dd>
+      <dt>LoRAs</dt><dd>${c.loras.length ? c.loras.map((l) => esc(loraText(l))).join("<br>") : '<span class="label">None</span>'}</dd>
+    </dl>
+    ${c.imported ? `<p class="hint imported">Imported from ${esc(c.imported)}.</p>` : ""}
+    <div class="actions">
+      <button class="btn accent" data-act="editThis" ${done ? "" : "disabled"}>${ICON.pruna}Edit this</button>
+      <button class="btn" data-act="useInVideo" ${done ? "" : "disabled"}>${ICON.video}Use in a video</button>
+      <button class="btn primary" data-act="reuse">Use this prompt and settings</button>
+      ${c.upsampled ? `<button class="btn" data-act="useUpsampled">Use the upsampled prompt</button>` : ""}
       <button class="btn" data-act="keepSeed">Keep this seed</button>
       <div class="actions-grid">
         <button class="btn" data-act="download" ${done ? "" : "disabled"}>Download</button>
@@ -1383,9 +1660,10 @@ async function generate() {
   if (!state.ready) { say("MiniMax H3 Vision hasn't loaded from the server yet."); return; }
   const s = state.settings;
   const prompt = state.prompt.trim();
+  if (isPruna()) { generatePruna(prompt); return; }
   if (!prompt) { say("Write a prompt first."); return; }
   const names = new Set(state.refs.map((r) => r.name));
-  const unknown = isImage() || isKlein() ? null : mentionsIn(prompt).find((n) => !names.has(n));
+  const unknown = imageTab() ? null : mentionsIn(prompt).find((n) => !names.has(n));
   if (unknown) { say("There is no image called @" + unknown + "."); return; }
   if (editOn() && !state.imageEditSlot[0]) { say("Add the picture to edit first (or switch Edit off)."); return; }
   const empty = isKlein() ? emptyNamed(prompt) : [];
@@ -1396,6 +1674,24 @@ async function generate() {
   try {
     const { clip } = await api("POST", "generate", { prompt, settings: s, kind: state.tab, negative: isImage() ? state.negative : undefined,
       slots: isKlein() ? state.kleinSlots : undefined, edit: editOn() ? state.imageEditSlot[0] : undefined });
+    upsertClip(clip);
+  } catch (error) {
+    say(error.message);
+  }
+}
+
+// A Pruna picture: Image (a prompt, and picture 1-9) or a character sheet (the character, its helpers and views).
+async function generatePruna(prompt) {
+  const sheet = sheetOn(), list = slots();
+  if (sheet && !list[0]) { say("Add the character picture first."); return; }
+  if (!sheet && !prompt) { say("Write a prompt first."); return; }
+  const empty = emptyNamed(prompt);
+  if (empty.length) { say(`The prompt names ${empty.map((n) => "picture " + n).join(" and ")}, but ${empty.length > 1 ? "those slots are" : "that slot is"} empty. Fill it, or change the prompt.`); return; }
+  state.settingsOpen = false;
+  render();
+  try {
+    const { clip } = await api("POST", "generate", { kind: "pruna", mode: state.prunaMode, prompt, settings: state.prunaSettings, slots: list,
+      sheet: sheet ? { text: sheetText(), ratio: sheetLayout().ratio, ...state.prunaSheet } : undefined });
     upsertClip(clip);
   } catch (error) {
     say(error.message);
@@ -1471,7 +1767,8 @@ function openMenu(id, x, y) {
       : `<button role="menuitem" data-act="menuAddToEdit" ${c.status === "done" && c.file ? "" : 'aria-disabled="true" class="off"'}>${ICON.edit}Add to edit</button>`) : ""}
     <button role="menuitem" data-act="menuReuse">${ICON.reuse}Use this prompt and settings</button>${kindOf(c) === "image" ? `
     <button role="menuitem" data-act="menuUseInVideo" ${c.status === "done" ? "" : 'aria-disabled="true" class="off"'}>${ICON.video}Use in a video</button>
-    <button role="menuitem" data-act="menuEditThis" ${c.status === "done" ? "" : 'aria-disabled="true" class="off"'}>${ICON.klein}${tabOf(c) === "klein" ? "Edit this (image 1)" : "Edit in Klein (image 1)"}</button>` : ""}`;
+    <button role="menuitem" data-act="menuEditThis" ${c.status === "done" ? "" : 'aria-disabled="true" class="off"'}>${tabOf(c) === "pruna" ? ICON.pruna + "Edit this (picture 1)" : ICON.klein + (tabOf(c) === "klein" ? "Edit this (image 1)" : "Edit in Klein (image 1)")}</button>${tabOf(c) === "pruna" ? "" : `
+    <button role="menuitem" data-act="menuEditInPruna" ${c.status === "done" ? "" : 'aria-disabled="true" class="off"'}>${ICON.pruna}Edit in Pruna (picture 1)</button>`}` : ""}`;
   m.hidden = false;
   // Keep the whole menu inside the window.
   const r = m.getBoundingClientRect();
@@ -1541,17 +1838,18 @@ const LM = { open: false, q: "", sel: 0, sizes: {}, busy: false, all: false };
 // LoRAs are sorted by model in folders inside models/loras: "MiniMax H3" for the Video tab, "MOSS Image" for the
 // Image tab, "Flux Klein" for Klein. Each tab lists its own folder and the loose files in loras itself
 // ("Not sorted"); Show all lists every folder. Folder names are matched loosely (minimax_h3, moss, klein…).
-const LORA_FOLDER = { video: "MiniMax H3", image: "MOSS Image", klein: "Flux Klein" };
+const LORA_FOLDER = { video: "MiniMax H3", image: "MOSS Image", klein: "Flux Klein", pruna: "P-H3 Image" };
 const loraTop = (n) => { const p = n.replace(/\\/g, "/"); return p.includes("/") ? p.slice(0, p.indexOf("/")) : ""; };
 function loraFamily(n) {
   const top = loraTop(n).toLowerCase().replace(/[^a-z0-9]/g, "");
   if (!top) return "";
+  if (top.startsWith("ph3") || top.startsWith("pruna")) return "pruna";
   if (top.startsWith("minimax") || top.startsWith("h3") || top === "hyperflow") return "video";
   if (top.startsWith("moss")) return "image";
   if (top.includes("klein") || top.startsWith("flux")) return "klein";
   return "other";
 }
-const loraTab = () => (isImage() ? "image" : isKlein() ? "klein" : "video");
+const loraTab = () => (isImage() ? "image" : isKlein() ? "klein" : isPruna() ? "pruna" : "video");
 const loraBase = (n) => n.replace(/\\/g, "/").split("/").pop();
 const loraFolder = (n) => (n.includes("/") ? n.slice(0, n.lastIndexOf("/")) : n.includes("\\") ? n.slice(0, n.lastIndexOf("\\")) : "");
 const loraStem = (n) => n.slice(Math.max(n.lastIndexOf("/"), n.lastIndexOf("\\")) + 1).replace(/\.[^.]+$/, "");
@@ -1563,6 +1861,8 @@ const loraShown = () => {
   const words = LM.q.toLowerCase().split(/\s+/).filter(Boolean);
   return OPT.loras
     .filter((n) => LM.all || loraRank(n) < 2)
+    // P-H3-Image's own LoRA is always on in the Pruna tab: it isn't one to add.
+    .filter((n) => !/^p-h3-image_lora/i.test(loraBase(n)))
     .filter((n) => words.every((w) => n.toLowerCase().includes(w)))
     .sort((a, b) => loraRank(a) - loraRank(b) || a.toLowerCase().localeCompare(b.toLowerCase()));
 };
@@ -1683,9 +1983,9 @@ const ACT = {
     if (id === state.tab) return;
     hoverStop();
     state.picked.clear(); state.lastPicked = null;
-    state.drafts[state.tab] = state.prompt;
+    state.drafts[draftKey()] = state.prompt;
     state.tab = id;
-    state.prompt = state.drafts[id] || "";
+    state.prompt = state.drafts[draftKey()] || "";
     state.caret = state.prompt.length;
     state.mentionClosed = true;
     state.settingsOpen = false; state.library.open = false; state.loraPicker = false;
@@ -1742,7 +2042,7 @@ const ACT = {
   deletePicked: async () => {
     const ids = pickedHere();
     if (!ids.length) return;
-    const images = isImage() || isKlein(), n = ids.length;
+    const images = imageTab(), n = ids.length;
     const what = images ? (n === 1 ? "image" : "images") : n === 1 ? "video" : "videos";
     const busy = ids.filter((id) => isBusy(clipById(id))).length;
     const yes = await askConfirm(`Delete ${n === 1 ? "this " + what : n + " " + what}?`,
@@ -1771,6 +2071,7 @@ const ACT = {
   resetPrompt: () => {
     state.prompt = ""; state.caret = 0; state.mentionClosed = true;
     if (isKlein()) state.kleinSlots = [null, null, null, null];
+    else if (isPruna()) slots().fill(null);
     else if (editOn()) state.imageEditSlot = [null];
     else if (!isImage()) state.attached = [];
     render(); saveUi();
@@ -1791,7 +2092,7 @@ const ACT = {
   clearSlot: (id) => {
     slots()[Number(id)] = null;
     render();
-    say(isKlein() ? `Image ${Number(id) + 1} is empty now.` : "No picture to edit now.");
+    say(isSlotTab() ? `${SlotWord(Number(id))} is empty now.` : "No picture to edit now.");
   },
   pickSlot: (id) => {
     state.library.slot = Number(id);
@@ -1799,23 +2100,10 @@ const ACT = {
     say(`Pick a picture for ${slotWord(Number(id))}, or drag one onto it.`);
   },
   kleinMatch: () => { state.kleinSettings.size = "match"; render(); },
-  // A finished image into the Klein tab's image 1, to keep editing it.
-  editThis: async (id) => {
-    const c = clipById(id || state.openId);
-    if (!c || c.status !== "done") return;
-    try {
-      const ref = await refFromClip(c.id);
-      if (isFull()) document.exitFullscreen();
-      state.view = "gallery";
-      if (!isKlein()) ACT.tab("klein");
-      state.kleinSlots[0] = ref.id;
-      render();
-      $("prompt").focus();
-      say("It's image 1 now. Describe the next edit.");
-    } catch (error) {
-      say(error.message);
-    }
-  },
+  // A finished image into image 1 of the Klein tab (picture 1 of the Pruna tab, for Pruna's own), to keep editing it.
+  editThis: (id) => editIn(id, tabOf(clipById(id || state.openId) || {}) === "pruna" ? "pruna" : "klein"),
+  editInPruna: (id) => editIn(id, "pruna"),
+  menuEditInPruna: () => { const id = closeMenu(); editIn(id, "pruna"); },
   pickMention: (id) => insertMention(state.refs.find((r) => r.id === id)),
   openLibrary: () => {
     state.library.open = !state.library.open;
@@ -1859,9 +2147,9 @@ const ACT = {
       putInSlot(ref, 0);
       return;
     }
-    if (isKlein()) {
-      const at = state.kleinSlots.indexOf(id);
-      if (at >= 0) { state.kleinSlots[at] = null; render(); say(`Image ${at + 1} is empty now.`); return; }
+    if (isSlotTab()) {
+      const at = slots().indexOf(id);
+      if (at >= 0) { slots()[at] = null; render(); say(`${SlotWord(at)} is empty now.`); return; }
       const target = state.library.slot;
       // Opened from an empty slot: fill it and close. Otherwise the next empty slot, and stay open.
       if (target != null) { state.library.slot = null; state.library.open = false; }
@@ -1897,7 +2185,33 @@ const ACT = {
   },
   toggleSettings: () => { state.settingsOpen = !state.settingsOpen; state.loraPicker = false; state.library.open = false; render(); },
 
-  aspect: (id) => { state.settings.aspect = id; if (isKlein()) state.settings.size = id; render(); },
+  aspect: (id) => { state.settings.aspect = id; if (isSlotTab()) state.settings.size = id; render(); },
+  sizeMatch: () => { state.settings.size = "match"; render(); },
+  // Pruna: Image or Character sheet. Each keeps its own slots and its own text.
+  prunaMode: (id) => {
+    if (id === state.prunaMode) return;
+    state.drafts[draftKey()] = state.prompt;
+    state.prunaMode = id;
+    state.prompt = state.drafts[draftKey()] || ""; state.caret = state.prompt.length;
+    state.library.slot = null; state.settingsOpen = false;
+    render(); saveUi();
+  },
+  sheetPreset: (id) => { state.prunaSheet.preset = id; state.prunaSheet.views = SHEET_PRESETS[id].views.slice(); render(); saveUi(); },
+  sheetView: (id) => {
+    const v = state.prunaSheet.views;
+    if (v.includes(id)) { if (v.length === 1) { say("Pick at least one view."); return; } v.splice(v.indexOf(id), 1); } else v.push(id);
+    const order = Object.keys(SHEET_VIEWS);
+    v.sort((a, b) => order.indexOf(a) - order.indexOf(b));
+    state.prunaSheet.preset = Object.keys(SHEET_PRESETS).find((k) => SHEET_PRESETS[k].views.join() === v.join()) || "custom";
+    render(); saveUi();
+  },
+  sheetBg: (id) => { state.prunaSheet.bg = id; render(); saveUi(); },
+  toggleEnhance: () => {
+    if (!OPT.pruna.enhance && !state.prunaSettings.enhance) { say("Enhance prompt needs Pruna's prompt upsampler (p-h3-image_prompt_upsampler_bf16.safetensors in models/text_encoders)."); return; }
+    state.prunaSettings.enhance = !state.prunaSettings.enhance;
+    say(state.prunaSettings.enhance ? "Enhance prompt is on: Pruna's upsampler rewrites your text into a long, detailed prompt first." : "Enhance prompt is off: your text goes to the model as it is.");
+    render(); saveUi();
+  },
   recSteps: () => { state.settings.steps = modelOf(state.settings.model).steps; render(); },
   seedMode: (id) => { state.settings.seedMode = id; render(); },
   rollSeed: () => { state.settings.seed = newSeed(); render(); },
@@ -1914,6 +2228,17 @@ const ACT = {
     if (isFull()) document.exitFullscreen();
     else $("clipView").requestFullscreen?.().catch(() => say("Full screen isn't available here."));
   },
+  // The text Pruna's upsampler wrote, as the prompt (with Enhance off), with the same pictures in picture 1, 2 …
+  useUpsampled: () => {
+    const c = clipById(state.openId);
+    if (!c || !c.upsampled) return;
+    reusePruna(c);
+    if (sheetOn()) { const list = state.prunaSheetSlots.slice(); ACT.prunaMode("image"); state.prunaSlots = list.concat(Array(5).fill(null)); }
+    state.prunaSettings.enhance = false;
+    state.prompt = c.upsampled; state.caret = state.prompt.length;
+    render(); saveUi();
+    say("The upsampled prompt is in the prompt bar, with Enhance prompt off.");
+  },
   copyPrompt: () => {
     const c = clipById(state.openId);
     navigator.clipboard?.writeText(c.prompt || "").catch(() => {});
@@ -1927,6 +2252,7 @@ const ACT = {
   reuse: (id) => {
     const c = clipById(id || state.openId);
     if (tabOf(c) === "klein") { reuseKlein(c); return; }
+    if (tabOf(c) === "pruna") { reusePruna(c); return; }
     if (kindOf(c) !== state.tab) ACT.tab(kindOf(c));
     const model = tabOpt().models.some((m) => m.name === c.model) ? c.model : state.settings.model;
     Object.assign(state.settings, { model, steps: c.steps, res: c.res, aspect: c.aspect, seedMode: "random",
@@ -1953,10 +2279,10 @@ const ACT = {
   },
   keepSeed: () => {
     const c = clipById(state.openId);
-    const s = { image: state.imageSettings, klein: state.kleinSettings }[tabOf(c)] || state.videoSettings;
+    const s = { image: state.imageSettings, klein: state.kleinSettings, pruna: state.prunaSettings }[tabOf(c)] || state.videoSettings;
     s.seedMode = "fixed"; s.seed = c.seed;
     saveUi();
-    say("New " + (tabOf(c) === "klein" ? "Klein images" : kindOf(c) === "image" ? "images" : "clips") + " now use seed " + c.seed + ".");
+    say("New " + (tabOf(c) === "klein" ? "Klein images" : tabOf(c) === "pruna" ? "Pruna images" : kindOf(c) === "image" ? "images" : "clips") + " now use seed " + c.seed + ".");
   },
   download: (id) => {
     const c = clipById(id || state.openId);
@@ -2019,7 +2345,8 @@ const CHANGE = {
     if (isImage() || isKlein()) state.settings.cfg = m.cfg;
     render();
   },
-  res: (el) => { state.settings.res = Number(el.value); render(); },
+  res: (el) => { state.settings[sheetOn() ? "sheetRes" : "res"] = Number(el.value); render(); },
+  sheetRole: (el) => { state.prunaSheet.roles[Number(el.dataset.id)] = el.value; render(); saveUi(); },
   sampler: (el) => { state.settings.sampler = el.value; render(); },
   scheduler: (el) => { state.settings.scheduler = el.value; render(); },
   seed: (el) => { const v = el.value.replace(/\D/g, "").slice(0, 10); state.settings.seed = v ? Number(v) : 0; render(); },
@@ -2081,6 +2408,49 @@ function reuseKlein(c) {
   if (isFull()) document.exitFullscreen();
   state.view = "gallery";
   render();
+  say("Prompt, settings and pictures are back, with a random seed." + (lost ? ` ${lost === 1 ? "One picture isn't" : lost + " pictures aren't"} in the Add image library any more.` : ""));
+}
+
+// A finished image into slot 1 of the Klein tab (image 1) or of the Pruna tab's Image (picture 1).
+async function editIn(id, tab) {
+  const c = clipById(id || state.openId);
+  if (!c || c.status !== "done") return;
+  try {
+    const ref = await refFromClip(c.id);
+    if (isFull()) document.exitFullscreen();
+    state.view = "gallery";
+    if (state.tab !== tab) ACT.tab(tab);
+    if (tab === "pruna") { if (sheetOn()) ACT.prunaMode("image"); state.prunaSlots[0] = ref.id; }
+    else state.kleinSlots[0] = ref.id;
+    render();
+    $("prompt").focus();
+    say(`It's ${tab === "pruna" ? "picture 1" : "image 1"} now. Describe the next edit.`);
+  } catch (error) {
+    say(error.message);
+  }
+}
+
+// A Pruna image's prompt, settings and pictures back in the Pruna tab (its sheet's views, for a sheet).
+function reusePruna(c) {
+  if (!isPruna()) ACT.tab("pruna");
+  const sheet = c.mode === "sheet";
+  if (sheetOn() !== sheet) ACT.prunaMode(sheet ? "sheet" : "image");
+  const s = state.prunaSettings;
+  Object.assign(s, { model: OPT.pruna.models.some((m) => m.name === c.model) ? c.model : s.model, seedMode: "random", enhance: !!c.enhance && !!OPT.pruna.enhance,
+    loras: c.loras.map((l) => ({ id: l.name, name: l.name, strength: l.strength, on: true })) });
+  s[sheet ? "sheetRes" : "res"] = c.res;
+  if (!sheet) { s.size = c.size && c.size !== "match" ? c.size : "match"; if (c.size && c.size !== "match") s.aspect = c.size; }
+  const count = sheet ? 4 : 9, saved = (c.slots || []).concat(Array(count).fill(null)).slice(0, count);
+  const list = saved.map((x) => (x && state.refs.some((r) => r.id === x.id) ? x.id : null));
+  if (sheet) {
+    state.prunaSheetSlots = list;
+    if (c.sheet) Object.assign(state.prunaSheet, { views: c.sheet.views.slice(), preset: c.sheet.preset || "custom", bg: c.sheet.bg || "white", roles: (c.sheet.roles || state.prunaSheet.roles).slice() });
+  } else state.prunaSlots = list;
+  const lost = saved.filter((x, i) => x && !list[i]).length;
+  state.prompt = sheet && c.prompt === "Character sheet" ? "" : c.prompt; state.caret = state.prompt.length; state.mentionClosed = true;
+  if (isFull()) document.exitFullscreen();
+  state.view = "gallery";
+  render(); saveUi();
   say("Prompt, settings and pictures are back, with a random seed." + (lost ? ` ${lost === 1 ? "One picture isn't" : lost + " pictures aren't"} in the Add image library any more.` : ""));
 }
 
@@ -2412,12 +2782,12 @@ async function dropOnSlots(e) {
   if (from !== "") {
     const a = Number(from);
     // Dropped on the prompt text: its name goes where the cursor was (Klein: the pictures have names).
-    if (to < 0 && e.target === ta) { if (isKlein()) insertWord("image " + (a + 1)); return; }
+    if (to < 0 && e.target === ta) { if (isSlotTab() && !sheetOn()) insertWord(slotWord(a)); return; }
     if (to < 0 || a === to) return;
     const list = slots();
     [list[a], list[to]] = [list[to], list[a]];
     render();
-    say(list[a] ? `Swapped image ${a + 1} and image ${to + 1}.` : `Moved to image ${to + 1}.`);
+    say(list[a] ? `Swapped ${slotWord(a)} and ${slotWord(to)}.` : `Moved to ${slotWord(to)}.`);
     return;
   }
   const genId = e.dataTransfer.getData(GEN_MIME);
@@ -2427,7 +2797,7 @@ async function dropOnSlots(e) {
   if (!r) return;
   const replaced = (to >= 0 || editOn()) && slots()[Math.max(0, to)] && slots()[Math.max(0, to)] !== r.id;
   const at = putInSlot(r, to);
-  if (replaced && at >= 0) say(isKlein() ? `@${r.name} is image ${at + 1} now (replaced).` : `Editing @${r.name} now (replaced).`);
+  if (replaced && at >= 0) say(isSlotTab() ? `@${r.name} is ${sheetOn() ? "the " : ""}${slotWord(at)} now (replaced).` : `Editing @${r.name} now (replaced).`);
   // Replaced from Add image: that's done, so it closes.
   if (replaced && state.library.open) { ACT.closePopups(); return; }
   if (state.library.open) { renderLibNav(); renderLibList(); renderLibPreview(); }
@@ -2448,11 +2818,11 @@ async function uploadToSlots(files, slot = -1) {
     added.forEach((r, n) => {
       const list = slots();
       const at = n === 0 && slot >= 0 ? slot : editOn() ? (n === 0 ? 0 : -1) : list.indexOf(null);
-      if (at >= 0) { list[at] = r.id; placed.push(isKlein() ? `@${r.name} is image ${at + 1}` : `Editing @${r.name}`); }
+      if (at >= 0) { list[at] = r.id; placed.push(isSlotTab() ? `@${r.name} is ${sheetOn() ? "the " : ""}${slotWord(at)}` : `Editing @${r.name}`); }
     });
     render();
-    say(placed.length ? placed.join(", ") + "." + (placed.length < added.length ? " The rest are in Add image (all four slots are full)." : "")
-      : "All four slots are full: the pictures are in Add image.");
+    say(placed.length ? placed.join(", ") + "." + (placed.length < added.length ? " The rest are in Add image (all the slots are full)." : "")
+      : "All the slots are full: the pictures are in Add image.");
   } catch (error) {
     say("Upload failed: " + error.message);
   }
@@ -2561,9 +2931,13 @@ async function load(first = true) {
       Object.assign(state.videoSettings, ui.settings || {});
       Object.assign(state.imageSettings, ui.imageSettings || {});
       Object.assign(state.kleinSettings, ui.kleinSettings || {});
+      Object.assign(state.prunaSettings, ui.prunaSettings || {});
+      if (!OPT.pruna.enhance) state.prunaSettings.enhance = false;
+      state.prunaMode = ui.prunaMode === "sheet" ? "sheet" : "image";
+      if (ui.prunaSheet && Array.isArray(ui.prunaSheet.views) && ui.prunaSheet.views.length) Object.assign(state.prunaSheet, ui.prunaSheet);
       state.imageEdit = !!ui.imageEdit && !!OPT.image.edit?.available;
       // Settings saved earlier must still suit what is installed, in every tab.
-      for (const tab of ["video", "image", "klein"]) {
+      for (const tab of ["video", "image", "klein", "pruna"]) {
         state.tab = tab;
         const T = tabOpt(), s = state.settings;
         if (T.models.length && !T.models.some((m) => m.name === s.model)) s.model = T.models[0].name;
@@ -2572,6 +2946,11 @@ async function load(first = true) {
         if (!T.megapixels.includes(s.res)) s.res = tab === "video" ? 0.6 : 1.0;
         if (!T.aspects[s.aspect]) s.aspect = tab === "video" ? "16:9" : "1:1";
         if (tab !== "video" && !(s.cfg >= OPT.image.cfg.min && s.cfg <= OPT.image.cfg.max)) s.cfg = m.cfg;
+        if (tab === "pruna") {
+          if (!T.megapixels.includes(s.sheetRes)) s.sheetRes = 8.0;
+          if (s.size !== "match" && !T.aspects[s.size]) s.size = "match";
+          if (!T.megapixels.includes(s.res)) s.res = 4.0;
+        }
         if (tab === "klein") {
           if (s.size !== "match" && !T.aspects[s.size]) s.size = "match";
           if (!m.base) s.cfg = m.cfg;   // Distilled renders without guidance
@@ -2590,7 +2969,10 @@ async function load(first = true) {
       }
       EDIT.load(data.edit);
       state.tab = "video";   // the app always opens on the Video tab
-      state.drafts = { video: ui.prompt || "", image: ui.imagePrompt || "", klein: ui.kleinPrompt || "" };
+      state.drafts = { video: ui.prompt || "", image: ui.imagePrompt || "", klein: ui.kleinPrompt || "", pruna: ui.prunaPrompt || "", prunaSheet: ui.prunaSheetPrompt || "" };
+      const keep = (list, n) => Array.from({ length: n }, (_, i) => { const id = (list || [])[i]; return id && state.refs.some((r) => r.id === id) ? id : null; });
+      state.prunaSlots = keep(ui.prunaSlots, 9);
+      state.prunaSheetSlots = keep(ui.prunaSheetSlots, 4);
       state.kleinSlots = [0, 1, 2, 3].map((i) => { const id = (ui.kleinSlots || [])[i]; return id && state.refs.some((r) => r.id === id) ? id : null; });
       state.imageEditSlot = [state.refs.some((r) => r.id === ui.imageEditSource) ? ui.imageEditSource : null];
       state.negative = typeof ui.imageNegative === "string" ? ui.imageNegative : "";

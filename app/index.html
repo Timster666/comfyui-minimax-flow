@@ -154,6 +154,34 @@ button.add-ref { background: transparent; font: inherit; font-size: 11px; }
 .edit-toggle.on { color: var(--accent-text); }
 .edit-toggle:disabled { opacity: .45; cursor: default; }
 .slot-empty.edit-slot { line-height: 1.25; text-align: center; }
+/* The Pruna tab: Image / Character sheet, the sheet's helper pictures (with what each shows) and its views */
+.pruna-mode { display: flex; align-items: center; gap: 12px; }
+.pruna-mode .seg { display: inline-grid; padding: 3px; border-radius: 11px; }
+.pruna-mode .seg button { min-height: 30px; padding: 0 14px; font-size: 13px; border-radius: 8px; }
+.pruna-mode .hint { font-size: 12px; color: var(--faint); }
+.slot-role { width: 92px; font: 500 11px var(--font); background: var(--raised); color: var(--text-soft); border: 1px solid var(--line-strong); border-radius: 6px; padding: 2px 4px; }
+.sheet-views { display: flex; flex-direction: column; gap: 6px; }
+.view-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.view-label { width: 72px; flex: none; font-size: 12px; color: var(--faint); }
+.chip { background: var(--raised); border: 1px solid transparent; border-radius: 999px; padding: 0 12px; min-height: 28px; font: 500 12.5px var(--font); color: var(--muted); }
+.chip:hover { color: var(--text); }
+.chip.on { background: var(--mention-bg); border-color: #6b5634; color: var(--accent-text); }
+.chip.preset { background: transparent; border-color: var(--line-strong); }
+.chip.preset.on { background: var(--raised-2); border-color: var(--muted); color: var(--text); }
+.sheet-layout { margin-left: auto; display: flex; gap: 3px; align-items: stretch; height: 40px; padding: 4px; background: #e9e6df; border-radius: 6px; }
+.sheet-layout i { display: block; background: #bdb6a8; border-radius: 2px; }
+.sheet-layout .col { display: flex; flex-direction: column; gap: 3px; }
+.sheet-layout .col i { flex: 1; }
+.sheet-layout i.none { background: none; }
+.sent { font-size: 12px; color: var(--faint); border-top: 1px dashed var(--line-strong); padding-top: 8px; }
+.sent summary { cursor: pointer; color: var(--muted); width: max-content; }
+.sent pre, .sent-box pre, pre.upsampled { white-space: pre-wrap; word-break: break-word; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--text-soft); margin: 6px 0 0; max-height: 132px; overflow: auto; }
+.sent-box { font-size: 13px; color: var(--muted); }
+.sent-box summary { cursor: pointer; }
+.sent-box pre, pre.upsampled { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 12px; max-height: 220px; }
+.sheet-views-text { margin: 0; color: var(--text-soft); line-height: 1.5; }
+.fixed-field { background: var(--raised); border-radius: 10px; min-height: 46px; padding: 0 12px; display: flex; align-items: center; justify-content: space-between; color: var(--text-soft); }
+.fixed-field small { color: var(--faint); font-size: 12px; }
 .slot-res { min-height: 13px; font-size: 10px; color: var(--faint); text-align: center; font-variant-numeric: tabular-nums; letter-spacing: .01em; }
 .slot .add-ref, .refs > .add-ref { height: 92px; }
 body.dragging-ref .slot-empty { border-color: var(--muted); }
@@ -603,12 +631,15 @@ body.dragging-ref .composer { border-color: var(--line-strong); }
     <div class="composer">
       <div class="composer-dim" id="composerDim" data-act="closePopups" hidden></div>
       <button class="prompt-reset" id="resetPrompt" data-act="resetPrompt" title="Clear the prompt and take the images out of the prompt bar" hidden>Reset</button>
+      <div class="pruna-mode" id="prunaMode" hidden></div>
       <div class="refs" id="refs"></div>
+      <div class="sheet-views" id="sheetViews" hidden></div>
       <div class="prompt-wrap">
         <div class="mention" id="mention" role="listbox" aria-label="Your images" hidden></div>
         <div class="mirror" id="mirror" aria-hidden="true"></div>
         <textarea id="prompt" aria-label="Prompt" spellcheck="false"></textarea>
       </div>
+      <details class="sent" id="prunaSent" hidden><summary>What the model gets</summary><pre id="prunaSentText"></pre></details>
       <div class="neg" id="negBox" hidden>
         <label for="negative">Negative prompt</label>
         <textarea id="negative" rows="2" spellcheck="false"></textarea>
@@ -616,6 +647,7 @@ body.dragging-ref .composer { border-color: var(--line-strong); }
       <div class="bar">
         <button class="neg-toggle" id="negToggle" data-act="toggleNegative" aria-controls="negBox" hidden></button>
         <button class="neg-toggle edit-toggle" id="editToggle" data-act="toggleEdit" aria-pressed="false" hidden></button>
+        <button class="neg-toggle edit-toggle" id="enhanceToggle" data-act="toggleEnhance" aria-pressed="false" hidden></button>
         <span class="hint" id="hint">Type @ to use an image</span>
         <div class="bar-right">
           <div class="settings" id="settings" hidden></div>
