@@ -45,7 +45,8 @@ svg { display: block; }
 .top-left { display: flex; align-items: center; gap: 14px; min-height: 36px; }
 .brand { font-weight: 600; font-size: 16px; letter-spacing: -0.01em; }
 .project { color: var(--faint); }
-.back { background: none; border: 0; display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 0; font-weight: 500; }
+.back { background: var(--raised); color: var(--text); border: 1px solid var(--line); border-radius: 999px; display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 0 16px 0 12px; font-weight: 500; cursor: pointer; }
+.back:hover { background: var(--raised-2); }
 .queue { display: flex; align-items: center; gap: 8px; color: #c9cbd0; }
 .dot { width: 8px; height: 8px; border-radius: 4px; background: #4a4d55; }
 .dot.on { background: var(--accent); }
@@ -86,8 +87,8 @@ svg { display: block; }
 .star { position: absolute; z-index: 3; right: 8px; top: 8px; width: 36px; height: 36px; border-radius: 18px; border: 0; background: rgba(10,11,13,.78); display: flex; align-items: center; justify-content: center; }
 .star.on { color: var(--accent-text); }
 /* The tick box (where the star was): shows on hover, when ticked, and on every tile while anything is ticked */
-.pick { position: absolute; z-index: 3; right: 10px; top: 10px; width: 26px; height: 26px; border-radius: 7px; border: 2px solid rgba(255,255,255,.75); background: rgba(10,11,13,.55); color: transparent; display: flex; align-items: center; justify-content: center; padding: 0; opacity: 0; transition: opacity .12s; }
-.pick svg { width: 16px; height: 16px; stroke-width: 3; }
+.pick { position: absolute; z-index: 3; right: 10px; top: 10px; width: 20px; height: 20px; border-radius: 5px; border: 2px solid rgba(255,255,255,.75); background: rgba(10,11,13,.55); color: transparent; display: flex; align-items: center; justify-content: center; padding: 0; opacity: 0; transition: opacity .12s; }
+.pick svg { width: 13px; height: 13px; stroke-width: 3.5; }
 .tile:hover .pick, .pick:focus-visible, .pick.on, #grid.picking .pick { opacity: 1; }
 .pick.on { background: var(--accent); border-color: var(--accent); color: #121316; }
 .tile.picked .frame { outline: 3px solid var(--accent); outline-offset: -3px; }
