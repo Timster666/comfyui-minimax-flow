@@ -1,9 +1,13 @@
 // Adds a "MiniMax H3 Vision" button to ComfyUI's sidebar. It opens the app full screen
 // over ComfyUI; the app's own Close button (or Esc on an empty screen) closes it again.
+// It also opens by itself the first time ComfyUI loads in a browser tab (a reload doesn't open it again),
+// unless "Open MiniMax H3 Vision when ComfyUI opens" is switched off in ComfyUI's settings.
 import { app } from "/scripts/app.js";
 import { api } from "/scripts/api.js";
 
 const FRAME_ID = "mmflow-frame";
+const OPEN_ON_START = "MiniMaxFlow.OpenOnStart";
+const OPENED_KEY = "mmvision.opened-on-start";   // in sessionStorage: once per browser tab
 
 function closeFlow() {
   document.getElementById(FRAME_ID)?.remove();
@@ -28,11 +32,39 @@ window.addEventListener("message", (event) => {
   if (event.origin === location.origin && event.data === "mmflow-close") closeFlow();
 });
 
+function setting(id, fallback) {
+  try {
+    const value = app.extensionManager?.setting?.get?.(id) ?? app.ui?.settings?.getSettingValue?.(id);
+    return value === undefined || value === null ? fallback : value;
+  } catch {
+    return fallback;
+  }
+}
+
+function openOnStart() {
+  try {
+    if (sessionStorage.getItem(OPENED_KEY)) return;
+    sessionStorage.setItem(OPENED_KEY, "1");
+  } catch {
+    // No sessionStorage: open anyway.
+  }
+  if (setting(OPEN_ON_START, true)) openFlow();
+}
+
 app.registerExtension({
   name: "minimax.flow",
+  settings: [{
+    id: OPEN_ON_START,
+    category: ["MiniMax H3 Vision", "Start", "Open on start"],
+    name: "Open MiniMax H3 Vision when ComfyUI opens",
+    tooltip: "The first time ComfyUI loads in a browser tab, open MiniMax H3 Vision over it. Its Close button goes back to ComfyUI.",
+    type: "boolean",
+    defaultValue: true,
+  }],
   commands: [{ id: "MiniMaxFlow.Open", label: "Open MiniMax H3 Vision", icon: "pi pi-video", function: openFlow }],
   menuCommands: [{ path: ["View"], commands: ["MiniMaxFlow.Open"] }],
   setup() {
+    openOnStart();
     app.extensionManager?.registerSidebarTab?.({
       id: "minimax-flow",
       icon: "pi pi-video",
