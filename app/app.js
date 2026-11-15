@@ -691,7 +691,7 @@ function libButton(refId, inBar) {
     if (at >= 0) return `<button class="btn lib-add" data-act="libToggle">Take out of image ${at + 1}</button>`;
     return `<button class="btn primary lib-add" data-act="libToggle" ${to < 0 ? "disabled" : ""}>${to < 0 ? "All four slots are full" : "Put in image " + (to + 1)}</button>`;
   }
-  return `<button class="btn ${inBar ? "" : "primary"} lib-add" data-act="libToggle">${inBar ? "Remove from prompt" : "Add to prompt"}</button>`;
+  return `<button class="btn ${inBar ? "" : "primary"} lib-add" data-act="libToggle">${inBar ? "Remove from prompt bar" : "Add to prompt bar"}</button>`;
 }
 
 // Move the selection up or down the list, and keep it in view.
@@ -1693,7 +1693,7 @@ const ACT = {
       return;
     }
     if (state.attached.includes(id)) { state.attached = state.attached.filter((x) => x !== id); say("@" + ref.name + " taken out of the prompt bar."); }
-    else { attach(id); say("@" + ref.name + " added. Type @" + ref.name + " in the prompt to use it."); }
+    else { attach(id); say("@" + ref.name + " added to the prompt bar. Drag it onto the text, or type @" + ref.name + ", to use it."); }
     const hadFocus = document.activeElement?.classList.contains("lib-item");
     renderRefs(); renderLibNav(); renderLibList(); renderLibPreview(); saveUi();
     if (hadFocus) document.querySelector(".lib-item.on")?.focus();
@@ -1979,7 +1979,7 @@ async function uploadImages(files) {
     state.library.selected = added[0]?.id || state.library.selected;
     render();
     document.querySelector(".lib-item.on")?.scrollIntoView({ block: "nearest" });
-    say("Added @" + added.map((a) => a.name).join(", @") + ". Type @ to use it.");
+    say("Added @" + added.map((a) => a.name).join(", @") + " to the prompt bar. Drag it onto the text, or type @, to use it.");
   } catch (error) {
     say("Upload failed: " + error.message);
   }
@@ -2172,9 +2172,7 @@ composer.addEventListener("drop", async (e) => {
   composer.classList.remove("drop-on");
   if (isKlein()) { dropOnSlots(e); return; }
   const genId = e.dataTransfer.getData(GEN_MIME);
-  // Work out where it was dropped now: the drop event's position is only valid during it.
-  // An image from the prompt bar's own strip goes in at the cursor; one from Add image where it was dropped.
-  const dropAt = e.target === ta ? (dragFromBar ? state.caret : textOffsetAt(e.clientX, e.clientY)) : null;
+  const onText = e.target === ta;
   const target = replaceTarget(e);
   const oldId = target?.dataset.replaceRef, oldName = target?.dataset.replaceName;
   markReplace(null);
@@ -2188,18 +2186,15 @@ composer.addEventListener("drop", async (e) => {
     if (state.library.open && !dragFromBar) ACT.closePopups();
     return;
   }
+  // Only an image dragged from the prompt bar onto the text writes its @name, where the cursor was.
+  // One brought in from Add image (dropped anywhere on the prompt bar) only joins the image strip.
+  if (dragFromBar) { if (onText) insertWord("@" + r.name); return; }
+  const had = state.attached.includes(r.id);
   attach(r.id);
-  const pos = dropAt !== null ? wordEdge(state.prompt, dropAt) : state.prompt.length;
-  const before = state.prompt.slice(0, pos), after = state.prompt.slice(pos);
-  const insert = (before && !/\s$/.test(before) ? " " : "") + "@" + r.name + (/^\s/.test(after) ? "" : " ");
-  state.prompt = before + insert + after;
-  state.caret = before.length + insert.length;
-  state.mentionClosed = true;
-  renderPrompt(); renderRefs();
+  renderRefs();
   if (state.library.open) { renderLibNav(); renderLibList(); renderLibPreview(); }
   saveUi();
-  ta.focus();
-  ta.setSelectionRange(state.caret, state.caret);
+  say(had ? `@${r.name} is in the prompt bar already.` : `@${r.name} added to the prompt bar. Drag it onto the text to use it.`);
 });
 
 // Klein: a picture dropped on a slot goes in that slot (a slot's picture swaps places with what's there); dropped
