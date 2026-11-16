@@ -372,6 +372,17 @@ body.dragging-ref .composer { border-color: var(--line-strong); }
 .models-head h2 { margin: 0 0 4px; font-size: 18px; }
 .models-head .models-x { position: static; flex: none; }
 .models-head { gap: 16px; }
+#modelsDisk { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-top: 6px; }
+.disk { display: flex; align-items: center; gap: 10px; }
+.disk-bar { position: relative; width: 220px; height: 8px; border-radius: 4px; background: var(--raised-2); overflow: hidden; }
+.disk-used { position: absolute; left: 0; top: 0; bottom: 0; background: #8a8d94; border-radius: 4px 0 0 4px; }
+.disk-next { position: absolute; top: 0; bottom: 0; background: repeating-linear-gradient(45deg, var(--accent) 0 4px, #b37f37 4px 8px); }
+.disk.tight .disk-used { background: #c96a5a; }
+.disk-text { font-size: 12.5px; color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.disk-text b { color: var(--text); font-weight: 600; }
+.disk.tight .disk-text b { color: var(--danger); }
+.token { font-size: 11.5px; padding: 2px 8px; border-radius: 999px; background: var(--raised); color: var(--muted); white-space: nowrap; }
+.token.ok { background: #1f3a26; color: #9fdcae; }
 .models-filter { margin-left: auto; padding: 3px; border-radius: 11px; }
 .models-filter button { min-height: 32px; padding: 0 14px; font-size: 13px; border-radius: 8px; white-space: nowrap; }
 .models-body { overflow-y: auto; padding: 8px 20px 20px; }
