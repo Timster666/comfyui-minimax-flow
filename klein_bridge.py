@@ -126,6 +126,39 @@ def model_prompt(prompt, filled):
     return IMAGE_RE.sub(swap, prompt)
 
 
+# Face swap: Alissonerdx's BFS (Best Face Swap) head-swap LoRA for Klein 9B, as in Comfy's "face swap" hub
+# workflow: picture 1 is the body and scene, picture 2 the head to put on it (in that order, both at 1 MP), the
+# LoRA at 1.0, lcm. The files can carry the hub's "Alissonerdx__BFS-Best-Face-Swap__" prefix.
+BFS_LORAS = ["bfs_head_v1_flux-klein_9b_step3750_rank64", "bfs_head_v1_flux-klein_9b_step3500_rank128"]
+SWAP_PROMPT = ("head_swap: start with Picture 1 as the base image, keeping its lighting, environment and background. "
+               "Replace the head in Picture 1 with the head from Picture 2, keeping the hair, eye colour and nose shape "
+               "from Picture 2. Copy the eye direction, head rotation and micro-expressions from Picture 1. Match the "
+               "skin tone and light so the head and body blend naturally. high quality, sharp details, 4k")
+SWAP_NEGATIVE = ("bad quality, noise, blurry, worst quality, low resolution, blur, distortion, unnatural blending, "
+                 "cartoon, illustration, painting")
+
+
+def bfs_lora():
+    """The BFS head-swap LoRA for Klein 9B as ComfyUI lists it, or None."""
+    try:
+        import folder_paths
+        files = folder_paths.get_filename_list("loras")
+    except Exception:
+        return None
+    stems = {os.path.splitext(os.path.basename(f.replace("\\", "/")))[0].lower(): f for f in files}
+    for want in BFS_LORAS:
+        for stem, f in stems.items():
+            if stem == want or stem.endswith("__" + want):
+                return f
+    return None
+
+
+def swap_prompt(notes=""):
+    """The face swap's prompt, with your notes after it."""
+    notes = (notes or "").strip()
+    return SWAP_PROMPT + (". " + notes if notes else "")
+
+
 def build_graph(clip, refs, name=None):
     """The ComfyUI graph for one Klein image.
 
@@ -140,13 +173,23 @@ def build_graph(clip, refs, name=None):
         "2": {"class_type": "CLIPLoader", "inputs": {"clip_name": encoder, "type": "flux2", "device": "default"}},
         "3": {"class_type": "VAELoader", "inputs": {"vae_name": vae}},
         "4": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["2", 0],
-                                                         "text": model_prompt(clip["prompt"], [s for s, _ in refs])}},
+                                                         "text": model_prompt(clip["sent"] if clip.get("swap") else clip["prompt"],
+                                                                                  [s for s, _ in refs])}},
     }
     if p["base"]:
         graph["5"] = {"class_type": "CLIPTextEncode", "inputs": {"clip": ["2", 0], "text": clip.get("negative") or ""}}
     else:
         graph["5"] = {"class_type": "ConditioningZeroOut", "inputs": {"conditioning": ["4", 0]}}
     model = ["1", 0]
+    if clip.get("swap"):
+        bfs = bfs_lora()
+        if not bfs:
+            raise Missing("Face swap needs the BFS head-swap LoRA for Klein 9B (bfs_head_v1_flux-klein_9b_step3750_rank64."
+                          "safetensors from Alissonerdx/BFS-Best-Face-Swap) in models/loras. On RunPod: ENABLE_BFS_KLEIN=true.")
+        graph["19"] = {"class_type": "LoraLoaderModelOnly", "inputs": {"model": model, "lora_name": bfs, "strength_model": 1.0}}
+        model = ["19", 0]
+        if p["base"]:
+            graph["5"]["inputs"]["text"] = clip.get("negative") or SWAP_NEGATIVE
     for i, lora in enumerate(clip.get("loras") or []):
         key = str(20 + i)
         graph[key] = {"class_type": "LoraLoaderModelOnly",
@@ -164,7 +207,7 @@ def build_graph(clip, refs, name=None):
         positive, negative = [pos, 0], [neg, 0]
     graph.update({
         "6": {"class_type": "EmptyFlux2LatentImage", "inputs": {"width": w, "height": h, "batch_size": 1}},
-        "11": {"class_type": "KSamplerSelect", "inputs": {"sampler_name": "euler"}},
+        "11": {"class_type": "KSamplerSelect", "inputs": {"sampler_name": "lcm" if clip.get("swap") else "euler"}},
         "12": {"class_type": "Flux2Scheduler", "inputs": {"steps": int(clip["steps"]), "width": w, "height": h}},
         "13": {"class_type": "CFGGuider", "inputs": {"model": model, "positive": positive, "negative": negative,
                                                      "cfg": float(clip["cfg"])}},

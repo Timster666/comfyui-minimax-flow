@@ -72,6 +72,9 @@ DEFAULT_UI = {
                       "seedMode": "random", "seed": 48213, "loras": []},
     "kleinPrompt": "",
     "kleinSlots": [None, None, None, None],
+    "kleinMode": "edit",              # Klein: Edit, or Face swap (body and face, with the BFS LoRA)
+    "kleinSwapSlots": [None, None],
+    "kleinSwapPrompt": "",
     # The Pruna tab: Image (up to nine slots, picture 1-9) or Character sheet (the character and up to three
     # helper pictures with a role each, and the views to draw).
     "prunaSettings": {"model": ph3_bridge.LORA_ROUTE, "steps": 8, "res": 4.0, "sheetRes": 8.0, "size": "match", "aspect": "1:1",
@@ -259,6 +262,7 @@ async def get_state(request):
                               "missing": iwhy},
                     "klein": {"models": kmodels, "aspects": IMAGE_ASPECTS, "megapixels": KLEIN_MEGAPIXELS,
                               "recommendedMP": KLEIN_RECOMMENDED_MP, "cfg": CFG, "slots": klein_bridge.SLOTS,
+                              "swap": bool(klein_bridge.bfs_lora()), "swapPrompt": klein_bridge.SWAP_PROMPT,
                               "missing": kwhy},
                     "pruna": {"models": pmodels, "aspects": PH3_ASPECTS, "megapixels": ph3_bridge.MEGAPIXELS,
                               "slots": ph3_bridge.SLOTS, "steps": ph3_bridge.STEPS, "enhance": bool(ph3_bridge.upsampler()),
@@ -368,12 +372,14 @@ async def generate(request):
     s = body.get("settings") or {}
     if body.get("kind") == "pruna":
         return await generate_pruna(prompt, s, body)
+    if body.get("kind") == "klein" and body.get("mode") == "swap":
+        return await generate_klein(prompt, s, body.get("slots") or [], body.get("negative"), swap=True)
     if not prompt:
         raise web.HTTPBadRequest(text="Write a prompt first.")
     if body.get("kind") == "image":
         return await generate_image(prompt, s, body.get("negative"), body.get("edit"))
     if body.get("kind") == "klein":
-        return await generate_klein(prompt, s, body.get("slots") or [], body.get("negative"))
+        return await generate_klein(prompt, s, body.get("slots") or [], body.get("negative"), swap=body.get("mode") == "swap")
     models, why = video_models()
     model = next((m for m in models if m["name"] == s.get("model")), None)
     if not model:
@@ -515,8 +521,9 @@ def size_like(w0, h0, mp, grid=16):
     return max(grid, round(w0 * k / grid) * grid), max(grid, round(h0 * k / grid) * grid)
 
 
-async def generate_klein(prompt, s, slots, negative=None):
-    """A Klein 9B image: an edit of up to four pictures (the slots image 1-4), or from the prompt alone."""
+async def generate_klein(prompt, s, slots, negative=None, swap=False):
+    """A Klein 9B image: an edit of up to four pictures (the slots image 1-4), or from the prompt alone.
+    swap: a face swap with the BFS LoRA, picture 1 the body and scene, picture 2 the head; the prompt is notes."""
     models, why = klein_models()
     model = next((m for m in models if m["name"] == s.get("model")), None)
     if not model:
@@ -533,7 +540,14 @@ async def generate_klein(prompt, s, slots, negative=None):
     size = s.get("size") if s.get("size") == "match" or s.get("size") in IMAGE_ASPECTS else "match"
     seed = int(s.get("seed", 0)) if s.get("seedMode") == "fixed" else random.randrange(2 ** 31)
     loras = [{"name": str(l["name"]), "strength": float(l["strength"])} for l in s.get("loras", []) if l.get("on", True)]
-    slots = (list(slots) + [None] * klein_bridge.SLOTS)[:klein_bridge.SLOTS]
+    count = 2 if swap else klein_bridge.SLOTS
+    slots = (list(slots) + [None] * count)[:count]
+    if swap:
+        if not klein_bridge.bfs_lora():
+            raise web.HTTPBadRequest(text="Face swap needs the BFS head-swap LoRA for Klein 9B "
+                                          "(bfs_head_v1_flux-klein_9b_step3750_rank64.safetensors) in models/loras.")
+        if not (slots[0] and slots[1]):
+            raise web.HTTPBadRequest(text="Face swap needs both pictures: the body and scene, and the face.")
 
     async with _lock:
         data = read_project()
@@ -548,7 +562,7 @@ async def generate_klein(prompt, s, slots, negative=None):
         if not os.path.exists(image_path(image)):
             raise web.HTTPBadRequest(text="The picture in image %d (%s) is missing its file." % (n, image["name"]))
         pictures.append((n, image))
-    empty = sorted({int(m) for m in re.findall(r"\bimage\s?([1-4])\b", prompt, re.I)} - {n for n, _ in pictures})
+    empty = [] if swap else sorted({int(m) for m in re.findall(r"\bimage\s?([1-4])\b", prompt, re.I)} - {n for n, _ in pictures})
     if empty:
         raise web.HTTPBadRequest(text="The prompt mentions %s, but %s empty." % (
             " and ".join("image %d" % n for n in empty), "those slots are" if len(empty) > 1 else "that slot is"))
@@ -561,12 +575,14 @@ async def generate_klein(prompt, s, slots, negative=None):
     else:
         aspect = size if size != "match" else "1:1"
         w, h = dims(aspect, res, 16, IMAGE_ASPECTS)
-    clip = {"id": "k" + uuid.uuid4().hex[:10], "kind": "image", "family": "klein", "prompt": prompt, "model": model["name"],
+    clip = {"id": "k" + uuid.uuid4().hex[:10], "kind": "image", "family": "klein", "prompt": prompt or ("Face swap" if swap else ""), "model": model["name"],
             "profile": model["id"], "steps": steps, "cfg": cfg, "res": res, "size": size, "aspect": aspect, "width": w,
             "height": h, "seed": seed, "loras": loras, "status": "queued", "step": 0, "file": None,
             "subfolder": ROOT + "/stills", "starred": False, "created": time.time(),
             "slots": [next(({"id": i["id"], "name": i["name"]} for k, i in pictures if k == n), None)
-                      for n in range(1, klein_bridge.SLOTS + 1)]}
+                      for n in range(1, count + 1)]}
+    if swap:
+        clip.update({"swap": True, "sent": klein_bridge.swap_prompt(prompt)})
     if model["base"] and negative is not None:
         clip["negative"] = str(negative).strip()[:2000]
     refs = [(n, "%s/images/%s" % (ROOT, image["file"])) for n, image in pictures]
@@ -814,6 +830,8 @@ def clip_from_settings(found, kind):
         # Its pictures are named; they are found again by id when this machine has them.
         clip.update({"family": "klein", "size": found.get("size") or "match",
                      "slots": (list(found.get("slots") or []) + [None] * klein_bridge.SLOTS)[:klein_bridge.SLOTS]})
+    if klein and found.get("swap"):
+        clip.update({"swap": True, "sent": found.get("sent") or "", "slots": (list(found.get("slots") or []) + [None, None])[:2]})
     if ph3:
         # Its pictures are named, found again by id when this machine has them; a sheet keeps its views.
         count = 4 if found.get("mode") == "sheet" else ph3_bridge.SLOTS
