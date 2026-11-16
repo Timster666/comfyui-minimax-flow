@@ -188,6 +188,15 @@ Klein numbers the pictures in the order it gets them, so when a slot before it i
 model reads is renumbered to match (slots 1 and 3 filled: "image 3" is sent as "image 2"). MOSS-Image's
 `flux2-vae_small` isn't used for Klein: its pictures need the full VAE encoder.
 
+## Models page
+
+**Gear menu → Models** lists the model files each tab uses (`model_catalog.json`), in groups, with what is
+installed, sizes and the free disk space. **Download** fetches a group from Hugging Face in the background on
+the machine ComfyUI runs on (one file at a time, into the right `models/` folder); a model shows up in its tab
+when it is in. Gated models (Klein) need `HF_TOKEN` set where ComfyUI runs, and the license accepted on Hugging
+Face. **Delete** removes a group's files, keeping any another installed group needs. A tab's **Not installed**
+opens the page at that tab's models.
+
 ## P-H3-Image files (Pruna tab)
 
 ComfyUI 0.44 or newer (it has P-H3-Image's nodes built in). From
@@ -253,6 +262,7 @@ In ComfyUI's output folder, under `minimax_flow/`:
 - `moss_bridge.py`: image graphs, with MOSS-Image
 - `klein_bridge.py`: Klein 9B graphs, with up to four reference pictures
 - `ph3_bridge.py`: P-H3-Image graphs (Pruna tab), with up to nine pictures and the prompt upsampler
+- `model_store.py` and `model_catalog.json`: the Models page's list and background downloads
 - `edit_media.py`: the Edit tab's filmstrips, waveforms and export, with PyAV
 - `edit_project.py`: edit projects as zip files (export and import)
 - `clip_info.py`: the prompt and settings saved in each file, and reading them back on import
