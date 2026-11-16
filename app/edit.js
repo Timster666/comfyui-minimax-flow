@@ -76,6 +76,7 @@ const EDIT = (() => {
   const SVG = {
     search: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>',
     plus: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M12 5v14M5 12h14"/></svg>',
+    reuse: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>',
     play: '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M7 5v14l12-7z"/></svg>',
     pause: '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>',
     full: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>',
@@ -133,6 +134,7 @@ const EDIT = (() => {
           <span class="ed-gap"></span>
           <button class="ed-icon" id="edCut" title="Split at the playhead (S)">${SVG.split}</button>
           <button class="ed-icon" id="edDel" title="Delete the selected clip (⌫)">${SVG.del}</button>
+          <button class="ed-icon" id="edReuse" title="Use the selected clip's prompt and settings (in the Video tab)">${SVG.reuse}</button>
           <span class="ed-grow"></span>
           <button class="ed-icon" id="edFit" title="Fit the edit in view">${SVG.fit}</button>
           <button class="ed-icon" id="edZoomOut" title="Zoom out">${SVG.zoomOut}</button>
@@ -489,7 +491,7 @@ const EDIT = (() => {
     else {
       tr.innerHTML = E.pieces.map((p, i) => {
         const c = mediaById(p.clip), x = tx(startOf(i)), w = Math.max(6, len(p) * E.pxPerSec - 2);
-        return `<div class="ed-clip ${E.selected === p.id ? "sel" : ""}" data-piece="${p.id}" style="left:${x}px;width:${w}px">
+        return `<div class="ed-clip ${E.selected === p.id ? "sel" : ""}" data-piece="${p.id}" data-clip="${p.clip}" style="left:${x}px;width:${w}px">
           <div class="ed-lab">${esc(c?.prompt || "")}<b>${short(len(p))}</b></div>
           <canvas class="ed-strip"></canvas><canvas class="ed-wave ${E.muted ? "muted" : ""}"></canvas>
           <div class="ed-handle l" data-trim="l"></div><div class="ed-handle r" data-trim="r"></div>
@@ -500,6 +502,7 @@ const EDIT = (() => {
     placeHead();
     ed("Undo").disabled = !E.past.length; ed("Redo").disabled = !E.future.length;
     ed("Del").disabled = !E.selected; ed("Cut").disabled = !canSplit();
+    ed("Reuse").disabled = !E.selected;
     ed("Mute").innerHTML = E.muted ? SVG.mute : SVG.sound;
     ed("Mute").classList.toggle("off", E.muted);
     ed("Mute").title = E.muted ? "Sound is off in the preview and export. Click to turn it on." : "Sound is on in the preview and export";
@@ -642,6 +645,8 @@ const EDIT = (() => {
 
     ed("Cut").addEventListener("click", split);
     ed("Del").addEventListener("click", del);
+    // The selected clip's prompt and settings, back in the Video tab (as the grid's "Use this prompt and settings").
+    ed("Reuse").addEventListener("click", () => { const p = E.pieces.find((x) => x.id === E.selected); if (p) ACT.reuse(p.clip); });
     ed("Undo").addEventListener("click", undo);
     ed("Redo").addEventListener("click", redo);
     ed("Mute").addEventListener("click", () => { E.muted = !E.muted; vid("a").muted = vid("b").muted = E.muted; save(); drawTimeline(); });
@@ -680,7 +685,7 @@ const EDIT = (() => {
     if (E.preview) { E.preview = null; drawMedia(); }
     ed("Track").querySelectorAll(".ed-clip.sel").forEach((x) => x.classList.remove("sel"));
     el.classList.add("sel");
-    ed("Del").disabled = false;
+    ed("Del").disabled = false; ed("Reuse").disabled = false;
     const trim = e.target.dataset.trim, x0 = e.clientX, before = { in: p.in, out: p.out }, full = durOf(c);
     let moved = false, landing = null, tip = null;
     const onMove = (ev) => {
