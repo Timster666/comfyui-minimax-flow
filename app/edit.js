@@ -735,10 +735,13 @@ const EDIT = (() => {
     else if (k === "backspace" || k === "delete") { e.preventDefault(); del(); }
     else if (k === "z" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); e.shiftKey ? redo() : undo(); }
     else if (k === "arrowleft" || k === "arrowright") {
+      // A frame (Shift: a second) back or on; if it was playing, it plays on from there (not past the end).
+      const was = E.playing && !E.preview;
       e.preventDefault(); pause(); E.preview = null;
       E.playhead += (k === "arrowright" ? 1 : -1) * (e.shiftKey ? 1 : 1 / FPS);
       clampHead(); placeHead(); followHead(); showFrame();
-    } else if (k === "home") { pause(); E.playhead = 0; placeHead(); followHead(); showFrame(); }
+      if (was && E.playhead < total() - 0.02) play();
+    } else if (k === "home") { const was = E.playing && !E.preview; pause(); E.playhead = 0; placeHead(); followHead(); showFrame(); if (was) play(); }
     else if (k === "end") { pause(); E.playhead = total(); placeHead(); followHead(); showFrame(); }
   }
 
