@@ -697,7 +697,7 @@ function sheetText(sh = state.prunaSheet, list = state.prunaSheetSlots, notes = 
     + (helps.length ? " " + helps.join(" ") : "") + ((notes || "").trim() ? " " + notes.trim().replace(/[^.!?]$/, "$&.") : "");
 }
 /* The Models page: model_catalog.json's groups, installed or not, downloaded in the background on the pod. */
-const MODELS = { data: null, timer: null, open: false, focus: null, wasBusy: false };
+const MODELS = { data: null, timer: null, open: false, focus: null, wasBusy: false, filter: "all" };
 const TAB_NAMES = { video: "Video · MiniMax H3", image: "Image · MOSS-Image", klein: "Klein 9b", pruna: "Pruna · P-H3-Image" };
 const bytesText = (b) => (!b ? "–" : b >= 1e9 ? (b / 1e9).toFixed(b >= 1e10 ? 0 : 1) + " GB" : b >= 1e6 ? Math.round(b / 1e6) + " MB" : Math.round(b / 1e3) + " kB");
 const timeText = (s) => (s >= 3600 ? Math.floor(s / 3600) + " h " + Math.round((s % 3600) / 60) + " min" : s >= 60 ? Math.round(s / 60) + " min" : Math.max(1, Math.round(s)) + " s");
@@ -759,10 +759,17 @@ function renderModels(scroll) {
     </div>`;
   };
   const tabs = ["video", "image", "klein", "pruna"];
+  // All / Installed / Not installed (partly installed, downloading and waiting count as not installed).
+  const shows = (g) => MODELS.filter === "all" || (MODELS.filter === "installed") === (g.state === "installed");
+  const count = (f) => d.groups.filter((g) => f === "all" || (f === "installed") === (g.state === "installed")).length;
+  $("modelsFilter").innerHTML = [["all", "All"], ["installed", "Installed"], ["missing", "Not installed"]].map(([id, label]) =>
+    `<button class="${MODELS.filter === id ? "on" : ""}" data-act="modelsFilter" data-id="${id}" aria-pressed="${MODELS.filter === id}">${label} · ${count(id)}</button>`).join("");
   const open = document.querySelectorAll(".mfiles[open]");
   const keep = new Set([...open].map((el) => el.closest(".mcard").id));
   const top = $("modelsBody").scrollTop;
-  $("modelsBody").innerHTML = tabs.map((t) => `<h4 class="models-tab" id="mt-${t}">${TAB_NAMES[t]}</h4>${d.groups.filter((g) => g.tab === t).map(card).join("")}`).join("")
+  const shown = tabs.map((t) => [t, d.groups.filter((g) => g.tab === t && shows(g))]).filter(([, list]) => list.length);
+  $("modelsBody").innerHTML = (shown.length ? shown.map(([t, list]) => `<h4 class="models-tab" id="mt-${t}">${TAB_NAMES[t]}</h4>${list.map(card).join("")}`).join("")
+    : `<p class="models-note">${MODELS.filter === "installed" ? "Nothing is installed yet." : "Everything is installed."}</p>`)
     + `<p class="models-note">Downloads run on the pod, one file at a time, and carry on while you work or if you close this page. A model shows up in its tab when its files are in. On RunPod, the template's switches (shown with each model) download the same files when the pod starts.</p>`;
   keep.forEach((id) => document.querySelector("#" + id + " .mfiles")?.setAttribute("open", ""));
   if (scroll && MODELS.focus) $("mt-" + MODELS.focus)?.scrollIntoView({ block: "start" });
@@ -2352,6 +2359,7 @@ const ACT = {
   whyMissing: () => { say(missingWhy()); openModels(state.tab); },
   openModels: () => { showAppMenu(false); openModels(); },
   closeModels: () => closeModels(),
+  modelsFilter: (id) => { MODELS.filter = id; renderModels(false); $("modelsBody").scrollTop = 0; },
   modelGet: (id) => modelAction(id, "download"),
   modelCancel: (id) => modelAction(id, "cancel"),
   modelDelete: async (id) => {
