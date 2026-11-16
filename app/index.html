@@ -370,6 +370,9 @@ body.dragging-ref .composer { border-color: var(--line-strong); }
 .models-head { display: flex; justify-content: space-between; align-items: center; padding: 18px 20px 12px; border-bottom: 1px solid var(--line); }
 .models-head h2 { margin: 0 0 4px; font-size: 18px; }
 .models-head .models-x { position: static; flex: none; }
+.models-head { gap: 16px; }
+.models-filter { margin-left: auto; padding: 3px; border-radius: 11px; }
+.models-filter button { min-height: 32px; padding: 0 14px; font-size: 13px; border-radius: 8px; white-space: nowrap; }
 .models-body { overflow-y: auto; padding: 8px 20px 20px; }
 .models-tab { margin: 18px 0 8px; font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--faint); }
 .mcard { background: var(--bg); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 16px; margin-bottom: 10px; }
@@ -746,6 +749,7 @@ body.dragging-ref .composer { border-color: var(--line-strong); }
   <div class="models-box">
     <div class="models-head">
       <div><h2>Models</h2><span class="hint" id="modelsDisk"></span></div>
+      <div class="seg models-filter" id="modelsFilter"></div>
       <button class="zoom-x models-x" data-act="closeModels" aria-label="Close">✕</button>
     </div>
     <div class="models-body" id="modelsBody"></div>
