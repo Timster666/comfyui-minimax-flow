@@ -1856,7 +1856,9 @@ const loraStem = (n) => n.slice(Math.max(n.lastIndexOf("/"), n.lastIndexOf("\\")
 const loraSize = (b) => (b >= 1 << 30 ? (b / (1 << 30)).toFixed(1) + " GB" : b >= 1 << 20 ? Math.round(b / (1 << 20)) + " MB" : Math.max(1, Math.round(b / 1024)) + " KB");
 // The LoRAs to list, in groups: this tab's folder, then Not sorted, then (with Show all) other models' folders.
 // A folder that isn't one of the model folders counts as Not sorted too: only another model's LoRAs are hidden.
-const loraRank = (n) => { const f = loraFamily(n); return f === loraTab() ? 0 : f === "" || f === "other" ? 1 : 2; };
+// Pruna's P-H3-Image runs on MiniMax H3, so the Pruna tab lists MiniMax H3's LoRAs as its own too.
+const loraOwn = (f) => f === loraTab() || (loraTab() === "pruna" && f === "video");
+const loraRank = (n) => { const f = loraFamily(n); return loraOwn(f) ? 0 : f === "" || f === "other" ? 1 : 2; };
 const loraShown = () => {
   const words = LM.q.toLowerCase().split(/\s+/).filter(Boolean);
   return OPT.loras

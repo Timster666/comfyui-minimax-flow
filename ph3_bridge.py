@@ -191,10 +191,12 @@ def build_graph(clip, refs, name=None):
         graph["19"] = {"class_type": "LoraLoaderModelOnly",
                        "inputs": {"model": model, "lora_name": route["lora"], "strength_model": 1.0}}
         model = ["19", 0]
+    # Your LoRAs (P-H3-Image's own, or MiniMax H3's: it is the same model underneath) go through Vision's H3
+    # LoRA node, as in the Video tab: added at run time on the INT8 weights, with their adaLN part on pruned FL2VA.
     for i, extra in enumerate(clip.get("loras") or []):
         key = str(20 + i)
-        graph[key] = {"class_type": "LoraLoaderModelOnly",
-                      "inputs": {"model": model, "lora_name": lora_file(extra["name"]), "strength_model": float(extra["strength"])}}
+        graph[key] = {"class_type": "MMVisionLora",
+                      "inputs": {"model": model, "lora_name": lora_file(extra["name"]), "strength": float(extra["strength"])}}
         model = [key, 0]
     graph["18"] = {"class_type": "MiniMaxH3SigmaShift", "inputs": {"model": model, "shift_video": 1.0, "shift_audio": 1.0}}
 
