@@ -1535,7 +1535,6 @@ function renderClip() {
               ? `<span class="busy failed"><span>Render failed</span><span class="fail-why">${esc(c.error || "")}</span></span>`
               : `<button class="fs-btn still-fs" data-act="fullscreen" aria-label="Full screen">${ICON.expand}</button>`}
           ${compareHTML(c)}
-          <span class="badge">${mpText(c.res)} (${c.width}×${c.height})</span>
         </div>
         <span class="label takes-label">Other images from this prompt</span>
         <div class="takes" id="takes"></div>
@@ -1558,7 +1557,6 @@ function renderClip() {
                   <span class="time" id="playTime">0:00 / ${clock(c.len)}</span>
                   <button class="fs-btn" data-act="fullscreen" aria-label="Full screen">${ICON.expand}</button>
                 </div>`}
-          <span class="badge">${mpText(c.res)} (${c.width}×${c.height})</span>
         </div>
         <span class="label takes-label">Takes of this prompt</span>
         <div class="takes" id="takes"></div>

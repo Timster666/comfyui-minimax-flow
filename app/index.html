@@ -282,7 +282,8 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .player .track { width: 50%; height: 5px; }
 .controls { position: absolute; left: 14px; right: 14px; bottom: 14px; display: flex; align-items: center; gap: 12px; background: rgba(10,11,13,.78); border-radius: var(--radius); padding: 8px 12px; }
 .player .controls { opacity: 0; transition: opacity .25s; }
-.player.awake .controls, .player.paused .controls, .player .controls:hover, .player .controls:focus-within { opacity: 1; }
+/* Keyboard focus keeps them (a clicked button's focus doesn't, or full screen would never hide them) */
+.player.awake .controls, .player.paused .controls, .player .controls:hover, .player .controls:has(:focus-visible) { opacity: 1; }
 #clipView.fs .player:not(.awake):not(.paused) { cursor: none; }
 .play { width: 40px; height: 40px; border-radius: 20px; border: 0; background: var(--text); color: var(--bg); display: flex; align-items: center; justify-content: center; }
 .scrub { flex: 1; height: 4px; border-radius: 2px; background: var(--line-strong); }
@@ -418,7 +419,7 @@ body.dragging-ref .composer { border-color: var(--line-strong); }
 .compare-line { position: absolute; top: 0; bottom: 0; left: var(--cut); width: 2px; margin-left: -1px; background: #fff; box-shadow: 0 0 0 1px rgba(0,0,0,.4); }
 .compare-btn { position: absolute; left: 14px; bottom: 14px; z-index: 3; background: rgba(10,11,13,.78); color: var(--text); border: 1px solid var(--line-strong); border-radius: 999px; padding: 6px 14px; font: 500 13px var(--font); }
 .compare-btn.on { border-color: var(--accent); color: var(--accent-text); }
-.compare-tag { position: absolute; top: 44px; z-index: 3; font-size: 12px; background: rgba(0,0,0,.6); color: #ddd; padding: 2px 8px; border-radius: 6px; pointer-events: none; }
+.compare-tag { position: absolute; top: 12px; z-index: 3; font-size: 12px; background: rgba(0,0,0,.6); color: #ddd; padding: 2px 8px; border-radius: 6px; pointer-events: none; }
 .compare-tag.before { left: 12px; } .compare-tag.after { right: 60px; }
 .zoom { position: fixed; inset: 0; z-index: 100; background: rgba(0,0,0,.92); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 24px; cursor: zoom-out; outline: none; }
 .zoom img { max-width: 100%; max-height: calc(100% - 32px); object-fit: contain; border-radius: 8px; display: block; }
