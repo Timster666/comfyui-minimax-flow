@@ -1033,10 +1033,13 @@ function insertWord(word, at = null) {
   state.prompt = before + insert + after;
   state.caret = before.length + insert.length;
   state.mentionClosed = true;
+  // The text stays where it was scrolled to: setting the cursor would jump to it (often the end).
+  const scrolled = ta.scrollTop;
   renderPrompt(); renderRefs();
   saveUi();
-  ta.focus();
+  ta.focus({ preventScroll: true });
   ta.setSelectionRange(state.caret, state.caret);
+  ta.scrollTop = scrolled; $("mirror").scrollTop = scrolled;
 }
 
 function insertMention(ref) {
@@ -3410,6 +3413,9 @@ let promptSize = null;   // {width, height} you dragged to, or null
 try { promptSize = JSON.parse(sessionStorage.getItem(PROMPT_SIZE) || "null"); } catch {}
 function fitPrompt() {
   const root = document.documentElement.style, mirror = $("mirror");
+  // Measuring at the smallest box makes the browser scroll the text (to the caret, often the end):
+  // keep where it was scrolled to.
+  const scrolled = ta.scrollTop;
   if (promptSize?.width) root.setProperty("--composer-width", promptSize.width + "px");
   let height = promptSize?.height;
   if (!height) {
@@ -3417,6 +3423,7 @@ function fitPrompt() {
     height = Math.min(Math.max(PROMPT_MIN, mirror.scrollHeight), Math.round(innerHeight * 0.5));
   }
   root.setProperty("--prompt-box", height + "px");
+  ta.scrollTop = scrolled;
   mirror.scrollTop = ta.scrollTop;
 }
 ta.addEventListener("scroll", () => { $("mirror").scrollTop = ta.scrollTop; });
