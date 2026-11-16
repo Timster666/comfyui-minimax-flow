@@ -48,6 +48,14 @@ The app has five tabs, and it always opens on **Video**.
   Klein makes one from the prompt alone. **Size** in the settings is **Match image 1** (its shape) or an
   aspect ratio. **Edit this** on a result puts it in image 1, to keep editing; the Image tab's pictures
   have **Edit in Klein**. A prompt that names an empty slot isn't sent.
+
+  **Face swap** (the switch at the top of Klein's prompt bar) puts a head on another picture with
+  Alissonerdx's [BFS head-swap LoRA](https://huggingface.co/Alissonerdx/BFS-Best-Face-Swap) for Klein 9B:
+  **body** is the picture that keeps its pose, light and background, **face** the person whose head goes
+  onto it. The app writes the swap prompt (as in Comfy's face swap workflow: the LoRA at 1.0, both pictures
+  at 1 MP, lcm, 4 steps); the text box adds notes after it. It needs
+  `bfs_head_v1_flux-klein_9b_step3750_rank64.safetensors` in `models/loras` (any folder). Only use it on
+  people who agreed to it.
 - **Pruna** makes and edits pictures with Pruna AI's P-H3-Image. It has two modes, switched at the top of
   the prompt bar:
   - **Image**: up to nine slots, **picture 1** to **picture 9** (more appear as you fill them). With no

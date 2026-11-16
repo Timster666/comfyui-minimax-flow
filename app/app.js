@@ -63,7 +63,7 @@ const state = {
   tab: "video",              // "video" | "image" | "klein" | "edit": "edit" is the editor (edit.js), the others the gallery and prompt
   negative: "",              // the Image tab's negative prompt (empty: the model's recommended one)
   negativeOpen: false,
-  drafts: { video: "", image: "", klein: "", pruna: "", prunaSheet: "", edit: "" },   // each tab keeps its own prompt
+  drafts: { video: "", image: "", klein: "", kleinSwap: "", pruna: "", prunaSheet: "", edit: "" },   // each tab keeps its own prompt
   videoSettings: { model: "HyperFlow H3 Flash", steps: 6, res: 0.6, aspect: "16:9", len: 5, seedMode: "random", seed: 48213, loras: [] },
   imageSettings: { model: "MOSS-Image SFT (INT8)", steps: 50, cfg: 3.0, res: 1.0, aspect: "1:1", seedMode: "random", seed: 48213, loras: [] },
   // size: "match" (image 1's shape) or an aspect ratio, which is also kept in aspect.
@@ -71,6 +71,9 @@ const state = {
   // The Klein tab's four slots, image 1-4: ids of images from the Add image library, or null. The slots keep
   // their names: whatever is in slot 3 is "image 3" in the prompt.
   kleinSlots: [null, null, null, null],
+  // Klein's Face swap: picture 1 the body and scene, picture 2 the face (the head to put on it).
+  kleinMode: "edit",
+  kleinSwapSlots: [null, null],
   // The Pruna tab (P-H3-Image): Image (slots picture 1-9) or Character sheet (the character, then up to three
   // pictures that help with its face, outfit or details, and the views to draw). res is Image's size, sheetRes the sheet's.
   prunaSettings: { model: "MiniMax H3 + P-H3-Image LoRA", steps: 8, res: 4.0, sheetRes: 8.0, size: "match", aspect: "1:1", seedMode: "random", seed: 48213, loras: [], enhance: false },
@@ -105,18 +108,19 @@ const isImage = () => state.tab === "image";
 const isKlein = () => state.tab === "klein";
 const isPruna = () => state.tab === "pruna";
 const sheetOn = () => isPruna() && state.prunaMode === "sheet";
+const swapOn = () => isKlein() && state.kleinMode === "swap";
 // The tabs whose results are pictures, and the tabs with named slots (Klein's image 1-4, Pruna's picture 1-9).
 const imageTab = () => isImage() || isKlein() || isPruna();
 const isSlotTab = () => isKlein() || isPruna();
 // Where the prompt box's text is kept: each tab, and Pruna's sheet notes apart from its image prompt.
-const draftKey = () => (sheetOn() ? "prunaSheet" : state.tab);
+const draftKey = () => (sheetOn() ? "prunaSheet" : swapOn() ? "kleinSwap" : state.tab);
 // The Image tab with Edit on: one slot, the picture to edit.
 const editOn = () => isImage() && state.imageEdit;
 // The tabs with picture slots in the prompt bar: Klein (image 1-4) and the Image tab's Edit (one picture).
 const hasSlots = () => isSlotTab() || editOn();
-const slots = () => (isKlein() ? state.kleinSlots : isPruna() ? (sheetOn() ? state.prunaSheetSlots : state.prunaSlots) : state.imageEditSlot);
+const slots = () => (isKlein() ? (swapOn() ? state.kleinSwapSlots : state.kleinSlots) : isPruna() ? (sheetOn() ? state.prunaSheetSlots : state.prunaSlots) : state.imageEditSlot);
 const ROLE_NAMES = { character: "character", face: "face", outfit: "outfit", detail: "detail" };
-const slotWord = (i) => (isKlein() ? "image " + (i + 1) : sheetOn() ? (i ? ROLE_NAMES[state.prunaSheet.roles[i]] || "detail" : "character")
+const slotWord = (i) => (swapOn() ? (i ? "face" : "body") : isKlein() ? "image " + (i + 1) : sheetOn() ? (i ? ROLE_NAMES[state.prunaSheet.roles[i]] || "detail" : "character")
   : isPruna() ? "picture " + (i + 1) : "the picture to edit");
 const SlotWord = (i) => slotWord(i).replace(/^./, (ch) => ch.toUpperCase());
 // "image 2" (Klein) or "picture 2" (Pruna) in a prompt.
@@ -230,7 +234,7 @@ function summary() {
   const n = activeLoras().length;
   if (isKlein()) {
     const m = modelOf(s.model), [w, h] = kleinSize();
-    return [s.model, s.steps + " steps", ...(m.base ? ["Guidance " + s.cfg] : []), s.size === "match" ? "Match image 1" : s.aspect,
+    return [s.model, s.steps + " steps", ...(m.base ? ["Guidance " + s.cfg] : []), s.size === "match" ? (swapOn() ? "Match the body" : "Match image 1") : s.aspect,
       w + "×" + h, s.seedMode === "fixed" ? "Seed " + s.seed : "Random seed", n + (n === 1 ? " LoRA" : " LoRAs")].join(" · ");
   }
   if (isPruna()) {
@@ -277,6 +281,7 @@ function saveUi() {
     api("PUT", "ui", { settings: state.videoSettings, imageSettings: state.imageSettings, attached: state.attached, perRow: state.perRow,
       prompt: state.drafts.video, imagePrompt: state.drafts.image, imageNegative: state.negative, negativeOpen: state.negativeOpen,
       kleinSettings: state.kleinSettings, kleinPrompt: state.drafts.klein, kleinSlots: state.kleinSlots,
+      kleinMode: state.kleinMode, kleinSwapSlots: state.kleinSwapSlots, kleinSwapPrompt: state.drafts.kleinSwap,
       prunaSettings: state.prunaSettings, prunaPrompt: state.drafts.pruna, prunaSheetPrompt: state.drafts.prunaSheet, prunaMode: state.prunaMode,
       prunaSlots: state.prunaSlots, prunaSheetSlots: state.prunaSheetSlots, prunaSheet: state.prunaSheet,
       imageEdit: state.imageEdit, imageEditSource: state.imageEditSlot[0],
@@ -506,10 +511,20 @@ function renderNegative() {
 // prompt switch and "What the model gets".
 function renderPrunaBar() {
   const on = isPruna();
-  $("prunaMode").hidden = !on;
+  $("prunaMode").hidden = !on && !isKlein();
   $("sheetViews").hidden = !sheetOn();
   $("enhanceToggle").hidden = !on;
-  $("prunaSent").hidden = !on;
+  $("prunaSent").hidden = !on && !swapOn();
+  if (isKlein()) {
+    // Klein: Edit (image 1-4) or Face swap (body and face, with the BFS LoRA).
+    $("prunaMode").innerHTML = `<div class="seg">${[["edit", "Edit"], ["swap", "Face swap"]].map(([id, label]) =>
+      `<button class="${state.kleinMode === id ? "on" : ""}" data-act="kleinMode" data-id="${id}" aria-pressed="${state.kleinMode === id}">${label}</button>`).join("")}</div>
+      <span class="hint">${swapOn() ? (OPT.klein.swap ? "Puts the head from the face picture onto the body picture, with the BFS head-swap LoRA."
+        : "Face swap needs the BFS head-swap LoRA (bfs_head_v1_flux-klein_9b_step3750_rank64.safetensors) in models/loras.")
+        : "Edit up to four pictures, or make one from the prompt."}</span>`;
+    if (swapOn()) $("prunaSentText").textContent = swapText();
+    return;
+  }
   if (!on) return;
   $("prunaMode").innerHTML = `<div class="seg">${[["image", "Image"], ["sheet", "Character sheet"]].map(([id, label]) =>
     `<button class="${state.prunaMode === id ? "on" : ""}" data-act="prunaMode" data-id="${id}" aria-pressed="${state.prunaMode === id}">${label}</button>`).join("")}</div>
@@ -601,7 +616,7 @@ function editSize(res = state.imageSettings.res) {
 }
 
 function kleinSize(s = state.kleinSettings) {
-  const r = slotRef(0, state.kleinSlots);
+  const r = slotRef(0, swapOn() ? state.kleinSwapSlots : state.kleinSlots);
   if (s.size === "match" && r && r.w) {
     const k = Math.sqrt((s.res * 1024 * 1024) / (r.w * r.h));
     return [Math.max(16, Math.round((r.w * k) / 16) * 16), Math.max(16, Math.round((r.h * k) / 16) * 16)];
@@ -663,6 +678,12 @@ function sheetText(sh = state.prunaSheet, list = state.prunaSheetSlots, notes = 
     + "Same identity, face, hair, outfit, colours and proportions in every view; full figures from the top of the head to the soles with space above and below. No text, labels or borders."
     + (helps.length ? " " + helps.join(" ") : "") + ((notes || "").trim() ? " " + notes.trim().replace(/[^.!?]$/, "$&.") : "");
 }
+// Klein's face swap prompt (from the server, as the BFS workflow writes it), with the notes after it.
+function swapText(notes = state.prompt) {
+  const base = OPT.klein.swapPrompt || "head_swap: start with Picture 1 as the base image …";
+  return base + (notes.trim() ? ". " + notes.trim() : "");
+}
+
 // What P-H3-Image (or with Enhance, its prompt upsampler) gets, as the server sends it.
 const PH3_RATIOS = { "1:1": 1, "4:3": 4 / 3, "3:2": 1.5, "16:9": 16 / 9, "21:9": 21 / 9, "3:1": 3, "4:1": 4, "3:4": 3 / 4, "2:3": 2 / 3, "9:16": 9 / 16 };
 function prunaSent() {
@@ -679,7 +700,7 @@ function prunaSent() {
 }
 
 // The slots the prompt names that have nothing in them.
-const emptyNamed = (text = state.prompt) => (sheetOn() || !isSlotTab() ? []
+const emptyNamed = (text = state.prompt) => (sheetOn() || swapOn() || !isSlotTab() ? []
   : [...new Set([...text.matchAll(slotRe())].map((m) => Number(m[1])))].filter((n) => !slots()[n - 1]).sort());
 function renderSlots() {
   $("refs").hidden = false;
@@ -688,6 +709,8 @@ function renderSlots() {
   const list = slots(), filled = list.filter(Boolean).length, empty = emptyNamed(), word = isPruna() ? "picture" : "image";
   $("hint").textContent = empty.length
     ? `The prompt names ${empty.map((n) => word + " " + n).join(" and ")}, but ${empty.length > 1 ? "those slots are" : "that slot is"} empty`
+    : swapOn() ? (list[0] && list[1] ? "The face goes onto the body. Write notes if you like, or just press the arrow."
+      : list[0] ? "Now the face: the person whose head goes onto the body" : "First the body and scene: the picture that keeps its pose, light and background")
     : sheetOn() ? (list[0] ? `${state.prunaSheet.views.length} view${state.prunaSheet.views.length === 1 ? "" : "s"} · the extra pictures help with the face, outfit or details` : "Add the character to draw")
     : isPruna() ? (filled ? `${filled} of 9 pictures · picture 1 is edited, the others are references` : "No pictures: it makes one from the prompt alone")
     : filled ? `${filled} of 4 pictures · drag one onto another slot to swap them` : "No pictures: Klein makes one from the prompt alone";
@@ -738,7 +761,7 @@ function putInSlot(ref, slot = -1) {
   if (slot < 0) { say("All the slots are full. Drop it on one to replace that picture."); return -1; }
   list[slot] = ref.id;
   render();
-  say(isSlotTab() ? `@${ref.name} is ${sheetOn() ? "the " : ""}${slotWord(slot)}.` : `Editing @${ref.name}.`);
+  say(isSlotTab() ? `@${ref.name} is ${sheetOn() || swapOn() ? "the " : ""}${slotWord(slot)}.` : `Editing @${ref.name}.`);
   return slot;
 }
 
@@ -749,6 +772,7 @@ function renderPrompt() {
       : isImage() ? "Describe an image, for example: a neon sign that says \"OPEN ALL NIGHT\" in the rain."
       : isKlein() ? "Describe the edit. Call the pictures image 1, image 2, image 3 and image 4, for example: put the bag from image 2 in the hand of the woman in image 1."
       : sheetOn() ? "Optional notes for the sheet, for example: keep the scarf, no weapon."
+      : swapOn() ? "Optional notes, added after the face swap prompt, for example: keep the glasses from the face."
       : isPruna() ? "Describe a picture, or the edit to picture 1. Call the pictures picture 1, picture 2 …, for example: put the lamp from picture 2 on the table in picture 1."
       : "Describe a shot. Type @ to use one of your images."}</span>`;
   if ($("prompt").value !== state.prompt) $("prompt").value = state.prompt;
@@ -965,8 +989,8 @@ function libButton(refId, inBar) {
     const list = slots();
     const at = refId ? list.indexOf(refId) : -1;
     const to = state.library.slot != null ? state.library.slot : list.indexOf(null);
-    if (at >= 0) return `<button class="btn lib-add" data-act="libToggle">Take out of ${sheetOn() ? "the " : ""}${slotWord(at)}</button>`;
-    return `<button class="btn primary lib-add" data-act="libToggle" ${to < 0 ? "disabled" : ""}>${to < 0 ? "All the slots are full" : "Put in " + (sheetOn() ? "the " : "") + slotWord(to)}</button>`;
+    if (at >= 0) return `<button class="btn lib-add" data-act="libToggle">Take out of ${sheetOn() || swapOn() ? "the " : ""}${slotWord(at)}</button>`;
+    return `<button class="btn primary lib-add" data-act="libToggle" ${to < 0 ? "disabled" : ""}>${to < 0 ? "All the slots are full" : "Put in " + (sheetOn() || swapOn() ? "the " : "") + slotWord(to)}</button>`;
   }
   return `<button class="btn ${inBar ? "" : "primary"} lib-add" data-act="libToggle">${inBar ? "Remove from prompt" : "Add to prompt"}</button>`;
 }
@@ -1089,7 +1113,7 @@ function kleinSettingsHTML(s, model, T, minSteps, stepSize, recPct) {
     <div class="field">
       <span class="label">Size</span>
       <div class="aspects five klein-sizes">
-        <button class="match ${s.size === "match" ? "on" : ""}" data-act="kleinMatch">Match image 1<small>${r1 ? (r1.w ? r1.w + "×" + r1.h : "image 1") : "image 1 is empty: 1:1"}</small></button>
+        <button class="match ${s.size === "match" ? "on" : ""}" data-act="kleinMatch">${swapOn() ? "Match the body" : "Match image 1"}<small>${r1 ? (r1.w ? r1.w + "×" + r1.h : slotWord(0)) : slotWord(0) + " is empty: 1:1"}</small></button>
         ${Object.keys(T.aspects).map((a) => {
           const [aw, ah] = T.aspects[a];
           const k = 24 / Math.max(aw, ah);
@@ -1407,12 +1431,12 @@ function editedFrom(c) {
 
 // A Klein image's page: its prompt, the pictures it was made from (in their slots) and its settings.
 function renderKleinSide(c) {
-  const slots = (c.slots || []).concat([null, null, null, null]).slice(0, 4);
-  const done = c.status === "done";
+  const swap = !!c.swap, slots = (c.slots || []).concat([null, null, null, null]).slice(0, swap ? 2 : 4);
+  const done = c.status === "done", name = (i) => (swap ? (i ? "face" : "body") : "image " + (i + 1));
   $("clipSide").innerHTML = `
     <div class="field">
-      <span class="label">Prompt</span>
-      <div class="prompt-box"><p class="clip-prompt">${promptHTML(c.prompt, "klein", slots)}</p>
+      <span class="label">${swap ? "Face swap · notes" : "Prompt"}</span>
+      <div class="prompt-box"><p class="clip-prompt">${swap ? (c.prompt === "Face swap" ? '<span class="label">None</span>' : esc(c.prompt)) : promptHTML(c.prompt, "klein", slots)}</p>
         <button class="copy prompt-copy" data-act="copyPrompt" aria-label="Copy the prompt" title="Copy the prompt">${ICON.copy}</button></div>
     </div>
     <div class="field">
@@ -1420,16 +1444,17 @@ function renderKleinSide(c) {
       <div class="side-slots">${slots.map((x, i) => {
         const r = x && state.refs.find((y) => y.id === x.id);
         if (r) refSize(r);
-        return `<div class="side-slot ${x ? "" : "vacant"}" title="${x ? "image " + (i + 1) + ": @" + esc(x.name) : "image " + (i + 1) + " was empty"}">
+        return `<div class="side-slot ${x ? "" : "vacant"}" title="${x ? name(i) + ": @" + esc(x.name) : name(i) + " was empty"}">
           <span class="side-pic" style="background:${r ? r.tone : "transparent"}">${r ? `<img src="${r.img}" alt="">` : x ? "?" : ""}</span>
-          <span class="side-name">image ${i + 1}</span><span class="slot-res">${r && r.w ? r.w + "×" + r.h : x ? "@" + esc(x.name) : "empty"}</span></div>`;
+          <span class="side-name">${name(i)}</span><span class="slot-res">${r && r.w ? r.w + "×" + r.h : x ? "@" + esc(x.name) : "empty"}</span></div>`;
       }).join("")}</div>
     </div>
+    ${swap && c.sent ? `<details class="sent-box"><summary>What the model got</summary><pre>${esc(c.sent)}</pre></details>` : ""}
     <dl class="facts">
-      <dt>Model</dt><dd>${esc(c.model)}</dd>
+      <dt>Model</dt><dd>${esc(c.model)}${swap ? " + BFS head swap" : ""}</dd>
       <dt>Steps</dt><dd>${c.steps}</dd>
       <dt>Guidance</dt><dd>${Number(c.cfg).toFixed(1)}</dd>
-      <dt>Size</dt><dd>${c.size && c.size !== "match" ? esc(c.size) : "Match image 1"} · ${c.width}×${c.height} (${mpText(c.res)})</dd>
+      <dt>Size</dt><dd>${c.size && c.size !== "match" ? esc(c.size) : swap ? "Match the body" : "Match image 1"} · ${c.width}×${c.height} (${mpText(c.res)})</dd>
       <dt>Seed</dt><dd class="seed-dd">${c.seed}<button class="copy" data-act="copySeed" aria-label="Copy seed">${ICON.copy}</button></dd>
       <dt>LoRAs</dt><dd>${c.loras.length ? c.loras.map((l) => esc(loraText(l))).join("<br>") : '<span class="label">None</span>'}</dd>
     </dl>
@@ -1670,6 +1695,17 @@ async function generate() {
   const s = state.settings;
   const prompt = state.prompt.trim();
   if (isPruna()) { generatePruna(prompt); return; }
+  if (swapOn()) {
+    const [body, face] = state.kleinSwapSlots;
+    if (!OPT.klein.swap) { say("Face swap needs the BFS head-swap LoRA for Klein 9B in models/loras."); return; }
+    if (!body || !face) { say(body ? "Add the face picture too." : "Add the body picture first, then the face."); return; }
+    state.settingsOpen = false; render();
+    try {
+      const { clip } = await api("POST", "generate", { kind: "klein", mode: "swap", prompt, settings: s, slots: state.kleinSwapSlots });
+      upsertClip(clip);
+    } catch (error) { say(error.message); }
+    return;
+  }
   if (!prompt) { say("Write a prompt first."); return; }
   const names = new Set(state.refs.map((r) => r.name));
   const unknown = imageTab() ? null : mentionsIn(prompt).find((n) => !names.has(n));
@@ -2219,6 +2255,14 @@ const ACT = {
     state.library.slot = null; state.settingsOpen = false;
     render(); saveUi();
   },
+  kleinMode: (id) => {
+    if (id === state.kleinMode) return;
+    state.drafts[draftKey()] = state.prompt;
+    state.kleinMode = id;
+    state.prompt = state.drafts[draftKey()] || ""; state.caret = state.prompt.length;
+    state.library.slot = null; state.settingsOpen = false;
+    render(); saveUi();
+  },
   sheetPreset: (id) => { state.prunaSheet.preset = id; state.prunaSheet.views = SHEET_PRESETS[id].views.slice(); render(); saveUi(); },
   sheetView: (id) => {
     const v = state.prunaSheet.views;
@@ -2437,13 +2481,15 @@ function reuseKlein(c) {
   Object.assign(s, { model, steps: c.steps, cfg: c.cfg, res: c.res, size: c.size || "match", seedMode: "random",
     loras: c.loras.map((l) => ({ id: l.name, name: l.name, strength: l.strength, on: true })) });
   if (c.size && c.size !== "match") s.aspect = c.size;
-  const slots = (c.slots || []).concat([null, null, null, null]).slice(0, 4);
-  state.kleinSlots = slots.map((x) => (x && state.refs.some((r) => r.id === x.id) ? x.id : null));
-  const lost = slots.filter((x, i) => x && !state.kleinSlots[i]).length;
-  state.prompt = c.prompt; state.caret = c.prompt.length; state.mentionClosed = true;
+  if (swapOn() !== !!c.swap) ACT.kleinMode(c.swap ? "swap" : "edit");
+  const slots = (c.slots || []).concat([null, null, null, null]).slice(0, c.swap ? 2 : 4);
+  const kept = slots.map((x) => (x && state.refs.some((r) => r.id === x.id) ? x.id : null));
+  if (c.swap) state.kleinSwapSlots = kept; else state.kleinSlots = kept;
+  const lost = slots.filter((x, i) => x && !kept[i]).length;
+  state.prompt = c.swap && c.prompt === "Face swap" ? "" : c.prompt; state.caret = state.prompt.length; state.mentionClosed = true;
   if (isFull()) document.exitFullscreen();
   state.view = "gallery";
-  render();
+  render(); saveUi();
   say("Prompt, settings and pictures are back, with a random seed." + (lost ? ` ${lost === 1 ? "One picture isn't" : lost + " pictures aren't"} in the Add image library any more.` : ""));
 }
 
@@ -2457,7 +2503,7 @@ async function editIn(id, tab) {
     state.view = "gallery";
     if (state.tab !== tab) ACT.tab(tab);
     if (tab === "pruna") { if (sheetOn()) ACT.prunaMode("image"); state.prunaSlots[0] = ref.id; }
-    else state.kleinSlots[0] = ref.id;
+    else slots()[0] = ref.id;
     render();
     $("prompt").focus();
     say(`It's ${tab === "pruna" ? "picture 1" : "image 1"} now. Describe the next edit.`);
@@ -2825,7 +2871,7 @@ async function dropOnSlots(e) {
   if (from !== "") {
     const a = Number(from);
     // Dropped on the prompt text: its name goes where the cursor was (Klein: the pictures have names).
-    if (to < 0 && e.target === ta) { if (isSlotTab() && !sheetOn()) insertWord(slotWord(a)); return; }
+    if (to < 0 && e.target === ta) { if (isSlotTab() && !sheetOn() && !swapOn()) insertWord(slotWord(a)); return; }
     if (to < 0 || a === to) return;
     const list = slots();
     [list[a], list[to]] = [list[to], list[a]];
@@ -2840,7 +2886,7 @@ async function dropOnSlots(e) {
   if (!r) return;
   const replaced = (to >= 0 || editOn()) && slots()[Math.max(0, to)] && slots()[Math.max(0, to)] !== r.id;
   const at = putInSlot(r, to);
-  if (replaced && at >= 0) say(isSlotTab() ? `@${r.name} is ${sheetOn() ? "the " : ""}${slotWord(at)} now (replaced).` : `Editing @${r.name} now (replaced).`);
+  if (replaced && at >= 0) say(isSlotTab() ? `@${r.name} is ${sheetOn() || swapOn() ? "the " : ""}${slotWord(at)} now (replaced).` : `Editing @${r.name} now (replaced).`);
   // Replaced from Add image: that's done, so it closes.
   if (replaced && state.library.open) { ACT.closePopups(); return; }
   if (state.library.open) { renderLibNav(); renderLibList(); renderLibPreview(); }
@@ -2861,7 +2907,7 @@ async function uploadToSlots(files, slot = -1) {
     added.forEach((r, n) => {
       const list = slots();
       const at = n === 0 && slot >= 0 ? slot : editOn() ? (n === 0 ? 0 : -1) : list.indexOf(null);
-      if (at >= 0) { list[at] = r.id; placed.push(isSlotTab() ? `@${r.name} is ${sheetOn() ? "the " : ""}${slotWord(at)}` : `Editing @${r.name}`); }
+      if (at >= 0) { list[at] = r.id; placed.push(isSlotTab() ? `@${r.name} is ${sheetOn() || swapOn() ? "the " : ""}${slotWord(at)}` : `Editing @${r.name}`); }
     });
     render();
     say(placed.length ? placed.join(", ") + "." + (placed.length < added.length ? " The rest are in Add image (all the slots are full)." : "")
@@ -3016,6 +3062,9 @@ async function load(first = true) {
       const keep = (list, n) => Array.from({ length: n }, (_, i) => { const id = (list || [])[i]; return id && state.refs.some((r) => r.id === id) ? id : null; });
       state.prunaSlots = keep(ui.prunaSlots, 9);
       state.prunaSheetSlots = keep(ui.prunaSheetSlots, 4);
+      state.kleinSwapSlots = keep(ui.kleinSwapSlots, 2);
+      state.kleinMode = ui.kleinMode === "swap" ? "swap" : "edit";
+      state.drafts.kleinSwap = ui.kleinSwapPrompt || "";
       state.kleinSlots = [0, 1, 2, 3].map((i) => { const id = (ui.kleinSlots || [])[i]; return id && state.refs.some((r) => r.id === id) ? id : null; });
       state.imageEditSlot = [state.refs.some((r) => r.id === ui.imageEditSource) ? ui.imageEditSource : null];
       state.negative = typeof ui.imageNegative === "string" ? ui.imageNegative : "";
