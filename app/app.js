@@ -729,7 +729,14 @@ async function modelAction(id, action) {
 function renderModels(scroll) {
   const d = MODELS.data;
   if (!d) return;
-  $("modelsDisk").textContent = `${bytesText(d.disk.free)} free of ${bytesText(d.disk.total)} in the models folder` + (d.token ? " · HF_TOKEN is set" : " · no HF_TOKEN (Klein needs one)");
+  // The models folder's disk: a bar of what is used, the downloads waiting shown on top of it, and the free space.
+  const used = d.disk.total - d.disk.free, pct = (b) => Math.min(100, (b / d.disk.total) * 100);
+  const pending = d.groups.filter((g) => g.state === "downloading" || g.state === "queued").reduce((n, g) => n + g.missingBytes, 0);
+  const tight = d.disk.free - pending < 0.1 * d.disk.total;
+  $("modelsDisk").innerHTML = `<span class="disk ${tight ? "tight" : ""}" title="${bytesText(used)} used of ${bytesText(d.disk.total)}">
+      <span class="disk-bar"><span class="disk-used" style="width:${pct(used).toFixed(1)}%"></span><span class="disk-next" style="left:${pct(used).toFixed(1)}%;width:${pct(pending).toFixed(1)}%"></span></span>
+      <span class="disk-text"><b>${bytesText(d.disk.free)}</b> free of ${bytesText(d.disk.total)}${pending ? ` · ${bytesText(pending)} on the way` : ""}</span></span>
+    <span class="token ${d.token ? "ok" : ""}">${d.token ? "HF_TOKEN set" : "No HF_TOKEN (Klein needs one)"}</span>`;
   const byId = Object.fromEntries(d.groups.map((g) => [g.id, g]));
   const card = (g) => {
     const job = d.job && d.job.group === g.id ? d.job : null;
