@@ -71,7 +71,7 @@ The app has five tabs, and it always opens on **Video**.
     MiniMax H3/    the Video tab's LoRAs
     MOSS Image/    the Image tab's LoRAs
     Flux Klein/    the Klein 9b tab's LoRAs
-    P-H3 Image/    the Pruna tab's LoRAs
+    P-H3 Image/    the Pruna tab's LoRAs (it lists MiniMax H3's too: P-H3-Image runs on MiniMax H3)
   ```
 
   Each tab lists its own folder first, then **Not sorted**: files loose in `loras` and any folder that
