@@ -26,7 +26,7 @@ import uuid
 
 from aiohttp import web
 
-from . import clip_info, comfy_link, edit_media, edit_project, h3_graph, klein_bridge, moss_bridge, ph3_bridge
+from . import clip_info, comfy_link, edit_media, edit_project, h3_graph, klein_bridge, model_store, moss_bridge, ph3_bridge
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 APP_DIR = os.path.join(HERE, "app")
@@ -319,6 +319,41 @@ async def put_ui(request):
                 data["ui"][key] = body[key]
         write_project(data)
     return web.json_response({"ok": True})
+
+
+# ---- The Models page: download model_catalog.json's groups in the background ----
+def models_done(group_id):
+    """A group finished downloading: tell the app, which reloads what is installed."""
+    from server import PromptServer
+    lora_list(refresh=True)
+    PromptServer.instance.send_sync("mmflow.models", {"done": group_id}, None)
+
+
+async def get_models(request):
+    if model_store.STORE.sizes_file is None:
+        model_store.STORE.load_sizes(root_dir())
+        model_store.STORE.on_done = models_done
+    return web.json_response(model_store.STORE.status())
+
+
+async def models_action(request):
+    group, action = request.match_info["id"], request.match_info["action"]
+    store = model_store.STORE
+    store.on_done = models_done
+    try:
+        if action == "download":
+            store.download(group)
+        elif action == "cancel":
+            store.cancel(group)
+        elif action == "delete":
+            return web.json_response({**store.delete(group), **store.status()})
+        else:
+            raise web.HTTPNotFound()
+    except KeyError:
+        raise web.HTTPNotFound(text="No such model group.")
+    except RuntimeError as error:
+        raise web.HTTPBadRequest(text=str(error))
+    return web.json_response(store.status())
 
 
 async def upload_mask(request):
@@ -1216,6 +1251,8 @@ ROUTES = (
     ("GET", "/mmflow/api/loras", get_loras),
     ("POST", "/mmflow/api/images", upload_images),
     ("POST", "/mmflow/api/masks", upload_mask),
+    ("GET", "/mmflow/api/models", get_models),
+    ("POST", "/mmflow/api/models/{id}/{action}", models_action),
     ("POST", "/mmflow/api/images/from-clip", image_from_clip),
     ("PATCH", "/mmflow/api/images/{id}", rename_image),
     ("POST", "/mmflow/api/generate", generate),

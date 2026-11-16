@@ -696,6 +696,79 @@ function sheetText(sh = state.prunaSheet, list = state.prunaSheetSlots, notes = 
     + "Same identity, face, hair, outfit, colours and proportions in every view; full figures from the top of the head to the soles with space above and below. No text, labels or borders."
     + (helps.length ? " " + helps.join(" ") : "") + ((notes || "").trim() ? " " + notes.trim().replace(/[^.!?]$/, "$&.") : "");
 }
+/* The Models page: model_catalog.json's groups, installed or not, downloaded in the background on the pod. */
+const MODELS = { data: null, timer: null, open: false, focus: null, wasBusy: false };
+const TAB_NAMES = { video: "Video · MiniMax H3", image: "Image · MOSS-Image", klein: "Klein 9b", pruna: "Pruna · P-H3-Image" };
+const bytesText = (b) => (!b ? "–" : b >= 1e9 ? (b / 1e9).toFixed(b >= 1e10 ? 0 : 1) + " GB" : b >= 1e6 ? Math.round(b / 1e6) + " MB" : Math.round(b / 1e3) + " kB");
+const timeText = (s) => (s >= 3600 ? Math.floor(s / 3600) + " h " + Math.round((s % 3600) / 60) + " min" : s >= 60 ? Math.round(s / 60) + " min" : Math.max(1, Math.round(s)) + " s");
+function openModels(tab) {
+  MODELS.open = true; MODELS.focus = tab || null;
+  $("models").hidden = false;
+  pollModels(true);
+}
+function closeModels() { MODELS.open = false; $("models").hidden = true; }
+async function pollModels(scroll) {
+  clearTimeout(MODELS.timer);
+  try { MODELS.data = await api("GET", "models"); } catch (error) { if (MODELS.open) $("modelsBody").innerHTML = `<p class="merr">${esc(error.message)}</p>`; return; }
+  const busy = !!MODELS.data.job || MODELS.data.queue.length > 0;
+  if (MODELS.wasBusy && !busy) load(false);   // something finished: what is installed changed
+  MODELS.wasBusy = busy;
+  if (MODELS.open) renderModels(scroll);
+  if (MODELS.open || busy) MODELS.timer = setTimeout(() => pollModels(false), busy ? 1000 : 4000);
+}
+async function modelAction(id, action) {
+  try {
+    MODELS.data = await api("POST", `models/${id}/${action}`);
+    if (action === "delete") { say(MODELS.data.kept.length ? "Deleted. Kept " + MODELS.data.kept.length + " file(s) another model needs." : "Deleted."); load(false); }
+    if (action === "download") say("Downloading in the background. You can keep working.");
+    MODELS.wasBusy = !!MODELS.data.job || MODELS.data.queue.length > 0;
+    renderModels(false);
+    pollModels(false);
+  } catch (error) { say(error.message); }
+}
+function renderModels(scroll) {
+  const d = MODELS.data;
+  if (!d) return;
+  $("modelsDisk").textContent = `${bytesText(d.disk.free)} free of ${bytesText(d.disk.total)} in the models folder` + (d.token ? " · HF_TOKEN is set" : " · no HF_TOKEN (Klein needs one)");
+  const byId = Object.fromEntries(d.groups.map((g) => [g.id, g]));
+  const card = (g) => {
+    const job = d.job && d.job.group === g.id ? d.job : null;
+    const label = { installed: "Installed", partly: "Partly installed", missing: "Not installed", downloading: "Downloading", queued: "Waiting" }[g.state];
+    const needs = (g.needs || []).map((n) => n.split("|").map((x) => byId[x]).filter(Boolean))
+      .filter((alts) => alts.length && !alts.some((x) => x.state === "installed")).map((alts) => alts.map((x) => x.name).join(" or "));
+    let prog = "";
+    if (job) {
+      const pct = job.total ? Math.min(100, (job.done / job.total) * 100) : 0, left = job.total && job.speed ? (job.total - job.done) / job.speed : 0;
+      prog = `<div class="mprog"><span class="track"><span class="fill" style="width:${pct.toFixed(1)}%"></span></span>
+        <span>File ${job.index} of ${job.count}: ${esc(job.file || "…")} · ${bytesText(job.done)}${job.total ? " of " + bytesText(job.total) : ""}${job.speed ? " · " + bytesText(job.speed) + "/s" : ""}${left ? " · " + timeText(left) + " left" : ""}</span></div>`;
+    }
+    const size = g.state === "installed" ? bytesText(g.bytes) : g.missingBytes ? bytesText(g.missingBytes) + (g.state === "partly" ? " to go" : "") + (g.unknownSize ? "+" : "") : g.unknownSize ? "size …" : "";
+    return `<div class="mcard m-${g.state}" id="mg-${g.id}">
+      <h3>${esc(g.name)} <span class="mstate ${g.state}">${label}</span>${g.gated ? '<span class="mstate">Needs HF_TOKEN</span>' : ""}</h3>
+      <p>${esc(g.about || "")}</p>
+      ${needs.length ? `<span class="mneeds">Also needs: ${needs.map(esc).join(", ")}</span>` : ""}
+      <div class="mside"><span class="msize">${size}</span><div class="mbtns">
+        ${g.state === "downloading" || g.state === "queued" ? `<button class="btn" data-act="modelCancel" data-id="${g.id}">Cancel</button>`
+          : g.state === "installed" ? `<button class="btn danger" data-act="modelDelete" data-id="${g.id}">Delete</button>`
+          : `${g.state === "partly" ? `<button class="btn danger" data-act="modelDelete" data-id="${g.id}">Delete</button>` : ""}<button class="btn primary" data-act="modelGet" data-id="${g.id}" ${g.missingBytes > d.disk.free ? "disabled title=\"Not enough free disk space\"" : ""}>${g.state === "partly" ? "Download the rest" : "Download"}</button>`}
+      </div></div>
+      ${prog}
+      ${g.error ? `<span class="merr">${esc(g.error)}</span>` : ""}
+      <details class="mfiles"><summary>${g.files.length} file${g.files.length === 1 ? "" : "s"}${g.env ? " · template switch " + esc(g.env) : ""}</summary><ul>${g.files.map((f) =>
+        `<li class="${f.installed ? "ok" : ""}">${f.installed ? "✓" : "·"} ${esc(f.folder)}/${esc(f.name)} <span>${bytesText(f.size)}</span></li>`).join("")}</ul></details>
+    </div>`;
+  };
+  const tabs = ["video", "image", "klein", "pruna"];
+  const open = document.querySelectorAll(".mfiles[open]");
+  const keep = new Set([...open].map((el) => el.closest(".mcard").id));
+  const top = $("modelsBody").scrollTop;
+  $("modelsBody").innerHTML = tabs.map((t) => `<h4 class="models-tab" id="mt-${t}">${TAB_NAMES[t]}</h4>${d.groups.filter((g) => g.tab === t).map(card).join("")}`).join("")
+    + `<p class="models-note">Downloads run on the pod, one file at a time, and carry on while you work or if you close this page. A model shows up in its tab when its files are in. On RunPod, the template's switches (shown with each model) download the same files when the pod starts.</p>`;
+  keep.forEach((id) => document.querySelector("#" + id + " .mfiles")?.setAttribute("open", ""));
+  if (scroll && MODELS.focus) $("mt-" + MODELS.focus)?.scrollIntoView({ block: "start" });
+  else $("modelsBody").scrollTop = top;
+}
+
 // The head painter: paint over the body picture where it may change (the head and neck). The strokes are
 // kept as a white-on-clear PNG on the server, for Only the head.
 const painter = { erase: false, size: 40, drawing: false, last: null };
@@ -1839,6 +1912,7 @@ function connect() {
     let msg;
     try { msg = JSON.parse(e.data); } catch { return; }
     if (msg.type === "mmflow.clip" && msg.data?.clip) upsertClip(msg.data.clip);
+    if (msg.type === "mmflow.models") { load(false); if (MODELS.open) pollModels(false); }
     else if (msg.type === "progress" && msg.data) onProgress(msg.data);
     else if (msg.type === "mmvision_preview" && msg.data) onPreview(msg.data);
     else if (msg.type === "mmvision_export" && msg.data) EDIT.onExport(msg.data);
@@ -2274,7 +2348,17 @@ const ACT = {
     for (const id of ids) { try { await api("DELETE", "clips/" + id); } catch { failed++; } }
     say(failed ? `Deleted ${n - failed} of ${n}; ${failed} couldn't be deleted.` : `${n === 1 ? (images ? "Image" : "Video") : n + " " + what} deleted.`);
   },
-  whyMissing: () => say(missingWhy()),
+  // Not installed: open the Models page at this tab's models.
+  whyMissing: () => { say(missingWhy()); openModels(state.tab); },
+  openModels: () => { showAppMenu(false); openModels(); },
+  closeModels: () => closeModels(),
+  modelGet: (id) => modelAction(id, "download"),
+  modelCancel: (id) => modelAction(id, "cancel"),
+  modelDelete: async (id) => {
+    const g = MODELS.data && MODELS.data.groups.find((x) => x.id === id);
+    if (!g || !(await askConfirm(`Delete ${g.name}?`, `Its files (${bytesText(g.bytes)}) are deleted from the models folder. Files another installed model needs are kept.`, "Delete", true))) return;
+    modelAction(id, "delete");
+  },
   star: (id) => {
     const c = clipById(id);
     c.starred = !c.starred;
@@ -2843,6 +2927,7 @@ document.addEventListener("input", (e) => {
 // Esc closes the big picture first, and nothing else.
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && !$("zoom").hidden) { e.preventDefault(); e.stopImmediatePropagation(); ACT.zoomClose(); }
+  else if (e.key === "Escape" && !$("models").hidden && $("confirm").hidden) { e.preventDefault(); e.stopImmediatePropagation(); closeModels(); }
   else if (e.key === "Escape" && !$("painter").hidden) { e.preventDefault(); e.stopImmediatePropagation(); closePainter(); }
 }, true);
 document.addEventListener("keydown", (e) => {
@@ -3382,7 +3467,8 @@ $("negative").addEventListener("input", (e) => { state.negative = e.target.value
 // Start. Last, so everything above is defined.
 // Only show the Close button when the app runs inside ComfyUI's page.
 // The gear menu: its only item, Exit, goes back to ComfyUI, so it shows only inside ComfyUI.
-if (window.parent !== window) $("appMenuWrap").hidden = false;
+// The gear menu: Models, and Exit (which goes back to ComfyUI, so only inside ComfyUI).
+if (window.parent !== window) $("exitItem").hidden = false;
 render();
 load();
 connect();
