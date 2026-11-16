@@ -67,13 +67,17 @@ const state = {
   videoSettings: { model: "HyperFlow H3 Flash", steps: 6, res: 0.6, aspect: "16:9", len: 5, seedMode: "random", seed: 48213, loras: [] },
   imageSettings: { model: "MOSS-Image SFT (INT8)", steps: 50, cfg: 3.0, res: 1.0, aspect: "1:1", seedMode: "random", seed: 48213, loras: [] },
   // size: "match" (image 1's shape) or an aspect ratio, which is also kept in aspect.
-  kleinSettings: { model: "Klein 9B Distilled (BF16)", steps: 4, cfg: 1.0, res: 1.0, size: "match", aspect: "1:1", seedMode: "random", seed: 48213, loras: [] },
+  kleinSettings: { model: "Klein 9B Distilled (BF16)", steps: 4, cfg: 1.0, res: 1.0, size: "match", aspect: "1:1", seedMode: "random", seed: 48213, loras: [],
+    // Face swap: its size, the BFS LoRA, Only the head (a painted mask) with its sampler, Refine face, the mask's edge.
+    swapRes: 2.0, swapLora: "", headOnly: false, swapSampler: "standard", lanSteps: 20, refine: false, refineStrength: 0.5, maskGrow: 8, maskFeather: 12 },
   // The Klein tab's four slots, image 1-4: ids of images from the Add image library, or null. The slots keep
   // their names: whatever is in slot 3 is "image 3" in the prompt.
   kleinSlots: [null, null, null, null],
   // Klein's Face swap: picture 1 the body and scene, picture 2 the face (the head to put on it).
   kleinMode: "edit",
-  kleinSwapSlots: [null, null],
+  kleinSwapSlots: [null, null, null, null, null],
+  // The head mask painted on the body picture: { image: its id, mask: the file on the server, url }.
+  kleinSwapMask: null,
   // The Pruna tab (P-H3-Image): Image (slots picture 1-9) or Character sheet (the character, then up to three
   // pictures that help with its face, outfit or details, and the views to draw). res is Image's size, sheetRes the sheet's.
   prunaSettings: { model: "MiniMax H3 + P-H3-Image LoRA", steps: 8, res: 4.0, sheetRes: 8.0, size: "match", aspect: "1:1", seedMode: "random", seed: 48213, loras: [], enhance: false },
@@ -120,7 +124,7 @@ const editOn = () => isImage() && state.imageEdit;
 const hasSlots = () => isSlotTab() || editOn();
 const slots = () => (isKlein() ? (swapOn() ? state.kleinSwapSlots : state.kleinSlots) : isPruna() ? (sheetOn() ? state.prunaSheetSlots : state.prunaSlots) : state.imageEditSlot);
 const ROLE_NAMES = { character: "character", face: "face", outfit: "outfit", detail: "detail" };
-const slotWord = (i) => (swapOn() ? (i ? "face" : "body") : isKlein() ? "image " + (i + 1) : sheetOn() ? (i ? ROLE_NAMES[state.prunaSheet.roles[i]] || "detail" : "character")
+const slotWord = (i) => (swapOn() ? (i === 0 ? "body" : i === 1 ? "face" : "face " + i) : isKlein() ? "image " + (i + 1) : sheetOn() ? (i ? ROLE_NAMES[state.prunaSheet.roles[i]] || "detail" : "character")
   : isPruna() ? "picture " + (i + 1) : "the picture to edit");
 const SlotWord = (i) => slotWord(i).replace(/^./, (ch) => ch.toUpperCase());
 // "image 2" (Klein) or "picture 2" (Pruna) in a prompt.
@@ -281,7 +285,7 @@ function saveUi() {
     api("PUT", "ui", { settings: state.videoSettings, imageSettings: state.imageSettings, attached: state.attached, perRow: state.perRow,
       prompt: state.drafts.video, imagePrompt: state.drafts.image, imageNegative: state.negative, negativeOpen: state.negativeOpen,
       kleinSettings: state.kleinSettings, kleinPrompt: state.drafts.klein, kleinSlots: state.kleinSlots,
-      kleinMode: state.kleinMode, kleinSwapSlots: state.kleinSwapSlots, kleinSwapPrompt: state.drafts.kleinSwap,
+      kleinMode: state.kleinMode, kleinSwapSlots: state.kleinSwapSlots, kleinSwapPrompt: state.drafts.kleinSwap, kleinSwapMask: state.kleinSwapMask,
       prunaSettings: state.prunaSettings, prunaPrompt: state.drafts.pruna, prunaSheetPrompt: state.drafts.prunaSheet, prunaMode: state.prunaMode,
       prunaSlots: state.prunaSlots, prunaSheetSlots: state.prunaSheetSlots, prunaSheet: state.prunaSheet,
       imageEdit: state.imageEdit, imageEditSource: state.imageEditSlot[0],
@@ -523,6 +527,19 @@ function renderPrunaBar() {
         : "Face swap needs the BFS head-swap LoRA (bfs_head_v1_flux-klein_9b_step3750_rank64.safetensors) in models/loras.")
         : "Edit up to four pictures, or make one from the prompt."}</span>`;
     if (swapOn()) $("prunaSentText").textContent = swapText();
+    // Face swap's switches: Only the head (needs the head painted) and Refine face (needs Only the head).
+    $("enhanceToggle").hidden = !swapOn();
+    $("refineToggle").hidden = !swapOn();
+    if (swapOn()) {
+      const k = state.kleinSettings, body = state.kleinSwapSlots[0], painted = !!maskFor(body), ho = k.headOnly && painted;
+      $("enhanceToggle").innerHTML = (ho ? "− " : "+ ") + "Only the head" + (ho ? " · on" : "");
+      $("enhanceToggle").classList.toggle("on", ho); $("enhanceToggle").setAttribute("aria-pressed", ho); $("enhanceToggle").disabled = !body;
+      $("enhanceToggle").title = "Paint the head on the body picture: only that part changes, everything else stays exactly as it was.";
+      const rf = k.refine && ho;
+      $("refineToggle").innerHTML = (rf ? "− " : "+ ") + "Refine face" + (rf ? " · on" : "");
+      $("refineToggle").classList.toggle("on", rf); $("refineToggle").setAttribute("aria-pressed", rf); $("refineToggle").disabled = !ho;
+      $("refineToggle").title = ho ? "A second pass on the head at 1024 px for sharper detail, pasted back in." : "Refine face works with Only the head: paint the head first.";
+    }
     return;
   }
   if (!on) return;
@@ -617,6 +634,7 @@ function editSize(res = state.imageSettings.res) {
 
 function kleinSize(s = state.kleinSettings) {
   const r = slotRef(0, swapOn() ? state.kleinSwapSlots : state.kleinSlots);
+  if (swapOn()) s = { ...s, res: s.swapRes, size: "match" };
   if (s.size === "match" && r && r.w) {
     const k = Math.sqrt((s.res * 1024 * 1024) / (r.w * r.h));
     return [Math.max(16, Math.round((r.w * k) / 16) * 16), Math.max(16, Math.round((r.h * k) / 16) * 16)];
@@ -678,11 +696,114 @@ function sheetText(sh = state.prunaSheet, list = state.prunaSheetSlots, notes = 
     + "Same identity, face, hair, outfit, colours and proportions in every view; full figures from the top of the head to the soles with space above and below. No text, labels or borders."
     + (helps.length ? " " + helps.join(" ") : "") + ((notes || "").trim() ? " " + notes.trim().replace(/[^.!?]$/, "$&.") : "");
 }
-// Klein's face swap prompt (from the server, as the BFS workflow writes it), with the notes after it.
-function swapText(notes = state.prompt) {
-  const base = OPT.klein.swapPrompt || "head_swap: start with Picture 1 as the base image …";
-  return base + (notes.trim() ? ". " + notes.trim() : "");
+// The head painter: paint over the body picture where it may change (the head and neck). The strokes are
+// kept as a white-on-clear PNG on the server, for Only the head.
+const painter = { erase: false, size: 40, drawing: false, last: null };
+function openPainter() {
+  const body = slotRef(0, state.kleinSwapSlots);
+  if (!body) { say("Add the body picture first."); return; }
+  const img = new Image();
+  img.onload = () => {
+    const k = Math.min(1, 2048 / Math.max(img.naturalWidth, img.naturalHeight));
+    const c = $("paintCanvas");
+    c.width = Math.round(img.naturalWidth * k); c.height = Math.round(img.naturalHeight * k);
+    $("paintImg").src = body.img;
+    const ctx = c.getContext("2d");
+    ctx.clearRect(0, 0, c.width, c.height);
+    const old = maskFor(body.id);
+    if (old && old.url) {
+      const m = new Image();
+      m.onload = () => { ctx.drawImage(m, 0, 0, c.width, c.height); ctx.globalCompositeOperation = "source-in"; ctx.fillStyle = "#ff4b3e"; ctx.fillRect(0, 0, c.width, c.height); ctx.globalCompositeOperation = "source-over"; };
+      m.src = old.url;
+    }
+    painter.erase = false; $("paintErase").classList.remove("on");
+    $("paintSize").value = painter.size;
+    $("painter").hidden = false;
+  };
+  img.onerror = () => say("Couldn't load the body picture.");
+  img.src = body.img;
 }
+function closePainter() { $("painter").hidden = true; }
+async function finishPainter() {
+  const c = $("paintCanvas"), body = state.kleinSwapSlots[0];
+  const data = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+  let any = false;
+  for (let i = 3; i < data.length; i += 4 * 16) if (data[i] > 20) { any = true; break; }
+  if (!any) { state.kleinSwapMask = null; state.kleinSettings.headOnly = false; state.kleinSettings.refine = false; closePainter(); render(); saveUi(); say("No head painted: the whole picture is made again."); return; }
+  // White where it was painted, clear elsewhere.
+  const out = document.createElement("canvas");
+  out.width = c.width; out.height = c.height;
+  const o = out.getContext("2d");
+  o.drawImage(c, 0, 0); o.globalCompositeOperation = "source-in"; o.fillStyle = "#fff"; o.fillRect(0, 0, out.width, out.height);
+  try {
+    const { mask } = await api("POST", "masks", { data: out.toDataURL("image/png") });
+    state.kleinSwapMask = { image: body, mask, url: out.toDataURL("image/png") };
+    state.kleinSettings.headOnly = true;
+    closePainter(); render(); saveUi();
+    say("Head painted: only that part of the body picture changes.");
+  } catch (error) { say(error.message); }
+}
+(() => {
+  const at = (e) => { const c = $("paintCanvas"), r = c.getBoundingClientRect(); return [((e.clientX - r.left) / r.width) * c.width, ((e.clientY - r.top) / r.height) * c.height, c.width / r.width]; };
+  const stroke = (from, to) => {
+    const ctx = $("paintCanvas").getContext("2d");
+    ctx.globalCompositeOperation = painter.erase ? "destination-out" : "source-over";
+    ctx.strokeStyle = "#ff4b3e"; ctx.lineCap = "round"; ctx.lineJoin = "round"; ctx.lineWidth = painter.size * to[2];
+    ctx.beginPath(); ctx.moveTo(from[0], from[1]); ctx.lineTo(to[0], to[1]); ctx.stroke();
+    ctx.globalCompositeOperation = "source-over";
+  };
+  document.addEventListener("pointerdown", (e) => {
+    if (e.target.id !== "paintCanvas") return;
+    e.preventDefault(); painter.drawing = true; painter.last = at(e); stroke(painter.last, painter.last);
+    e.target.setPointerCapture(e.pointerId);
+  });
+  document.addEventListener("pointermove", (e) => {
+    const c = $("paintCanvas");
+    if (e.target === c || painter.drawing) {
+      const r = c.getBoundingClientRect(), dot = $("paintDot");
+      dot.style.width = dot.style.height = painter.size + "px";
+      dot.style.left = e.clientX - r.left + "px"; dot.style.top = e.clientY - r.top + "px";
+    }
+    if (!painter.drawing) return;
+    const p = at(e); stroke(painter.last, p); painter.last = p;
+  });
+  document.addEventListener("pointerup", () => { painter.drawing = false; });
+  document.addEventListener("input", (e) => { if (e.target.id === "paintSize") painter.size = Number(e.target.value); });
+})();
+
+// A face swap's before/after: the body picture over the result, cut at a slider you drag.
+const compareBody = (c) => (c.swap && c.status === "done" && c.slots && c.slots[0] && state.refs.find((r) => r.id === c.slots[0].id)) || null;
+function compareHTML(c) {
+  if (!compareBody(c)) return "";
+  return state.compare
+    ? `<span class="compare-tag before">Before</span><span class="compare-tag after">After</span><button class="compare-btn on" data-act="compareToggle">Close compare</button>`
+    : `<button class="compare-btn" data-act="compareToggle" title="Compare with the body picture">Before / after</button>`;
+}
+// The body picture over the result, shown left of the cut; drag across the picture to move it.
+function compareImg(c) {
+  const body = compareBody(c);
+  return body && state.compare ? `<span class="compare" id="compare" style="--cut:50%"><img src="${body.img}" alt="Before" draggable="false"><span class="compare-line"></span></span>` : "";
+}
+document.addEventListener("pointerdown", (e) => {
+  const box = e.target.closest("#compare");
+  if (!box) return;
+  e.preventDefault();
+  const move = (ev) => { const r = box.getBoundingClientRect(); box.style.setProperty("--cut", Math.max(0, Math.min(100, ((ev.clientX - r.left) / r.width) * 100)) + "%"); };
+  move(e);
+  const up = () => { document.removeEventListener("pointermove", move); document.removeEventListener("pointerup", up); };
+  document.addEventListener("pointermove", move); document.addEventListener("pointerup", up);
+});
+
+// Klein's face swap prompt (from the server, the faceswap detailer workflow's), with the extra faces and notes.
+function swapText(notes = state.prompt) {
+  const faces = state.kleinSwapSlots.filter(Boolean).length;
+  let text = OPT.klein.swapPrompt || "head_swap: Use image 1 as the base image …";
+  if (faces > 2) text += "\n" + ({ 3: "Image 3 shows", 4: "Images 3 and 4 show" }[faces] || `Images 3 to ${faces} show`) + " the same person as image 2 from other angles: use them for the identity too.";
+  return text + (notes.trim() ? "\n" + notes.trim() : "");
+}
+// The head mask for this body picture, if one is painted.
+const maskFor = (id) => (id && state.kleinSwapMask && state.kleinSwapMask.image === id ? state.kleinSwapMask : null);
+const headOnly = () => swapOn() && state.kleinSettings.headOnly && !!maskFor(state.kleinSwapSlots[0]);
 
 // What P-H3-Image (or with Enhance, its prompt upsampler) gets, as the server sends it.
 const PH3_RATIOS = { "1:1": 1, "4:3": 4 / 3, "3:2": 1.5, "16:9": 16 / 9, "21:9": 21 / 9, "3:1": 3, "4:1": 4, "3:4": 3 / 4, "2:3": 2 / 3, "9:16": 9 / 16 };
@@ -709,14 +830,16 @@ function renderSlots() {
   const list = slots(), filled = list.filter(Boolean).length, empty = emptyNamed(), word = isPruna() ? "picture" : "image";
   $("hint").textContent = empty.length
     ? `The prompt names ${empty.map((n) => word + " " + n).join(" and ")}, but ${empty.length > 1 ? "those slots are" : "that slot is"} empty`
-    : swapOn() ? (list[0] && list[1] ? "The face goes onto the body. Write notes if you like, or just press the arrow."
+    : swapOn() ? (list[0] && list[1] ? (list.filter(Boolean).length > 2 ? "The face goes onto the body; the other face pictures help with who it is." : "The face goes onto the body. More pictures of the same face help; notes are optional.")
       : list[0] ? "Now the face: the person whose head goes onto the body" : "First the body and scene: the picture that keeps its pose, light and background")
     : sheetOn() ? (list[0] ? `${state.prunaSheet.views.length} view${state.prunaSheet.views.length === 1 ? "" : "s"} · the extra pictures help with the face, outfit or details` : "Add the character to draw")
     : isPruna() ? (filled ? `${filled} of 9 pictures · picture 1 is edited, the others are references` : "No pictures: it makes one from the prompt alone")
     : filled ? `${filled} of 4 pictures · drag one onto another slot to swap them` : "No pictures: Klein makes one from the prompt alone";
   $("hint").classList.toggle("warn", empty.length > 0);
   // Pruna's Image shows every filled slot and one more (at least four, at most nine).
-  const shown = isPruna() && !sheetOn() ? Math.min(9, Math.max(4, list.map(Boolean).lastIndexOf(true) + 2)) : list.length;
+  const shown = isPruna() && !sheetOn() ? Math.min(9, Math.max(4, list.map(Boolean).lastIndexOf(true) + 2))
+    // Face swap: body and face, then one more face slot at a time (up to five pictures).
+    : swapOn() ? Math.min(5, Math.max(2, list.map(Boolean).lastIndexOf(true) + 2)) : list.length;
   $("refs").innerHTML = list.slice(0, shown).map((id, i) => {
     const r = slotRef(i), name = slotWord(i);
     const role = sheetOn() && i > 0 ? `<select class="slot-role" data-change="sheetRole" data-id="${i}" aria-label="What picture ${i + 1} shows">${Object.entries(SHEET_ROLES).map(([k, v]) => `<option value="${k}" ${state.prunaSheet.roles[i] === k ? "selected" : ""}>${v}</option>`).join("")}</select>` : "";
@@ -729,7 +852,7 @@ function renderSlots() {
           <img src="${r.img}" alt="" draggable="false"><span class="slot-name">${name}</span>
           <button class="ref-x" data-act="clearSlot" data-id="${i}" aria-label="Empty ${name}">${ICON.x}</button>
         </span>
-        <span class="slot-res">${r.w ? r.w + "×" + r.h : ""}</span>${role}</div>`;
+        <span class="slot-res">${r.w ? r.w + "×" + r.h : ""}</span>${role}${swapOn() && i === 0 ? `<button class="slot-paint ${maskFor(id) ? "on" : ""}" data-act="paintMask" title="Paint the head: only that part of the body picture changes">${maskFor(id) ? "Head painted" : "Paint head"}</button>` : ""}</div>`;
   }).join("") + `<button class="add-ref" id="addRef" data-act="openLibrary" aria-expanded="${state.library.open}">${ICON.plus}Add image</button>`;
 }
 // The Image tab's Edit slot: the picture to edit, with its size under it.
@@ -1098,9 +1221,38 @@ function renderSettings() {
 
 // The Klein tab's settings: Model, Size (Match image 1 or an aspect ratio), Resolution, Steps, Guidance (Base
 // only: Distilled renders without it), Seed, LoRAs (the loras/Flux Klein folder).
+// Face swap's own settings: the BFS LoRA, and with Only the head its sampler, the mask's edge and Refine face.
+function swapSettingsHTML(s) {
+  const loras = OPT.klein.swapLoras || [], ho = headOnly(), lan = ho && s.swapSampler === "lanpaint";
+  const slider = (key, label, min, max, value, text) => `<div class="field">
+      <div class="field-head"><label class="label" for="sw-${key}">${label}</label><span class="value" data-val="${key}">${text}</span></div>
+      <input id="sw-${key}" type="range" min="${min}" max="${max}" step="1" value="${value}" data-input="swapNum" data-id="${key}"></div>`;
+  return `
+    <div class="field">
+      <label class="label" for="swapLora">Face swap LoRA</label>
+      ${loras.length > 1 ? `<select class="select" id="swapLora" data-change="swapLora">${loras.map((l) =>
+        `<option value="${esc(l.file)}" ${l.file === (s.swapLora || loras[0].file) ? "selected" : ""}>${esc(l.name)}</option>`).join("")}</select>`
+        : `<div class="fixed-field">${loras.length ? esc(loras[0].name) : "Not installed"}</div>`}
+      <span class="hint">Alissonerdx's BFS head swap for Klein 9B, at 1.0. Rank 128 keeps more detail; rank 64 is the one Comfy's workflow uses.</span>
+    </div>
+    ${ho ? `<div class="field">
+      <span class="label">Sampler (Only the head)</span>
+      <div class="seg">
+        <button class="${!lan ? "on" : ""}" data-act="swapSampler" data-id="standard">Standard</button>
+        <button class="${lan ? "on" : ""}" data-act="swapSampler" data-id="lanpaint" ${OPT.klein.lanpaint ? "" : "disabled"}>LanPaint</button>
+      </div>
+      <span class="hint">${OPT.klein.lanpaint ? "LanPaint blends the new head into the untouched picture better, and is slower (it thinks twice a step)." : "LanPaint isn't installed (scraed/LanPaint in custom_nodes)."}</span>
+    </div>
+    ${lan ? slider("lanSteps", "LanPaint steps", 8, 40, s.lanSteps, s.lanSteps) : ""}
+    ${slider("maskGrow", "Head mask: grow", 0, 64, s.maskGrow, s.maskGrow + " px")}
+    ${slider("maskFeather", "Head mask: soft edge", 0, 64, s.maskFeather, s.maskFeather + " px")}
+    ${s.refine ? slider("refineStrength", "Refine face: strength", 20, 90, Math.round(s.refineStrength * 100), Math.round(s.refineStrength * 100) + "%") : ""}`
+    : `<span class="hint">Turn on <b>Only the head</b> in the prompt bar to keep everything but the head exactly as it is, and for LanPaint and Refine face.</span>`}`;
+}
+
 function kleinSettingsHTML(s, model, T, minSteps, stepSize, recPct) {
-  const r1 = slotRef(0), [w, h] = kleinSize(s);
-  const sizeOf = (mp) => kleinSize({ ...s, res: mp }).join("×");
+  const r1 = slotRef(0), [w, h] = kleinSize(s), swap = swapOn(), res = swap ? s.swapRes : s.res;
+  const sizeOf = (mp) => kleinSize({ ...s, res: mp, swapRes: mp }).join("×");
   return `
     <div class="field">
       <label class="label" for="model">Model</label>
@@ -1110,7 +1262,9 @@ function kleinSettingsHTML(s, model, T, minSteps, stepSize, recPct) {
       <span class="hint">${model.base ? "Undistilled: slower and more varied, with guidance." : "Distilled: fast, 4 steps, no guidance."}</span>
     </div>
 
-    <div class="field">
+    ${swap ? swapSettingsHTML(s) : ""}
+
+    <div class="field" ${swap ? "hidden" : ""}>
       <span class="label">Size</span>
       <div class="aspects five klein-sizes">
         <button class="match ${s.size === "match" ? "on" : ""}" data-act="kleinMatch">${swapOn() ? "Match the body" : "Match image 1"}<small>${r1 ? (r1.w ? r1.w + "×" + r1.h : slotWord(0)) : slotWord(0) + " is empty: 1:1"}</small></button>
@@ -1125,12 +1279,12 @@ function kleinSettingsHTML(s, model, T, minSteps, stepSize, recPct) {
     <div class="field">
       <label class="label" for="res">Resolution</label>
       <select class="select" id="res" data-change="res">
-        ${T.megapixels.map((mp) => `<option value="${mp}" ${mp === s.res ? "selected" : ""}>${mpText(mp)} (${sizeOf(mp)})${(T.recommendedMP || []).includes(mp) ? " · recommended" : ""}</option>`).join("")}
+        ${T.megapixels.map((mp) => `<option value="${mp}" ${mp === res ? "selected" : ""}>${mpText(mp)} (${sizeOf(mp)})${(swap ? [2.0] : T.recommendedMP || []).includes(mp) ? " · recommended" : ""}</option>`).join("")}
       </select>
-      <span class="hint">Renders at ${w}×${h}${s.size === "match" && r1 ? ", image 1's shape" : ""}.</span>
+      <span class="hint">Renders at ${w}×${h}${swap ? ", the body's shape. The pictures go in at this size too (the workflow uses 2 MP)" : s.size === "match" && r1 ? ", image 1's shape" : ""}.</span>
     </div>
 
-    <div class="field">
+    <div class="field" ${swap && headOnly() && s.swapSampler === "lanpaint" ? "hidden" : ""}>
       <div class="field-head"><label class="label" for="steps">Steps</label><span class="value ${s.steps === model.steps ? "rec" : ""}" id="stepsVal">${stepsText(s.steps, model.steps)}</span></div>
       <div class="steps-wrap">
         <input id="steps" type="range" min="${minSteps}" max="${model.maxSteps}" step="${stepSize}" value="${s.steps}" data-input="steps" aria-describedby="stepsRec">
@@ -1284,19 +1438,20 @@ function renderClip() {
   const c = clipById(state.openId);
   if (!c) { state.view = "gallery"; render(); return; }
   $("clipView").classList.toggle("fs", isFull());
-  const key = c.id + ":" + c.status + ":" + (c.file || c.url || "") + ":" + Boolean(isBusy(c) && c.preview);
+  const key = c.id + ":" + c.status + ":" + (c.file || c.url || "") + ":" + Boolean(isBusy(c) && c.preview) + ":" + Boolean(c.swap && state.compare);
   if (shownClip !== key && kindOf(c) === "image") {
     shownClip = key;
     $("clipView").innerHTML = `
       <div class="clip-main">
         <div class="player still" data-clip="${c.id}">
-          <span class="pic" style="${picStyle(shapeOf(c), toneOf(c.id))}">${isBusy(c) && c.preview ? `<img data-live="${c.id}" src="${c.preview}" alt="">` : c.status === "done" ? `<img id="pimg" src="${clipUrl(c)}" alt="${esc(c.prompt)}">` : ""}</span>
+          <span class="pic" style="${picStyle(shapeOf(c), toneOf(c.id))}">${isBusy(c) && c.preview ? `<img data-live="${c.id}" src="${c.preview}" alt="">` : c.status === "done" ? `<img id="pimg" src="${clipUrl(c)}" alt="${esc(c.prompt)}">${compareImg(c)}` : ""}</span>
           ${isBusy(c)
             ? `<span class="busy ${c.preview ? "has-live" : ""}"><span data-progtext="${c.id}">${progressText(c)}</span><span class="track"><span class="fill" data-prog="${c.id}" style="width:${barWidth(c)}"></span></span>
                 <button class="cancel" data-act="cancel" data-id="${c.id}">Cancel render</button></span>`
             : c.status === "failed"
               ? `<span class="busy failed"><span>Render failed</span><span class="fail-why">${esc(c.error || "")}</span></span>`
               : `<button class="fs-btn still-fs" data-act="fullscreen" aria-label="Full screen">${ICON.expand}</button>`}
+          ${compareHTML(c)}
           <span class="badge">${mpText(c.res)} (${c.width}×${c.height})</span>
         </div>
         <span class="label takes-label">Other images from this prompt</span>
@@ -1431,8 +1586,9 @@ function editedFrom(c) {
 
 // A Klein image's page: its prompt, the pictures it was made from (in their slots) and its settings.
 function renderKleinSide(c) {
-  const swap = !!c.swap, slots = (c.slots || []).concat([null, null, null, null]).slice(0, swap ? 2 : 4);
-  const done = c.status === "done", name = (i) => (swap ? (i ? "face" : "body") : "image " + (i + 1));
+  const swap = !!c.swap, all = (c.slots || []).concat([null, null, null, null, null]);
+  const slots = swap ? all.slice(0, Math.max(2, all.slice(0, 5).map(Boolean).lastIndexOf(true) + 1)) : all.slice(0, 4);
+  const done = c.status === "done", name = (i) => (swap ? (i === 0 ? "body" : i === 1 ? "face" : "face " + i) : "image " + (i + 1));
   $("clipSide").innerHTML = `
     <div class="field">
       <span class="label">${swap ? "Face swap · notes" : "Prompt"}</span>
@@ -1451,7 +1607,8 @@ function renderKleinSide(c) {
     </div>
     ${swap && c.sent ? `<details class="sent-box"><summary>What the model got</summary><pre>${esc(c.sent)}</pre></details>` : ""}
     <dl class="facts">
-      <dt>Model</dt><dd>${esc(c.model)}${swap ? " + BFS head swap" : ""}</dd>
+      <dt>Model</dt><dd>${esc(c.model)}${swap ? " + " + esc(((OPT.klein.swapLoras || []).find((x) => x.file === c.bfs) || {}).name || "BFS head swap") : ""}</dd>
+      ${swap ? `<dt>Head</dt><dd>${c.mask ? "Only the head changed" + (c.sampler === "lanpaint" ? " · LanPaint" : "") : "Whole picture"}${c.refine ? " · Refine face " + Math.round(c.refineStrength * 100) + "%" : ""}</dd>` : ""}
       <dt>Steps</dt><dd>${c.steps}</dd>
       <dt>Guidance</dt><dd>${Number(c.cfg).toFixed(1)}</dd>
       <dt>Size</dt><dd>${c.size && c.size !== "match" ? esc(c.size) : swap ? "Match the body" : "Match image 1"} · ${c.width}×${c.height} (${mpText(c.res)})</dd>
@@ -1701,7 +1858,8 @@ async function generate() {
     if (!body || !face) { say(body ? "Add the face picture too." : "Add the body picture first, then the face."); return; }
     state.settingsOpen = false; render();
     try {
-      const { clip } = await api("POST", "generate", { kind: "klein", mode: "swap", prompt, settings: s, slots: state.kleinSwapSlots });
+      const { clip } = await api("POST", "generate", { kind: "klein", mode: "swap", prompt, settings: s, slots: state.kleinSwapSlots,
+        mask: headOnly() ? state.kleinSwapMask.mask : undefined });
       upsertClip(clip);
     } catch (error) { say(error.message); }
     return;
@@ -2263,6 +2421,14 @@ const ACT = {
     state.library.slot = null; state.settingsOpen = false;
     render(); saveUi();
   },
+  toggleRefine: () => { const k = state.kleinSettings; if (!headOnly()) return; k.refine = !k.refine; render(); saveUi(); },
+  paintMask: () => openPainter(),
+  painterDone: () => finishPainter(),
+  painterCancel: () => closePainter(),
+  painterClear: () => { const c = $("paintCanvas"); c.getContext("2d").clearRect(0, 0, c.width, c.height); },
+  painterErase: () => { painter.erase = !painter.erase; $("paintErase").classList.toggle("on", painter.erase); $("paintErase").setAttribute("aria-pressed", painter.erase); },
+  swapSampler: (id) => { state.kleinSettings.swapSampler = id; render(); },
+  compareToggle: () => { state.compare = !state.compare; renderClip(); },
   sheetPreset: (id) => { state.prunaSheet.preset = id; state.prunaSheet.views = SHEET_PRESETS[id].views.slice(); render(); saveUi(); },
   sheetView: (id) => {
     const v = state.prunaSheet.views;
@@ -2274,6 +2440,14 @@ const ACT = {
   },
   sheetBg: (id) => { state.prunaSheet.bg = id; render(); saveUi(); },
   toggleEnhance: () => {
+    if (swapOn()) {
+      const k = state.kleinSettings, body = state.kleinSwapSlots[0];
+      if (!body) { say("Add the body picture first."); return; }
+      if (!maskFor(body)) { k.headOnly = true; openPainter(); return; }
+      k.headOnly = !k.headOnly; if (!k.headOnly) k.refine = false;
+      say(k.headOnly ? "Only the head changes; the rest of the body picture stays exactly as it was." : "The whole picture is made again.");
+      render(); saveUi(); return;
+    }
     if (!OPT.pruna.enhance && !state.prunaSettings.enhance) { say("Enhance prompt needs Pruna's prompt upsampler (p-h3-image_prompt_upsampler_bf16.safetensors in models/text_encoders)."); return; }
     state.prunaSettings.enhance = !state.prunaSettings.enhance;
     say(state.prunaSettings.enhance ? "Enhance prompt is on: Pruna's upsampler rewrites your text into a long, detailed prompt first." : "Enhance prompt is off: your text goes to the model as it is.");
@@ -2425,7 +2599,8 @@ const CHANGE = {
     if (isImage() || isKlein()) state.settings.cfg = m.cfg;
     render();
   },
-  res: (el) => { state.settings[sheetOn() ? "sheetRes" : "res"] = Number(el.value); render(); },
+  res: (el) => { state.settings[sheetOn() ? "sheetRes" : swapOn() ? "swapRes" : "res"] = Number(el.value); render(); },
+  swapLora: (el) => { state.kleinSettings.swapLora = el.value; render(); },
   sheetRole: (el) => { state.prunaSheet.roles[Number(el.dataset.id)] = el.value; render(); saveUi(); },
   sampler: (el) => { state.settings.sampler = el.value; render(); },
   scheduler: (el) => { state.settings.scheduler = el.value; render(); },
@@ -2433,6 +2608,13 @@ const CHANGE = {
 };
 
 const INPUT = {
+  // Face swap's sliders: LanPaint steps, the mask's grow and soft edge, Refine face's strength.
+  swapNum: (el) => {
+    const k = state.kleinSettings, key = el.dataset.id;
+    k[key] = key === "refineStrength" ? Number(el.value) / 100 : Number(el.value);
+    const out = document.querySelector(`[data-val="${key}"]`);
+    if (out) out.textContent = key === "refineStrength" ? el.value + "%" : key === "lanSteps" ? el.value : el.value + " px";
+  },
   steps: (el) => {
     const s = state.settings, rec = modelOf(s.model).steps;
     s.steps = Number(el.value);
@@ -2482,9 +2664,14 @@ function reuseKlein(c) {
     loras: c.loras.map((l) => ({ id: l.name, name: l.name, strength: l.strength, on: true })) });
   if (c.size && c.size !== "match") s.aspect = c.size;
   if (swapOn() !== !!c.swap) ACT.kleinMode(c.swap ? "swap" : "edit");
-  const slots = (c.slots || []).concat([null, null, null, null]).slice(0, c.swap ? 2 : 4);
+  const slots = (c.slots || []).concat([null, null, null, null, null]).slice(0, c.swap ? 5 : 4);
   const kept = slots.map((x) => (x && state.refs.some((r) => r.id === x.id) ? x.id : null));
-  if (c.swap) state.kleinSwapSlots = kept; else state.kleinSlots = kept;
+  if (c.swap) {
+    state.kleinSwapSlots = kept;
+    Object.assign(s, { swapRes: c.res, swapLora: c.bfs || s.swapLora, headOnly: !!c.mask, swapSampler: c.sampler || "standard",
+      lanSteps: c.lanSteps || 20, refine: !!c.refine, refineStrength: c.refineStrength || 0.5 });
+    if (c.mask && kept[0]) state.kleinSwapMask = { image: kept[0], mask: c.mask.file.split("/").pop(), url: viewUrl("masks", c.mask.file.split("/").pop()) };
+  } else state.kleinSlots = kept;
   const lost = slots.filter((x, i) => x && !kept[i]).length;
   state.prompt = c.swap && c.prompt === "Face swap" ? "" : c.prompt; state.caret = state.prompt.length; state.mentionClosed = true;
   if (isFull()) document.exitFullscreen();
@@ -2656,6 +2843,7 @@ document.addEventListener("input", (e) => {
 // Esc closes the big picture first, and nothing else.
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && !$("zoom").hidden) { e.preventDefault(); e.stopImmediatePropagation(); ACT.zoomClose(); }
+  else if (e.key === "Escape" && !$("painter").hidden) { e.preventDefault(); e.stopImmediatePropagation(); closePainter(); }
 }, true);
 document.addEventListener("keydown", (e) => {
   if (!$("appMenu").hidden && e.key === "Escape") { e.preventDefault(); showAppMenu(false); $("closeBtn").focus(); return; }
@@ -3062,7 +3250,8 @@ async function load(first = true) {
       const keep = (list, n) => Array.from({ length: n }, (_, i) => { const id = (list || [])[i]; return id && state.refs.some((r) => r.id === id) ? id : null; });
       state.prunaSlots = keep(ui.prunaSlots, 9);
       state.prunaSheetSlots = keep(ui.prunaSheetSlots, 4);
-      state.kleinSwapSlots = keep(ui.kleinSwapSlots, 2);
+      state.kleinSwapSlots = keep(ui.kleinSwapSlots, 5);
+      state.kleinSwapMask = ui.kleinSwapMask && ui.kleinSwapMask.mask ? ui.kleinSwapMask : null;
       state.kleinMode = ui.kleinMode === "swap" ? "swap" : "edit";
       state.drafts.kleinSwap = ui.kleinSwapPrompt || "";
       state.kleinSlots = [0, 1, 2, 3].map((i) => { const id = (ui.kleinSlots || [])[i]; return id && state.refs.some((r) => r.id === id) ? id : null; });
