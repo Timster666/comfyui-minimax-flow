@@ -2035,6 +2035,17 @@ document.addEventListener("mouseover", (e) => {
 });
 document.addEventListener("mouseleave", hoverStop);
 
+// Text to the clipboard. Without https (no navigator.clipboard), the old way: a hidden text box and copy.
+async function copyText(text, done) {
+  try { await navigator.clipboard.writeText(text); say(done); return; } catch {}
+  const t = document.createElement("textarea");
+  t.value = text; t.style.cssText = "position:fixed;left:-9999px;top:0";
+  document.body.appendChild(t); t.select();
+  const ok = document.execCommand("copy");
+  t.remove();
+  say(ok ? done : "Couldn't copy here: select the prompt on the clip's page and copy it.");
+}
+
 /* ------------------------------------------------------------------
    Right-click menu on a clip
    ------------------------------------------------------------------ */
@@ -2052,7 +2063,8 @@ function openMenu(id, x, y) {
     <span class="ctx-line"></span>${kindOf(c) === "video" ? (EDIT.has(c.id)
       ? `<button role="menuitem" aria-disabled="true" class="off" title="This video is on the edit's timeline already.">${ICON.check}Already in the edit</button>`
       : `<button role="menuitem" data-act="menuAddToEdit" ${c.status === "done" && c.file ? "" : 'aria-disabled="true" class="off"'}>${ICON.edit}Add to edit</button>`) : ""}
-    <button role="menuitem" data-act="menuReuse">${ICON.reuse}Use this prompt and settings</button>${kindOf(c) === "image" ? `
+    <button role="menuitem" data-act="menuReuse">${ICON.reuse}Use this prompt and settings</button>
+    <button role="menuitem" data-act="menuCopyPrompt" ${c.prompt ? "" : 'aria-disabled="true" class="off"'}>${ICON.copy}Copy prompt</button>${kindOf(c) === "image" ? `
     <button role="menuitem" data-act="menuUseInVideo" ${c.status === "done" ? "" : 'aria-disabled="true" class="off"'}>${ICON.video}Use in a video</button>
     <button role="menuitem" data-act="menuEditThis" ${c.status === "done" ? "" : 'aria-disabled="true" class="off"'}>${tabOf(c) === "pruna" ? ICON.pruna + "Edit this (picture 1)" : ICON.klein + (tabOf(c) === "klein" ? "Edit this (image 1)" : "Edit in Klein (image 1)")}</button>${tabOf(c) === "pruna" ? "" : `
     <button role="menuitem" data-act="menuEditInPruna" ${c.status === "done" ? "" : 'aria-disabled="true" class="off"'}>${ICON.pruna}Edit in Pruna (picture 1)</button>`}` : ""}`;
@@ -2575,11 +2587,7 @@ const ACT = {
     render(); saveUi();
     say("The upsampled prompt is in the prompt bar, with Enhance prompt off.");
   },
-  copyPrompt: () => {
-    const c = clipById(state.openId);
-    navigator.clipboard?.writeText(c.prompt || "").catch(() => {});
-    say("Prompt copied.");
-  },
+  copyPrompt: () => copyText(clipById(state.openId).prompt || "", "Prompt copied."),
   copySeed: () => {
     const c = clipById(state.openId);
     navigator.clipboard?.writeText(String(c.seed)).catch(() => {});
@@ -2652,6 +2660,7 @@ const ACT = {
   },
   menuDelete: () => { const id = closeMenu(); ACT.deleteClip(id); },
   menuReuse: () => { const id = closeMenu(); ACT.reuse(id); },
+  menuCopyPrompt: () => { const c = clipById(closeMenu()); if (c) copyText(c.prompt || "", "Prompt copied."); },
   menuUseInVideo: () => { const id = closeMenu(); ACT.useInVideo(id); },
   menuEditThis: () => { const id = closeMenu(); ACT.editThis(id); },
 };
