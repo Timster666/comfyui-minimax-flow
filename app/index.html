@@ -281,6 +281,9 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .player .busy { font-size: 15px; gap: 12px; }
 .player .track { width: 50%; height: 5px; }
 .controls { position: absolute; left: 14px; right: 14px; bottom: 14px; display: flex; align-items: center; gap: 12px; background: rgba(10,11,13,.78); border-radius: var(--radius); padding: 8px 12px; }
+.player .controls { opacity: 0; transition: opacity .25s; }
+.player.awake .controls, .player.paused .controls, .player .controls:hover, .player .controls:focus-within { opacity: 1; }
+#clipView.fs .player:not(.awake):not(.paused) { cursor: none; }
 .play { width: 40px; height: 40px; border-radius: 20px; border: 0; background: var(--text); color: var(--bg); display: flex; align-items: center; justify-content: center; }
 .scrub { flex: 1; height: 4px; border-radius: 2px; background: var(--line-strong); }
 .scrub span { display: block; height: 100%; border-radius: 2px; background: var(--text); }

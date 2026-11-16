@@ -1512,8 +1512,17 @@ function wirePlayer() {
   };
   v.addEventListener("timeupdate", update);
   v.addEventListener("loadedmetadata", update);
-  v.addEventListener("play", () => { btn.innerHTML = ICON.pause; btn.setAttribute("aria-label", "Pause"); });
-  v.addEventListener("pause", () => { btn.innerHTML = ICON.play; btn.setAttribute("aria-label", "Play"); });
+  v.addEventListener("play", () => { btn.innerHTML = ICON.pause; btn.setAttribute("aria-label", "Pause"); player.classList.remove("paused"); });
+  v.addEventListener("pause", () => { btn.innerHTML = ICON.play; btn.setAttribute("aria-label", "Play"); player.classList.add("paused"); });
+  // The controls show while the mouse moves over the video, and fade out 2 s after it stops (or leaves).
+  // They stay while paused or while a control has the keyboard focus.
+  const player = v.closest(".player");
+  let idle = null;
+  const wake = () => { player.classList.add("awake"); clearTimeout(idle); idle = setTimeout(() => player.classList.remove("awake"), 2000); };
+  player.addEventListener("pointermove", wake);
+  player.addEventListener("pointerdown", wake);
+  player.addEventListener("pointerleave", () => { clearTimeout(idle); player.classList.remove("awake"); });
+  player.classList.toggle("paused", v.paused);
   // A click on the picture plays or pauses it (a double-click is full screen).
   v.addEventListener("click", () => { if (v.paused) v.play().catch(() => {}); else v.pause(); });
   $("scrub").addEventListener("pointerdown", (e) => {
