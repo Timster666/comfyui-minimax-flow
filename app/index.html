@@ -364,6 +364,27 @@ body.dragging-ref .composer { border-color: var(--line-strong); }
 .lib-preview { flex: 1; min-width: 0; background: #17181b; border-radius: 16px; padding: 16px; display: flex; flex-direction: column; gap: 16px; }
 .lib-big { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; }
 .lib-big { cursor: zoom-in; }
+.slot-paint { margin-top: 2px; width: 92px; font: 500 11px var(--font); background: var(--raised); color: var(--text-soft); border: 1px solid var(--line-strong); border-radius: 6px; padding: 3px 4px; }
+.slot-paint.on { border-color: #6b5634; color: var(--accent-text); background: var(--mention-bg); }
+.painter { position: fixed; inset: 0; z-index: 90; background: rgba(0,0,0,.82); display: flex; align-items: center; justify-content: center; padding: 24px; }
+.painter-box { width: min(1100px, 100%); height: min(860px, 100%); background: var(--surface); border: 1px solid var(--raised-2); border-radius: 18px; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+.painter-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.painter-stage { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; }
+.painter-pic { position: relative; display: inline-block; max-width: 100%; max-height: 100%; line-height: 0; }
+.painter-pic img { max-width: 100%; max-height: calc(min(860px, 100vh - 48px) - 140px); display: block; border-radius: 8px; user-select: none; }
+.painter-pic canvas { position: absolute; inset: 0; width: 100%; height: 100%; opacity: .55; cursor: none; touch-action: none; border-radius: 8px; }
+.paint-dot { position: absolute; border: 1.5px solid #fff; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; box-shadow: 0 0 0 1px rgba(0,0,0,.5); }
+.painter-bar { display: flex; align-items: center; gap: 10px; }
+.paint-size { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
+.paint-size input { width: 160px; accent-color: var(--accent); }
+#paintErase.on { border-color: var(--accent); color: var(--accent-text); }
+.compare { position: absolute; inset: 0; cursor: ew-resize; touch-action: none; }
+.compare img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; clip-path: inset(0 calc(100% - var(--cut)) 0 0); }
+.compare-line { position: absolute; top: 0; bottom: 0; left: var(--cut); width: 2px; margin-left: -1px; background: #fff; box-shadow: 0 0 0 1px rgba(0,0,0,.4); }
+.compare-btn { position: absolute; left: 14px; bottom: 14px; z-index: 3; background: rgba(10,11,13,.78); color: var(--text); border: 1px solid var(--line-strong); border-radius: 999px; padding: 6px 14px; font: 500 13px var(--font); }
+.compare-btn.on { border-color: var(--accent); color: var(--accent-text); }
+.compare-tag { position: absolute; top: 44px; z-index: 3; font-size: 12px; background: rgba(0,0,0,.6); color: #ddd; padding: 2px 8px; border-radius: 6px; pointer-events: none; }
+.compare-tag.before { left: 12px; } .compare-tag.after { right: 60px; }
 .zoom { position: fixed; inset: 0; z-index: 100; background: rgba(0,0,0,.92); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 24px; cursor: zoom-out; outline: none; }
 .zoom img { max-width: 100%; max-height: calc(100% - 32px); object-fit: contain; border-radius: 8px; display: block; }
 .zoom-cap { font-size: 13px; color: var(--muted); max-width: 80%; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -449,6 +470,7 @@ body.dragging-ref .composer { border-color: var(--line-strong); }
 .pic img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .take i img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .player.still .pic img { object-fit: contain; }
+.player.still .pic { position: relative; }
 .still-fs { position: absolute; right: 14px; bottom: 14px; background: rgba(10,11,13,.78); }
 .aspects.five { grid-template-columns: repeat(5, minmax(0, 1fr)); }
 .klein-sizes .match { grid-column: span 2; gap: 2px; }
@@ -657,6 +679,7 @@ body.dragging-ref .composer { border-color: var(--line-strong); }
         <button class="neg-toggle" id="negToggle" data-act="toggleNegative" aria-controls="negBox" hidden></button>
         <button class="neg-toggle edit-toggle" id="editToggle" data-act="toggleEdit" aria-pressed="false" hidden></button>
         <button class="neg-toggle edit-toggle" id="enhanceToggle" data-act="toggleEnhance" aria-pressed="false" hidden></button>
+        <button class="neg-toggle edit-toggle" id="refineToggle" data-act="toggleRefine" aria-pressed="false" hidden></button>
         <span class="hint" id="hint">Type @ to use an image</span>
         <div class="bar-right">
           <div class="settings" id="settings" hidden></div>
@@ -681,6 +704,20 @@ body.dragging-ref .composer { border-color: var(--line-strong); }
     <input class="lm-search" id="loraQuery" type="search" placeholder="Search LoRAs" autocomplete="off" spellcheck="false" aria-label="Search LoRAs">
     <div class="lm-list" id="loraList" role="listbox" aria-label="LoRAs"></div>
     <div class="lm-foot"><label class="lm-all"><input type="checkbox" id="loraAll"><span id="loraAllText">Show all LoRAs</span></label><span>Click to add, again to take out.</span><button class="btn primary" data-act="closeLoras">Done</button></div>
+  </div>
+</div>
+<div class="painter" id="painter" hidden role="dialog" aria-modal="true" aria-label="Paint the head">
+  <div class="painter-box">
+    <div class="painter-head"><b>Paint the head</b><span class="hint">Cover the head and neck, with a little room. Only the painted part changes; the rest stays exactly as it is.</span></div>
+    <div class="painter-stage"><span class="painter-pic"><img id="paintImg" alt="" draggable="false"><canvas id="paintCanvas"></canvas><span class="paint-dot" id="paintDot"></span></span></div>
+    <div class="painter-bar">
+      <label class="paint-size">Brush <input type="range" id="paintSize" min="6" max="160" value="40"></label>
+      <button class="btn" id="paintErase" data-act="painterErase" aria-pressed="false">Eraser</button>
+      <button class="btn" data-act="painterClear">Clear</button>
+      <span style="flex:1"></span>
+      <button class="btn" data-act="painterCancel">Cancel</button>
+      <button class="btn primary" data-act="painterDone">Done</button>
+    </div>
   </div>
 </div>
 <div class="zoom" id="zoom" hidden tabindex="-1" role="dialog" aria-modal="true" aria-label="Picture" data-act="zoomClose">

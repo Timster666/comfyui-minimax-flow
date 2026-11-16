@@ -50,12 +50,21 @@ The app has five tabs, and it always opens on **Video**.
   have **Edit in Klein**. A prompt that names an empty slot isn't sent.
 
   **Face swap** (the switch at the top of Klein's prompt bar) puts a head on another picture with
-  Alissonerdx's [BFS head-swap LoRA](https://huggingface.co/Alissonerdx/BFS-Best-Face-Swap) for Klein 9B:
-  **body** is the picture that keeps its pose, light and background, **face** the person whose head goes
-  onto it. The app writes the swap prompt (as in Comfy's face swap workflow: the LoRA at 1.0, both pictures
-  at 1 MP, lcm, 4 steps); the text box adds notes after it. It needs
-  `bfs_head_v1_flux-klein_9b_step3750_rank64.safetensors` in `models/loras` (any folder). Only use it on
-  people who agreed to it.
+  Alissonerdx's [BFS head-swap LoRA](https://huggingface.co/Alissonerdx/BFS-Best-Face-Swap) for Klein 9B
+  (rank 128 or rank 64, picked in the settings). **body** is the picture that keeps its pose, light and
+  background, **face** the person whose head goes onto it, and up to three more face pictures (other
+  angles) help with who it is. The app writes the swap prompt (the "faceswap detailer" workflow's); the
+  text box adds notes after it. Everything goes in at the swap's size, 2 MP to start with.
+  - **Paint head** (under the body) and **Only the head**: paint the head and neck, and only that part
+    changes; the rest of the body picture stays exactly as it was. Its sampler is the standard one or
+    [LanPaint](https://github.com/scraed/LanPaint) (better blending, slower), and the mask can be grown
+    and given a soft edge in the settings.
+  - **Refine face** (with Only the head): a second pass that cuts the head out at 1024 px, renders it
+    again and pastes it back, for sharper detail.
+  - **Before / after** on a swap's page: drag across the picture to compare it with the body picture.
+
+  It needs `bfs_head_v1_flux-klein_9b_step3500_rank128.safetensors` or `..._step3750_rank64.safetensors`
+  in `models/loras` (any folder). Only use it on people who agreed to it.
 - **Pruna** makes and edits pictures with Pruna AI's P-H3-Image. It has two modes, switched at the top of
   the prompt bar:
   - **Image**: up to nine slots, **picture 1** to **picture 9** (more appear as you fill them). With no

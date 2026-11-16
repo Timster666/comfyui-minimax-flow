@@ -129,34 +129,72 @@ def model_prompt(prompt, filled):
 # Face swap: Alissonerdx's BFS (Best Face Swap) head-swap LoRA for Klein 9B, as in Comfy's "face swap" hub
 # workflow: picture 1 is the body and scene, picture 2 the head to put on it (in that order, both at 1 MP), the
 # LoRA at 1.0, lcm. The files can carry the hub's "Alissonerdx__BFS-Best-Face-Swap__" prefix.
-BFS_LORAS = ["bfs_head_v1_flux-klein_9b_step3750_rank64", "bfs_head_v1_flux-klein_9b_step3500_rank128"]
-SWAP_PROMPT = ("head_swap: start with Picture 1 as the base image, keeping its lighting, environment and background. "
-               "Replace the head in Picture 1 with the head from Picture 2, keeping the hair, eye colour and nose shape "
-               "from Picture 2. Copy the eye direction, head rotation and micro-expressions from Picture 1. Match the "
-               "skin tone and light so the head and body blend naturally. high quality, sharp details, 4k")
+BFS_LORAS = {"bfs_head_v1_flux-klein_9b_step3500_rank128": "BFS head swap · rank 128",
+             "bfs_head_v1_flux-klein_9b_step3750_rank64": "BFS head swap · rank 64"}
+# The swap prompt from the "Flux2 Klein 9b faceswap detailer" workflow (image 1 the body, image 2 the head).
+SWAP_PROMPT = (
+    "head_swap: Use image 1 as the base image, preserving its environment, background, camera perspective, framing, "
+    "exposure, contrast, and lighting. Remove the head from image 1 and seamlessly replace it with the head from image 2.\n"
+    "Match the original head size, face-to-body ratio, neck thickness, shoulder alignment, and camera distance so "
+    "proportions remain natural and unchanged.\n\n"
+    "Adapt the inserted head to the lighting of image 1 by matching light direction, intensity, softness, color "
+    "temperature, shadows, and highlights, with no independent relighting.\n"
+    "Preserve the identity of image 2, including hair texture, eye color, nose structure, facial proportions, and skin details.\n"
+    "Match the pose and expression from image 1, including head tilt, rotation, eye direction, gaze, micro-expressions, "
+    "and lip position.\n"
+    "Ensure seamless neck and jaw blending, consistent skin tone, realistic shadow contact, natural skin texture, and "
+    "uniform sharpness.\n"
+    "Photorealistic, high quality, sharp details, 4K.")
+# Extra pictures of the same face (slots 3-5), when there are any.
+SWAP_MORE_FACES = "{images} the same person as image 2 from other angles: use them for the identity too."
+# Refine face: a second Klein pass on the head, cut out at 1024 px and pasted back (the workflow's detailer).
+REFINE_PROMPT = ("Refine this face: sharp, natural skin texture and detail, clear eyes and teeth. Keep the identity, "
+                 "expression, pose, lighting and colours exactly as they are.")
+SWAP_SLOTS = 5
 SWAP_NEGATIVE = ("bad quality, noise, blurry, worst quality, low resolution, blur, distortion, unnatural blending, "
                  "cartoon, illustration, painting")
 
 
-def bfs_lora():
-    """The BFS head-swap LoRA for Klein 9B as ComfyUI lists it, or None."""
+def bfs_loras():
+    """The BFS head-swap LoRAs for Klein 9B that are installed, rank 128 first: [{"file", "name"}]."""
     try:
         import folder_paths
         files = folder_paths.get_filename_list("loras")
     except Exception:
-        return None
+        return []
     stems = {os.path.splitext(os.path.basename(f.replace("\\", "/")))[0].lower(): f for f in files}
-    for want in BFS_LORAS:
-        for stem, f in stems.items():
-            if stem == want or stem.endswith("__" + want):
-                return f
-    return None
+    found = []
+    for want, label in BFS_LORAS.items():
+        f = next((f for stem, f in stems.items() if stem == want or stem.endswith("__" + want)), None)
+        if f:
+            found.append({"file": f, "name": label})
+    return found
 
 
-def swap_prompt(notes=""):
-    """The face swap's prompt, with your notes after it."""
+def bfs_lora(file=None):
+    """The BFS LoRA to use: that file if it is installed, else the first one; None if there is none."""
+    found = bfs_loras()
+    return next((x["file"] for x in found if x["file"] == file), found[0]["file"] if found else None)
+
+
+def lanpaint():
+    """Is LanPaint's KSampler (scraed/LanPaint) installed?"""
+    try:
+        import nodes
+        return "LanPaint_KSampler" in nodes.NODE_CLASS_MAPPINGS
+    except Exception:
+        return False
+
+
+def swap_prompt(notes="", faces=2):
+    """The face swap's prompt, with a line about the extra face pictures and your notes after it.
+    faces: how many pictures go in, body and face included."""
+    text = SWAP_PROMPT
+    if faces > 2:
+        more = {3: "Image 3 shows", 4: "Images 3 and 4 show"}.get(faces, "Images 3 to %d show" % faces)
+        text += "\n" + SWAP_MORE_FACES.format(images=more)
     notes = (notes or "").strip()
-    return SWAP_PROMPT + (". " + notes if notes else "")
+    return text + ("\n" + notes if notes else "")
 
 
 def build_graph(clip, refs, name=None):
@@ -182,7 +220,7 @@ def build_graph(clip, refs, name=None):
         graph["5"] = {"class_type": "ConditioningZeroOut", "inputs": {"conditioning": ["4", 0]}}
     model = ["1", 0]
     if clip.get("swap"):
-        bfs = bfs_lora()
+        bfs = bfs_lora(clip.get("bfs"))
         if not bfs:
             raise Missing("Face swap needs the BFS head-swap LoRA for Klein 9B (bfs_head_v1_flux-klein_9b_step3750_rank64."
                           "safetensors from Alissonerdx/BFS-Best-Face-Swap) in models/loras. On RunPod: ENABLE_BFS_KLEIN=true.")
@@ -196,11 +234,13 @@ def build_graph(clip, refs, name=None):
                       "inputs": {"model": model, "lora_name": lora_file(lora["name"]), "strength_model": float(lora["strength"])}}
         model = [key, 0]
     positive, negative = ["4", 0], ["5", 0]
-    for n, (slot, file) in enumerate(refs[:SLOTS]):
+    for n, (slot, file) in enumerate(refs[:SWAP_SLOTS if clip.get("swap") else SLOTS]):
         load, scale, enc, pos, neg = (str(40 + 10 * n + k) for k in range(5))
         graph[load] = {"class_type": "MMVisionLoadStill", "inputs": {"file": file}}
         graph[scale] = {"class_type": "ImageScaleToTotalPixels", "inputs": {
-            "image": [load, 0], "upscale_method": "lanczos", "megapixels": REF_MEGAPIXELS, "resolution_steps": 1}}
+            "image": [load, 0], "upscale_method": "lanczos",
+            # A face swap's pictures go in at its own size (the workflow: 2 MP), an edit's at 1 MP.
+            "megapixels": float(clip["res"]) if clip.get("swap") else REF_MEGAPIXELS, "resolution_steps": 1}}
         graph[enc] = {"class_type": "VAEEncode", "inputs": {"pixels": [scale, 0], "vae": ["3", 0]}}
         graph[pos] = {"class_type": "ReferenceLatent", "inputs": {"conditioning": positive, "latent": [enc, 0]}}
         graph[neg] = {"class_type": "ReferenceLatent", "inputs": {"conditioning": negative, "latent": [enc, 0]}}
@@ -218,7 +258,72 @@ def build_graph(clip, refs, name=None):
         SAVE_NODE: {"class_type": "SaveImage", "inputs": {"images": ["8", 0],
                                                           "filename_prefix": "%s/stills/%s" % (ROOT, name or clip["id"])}},
     })
+    if clip.get("swap"):
+        _swap_extras(graph, clip, refs, model, positive, negative, w, h)
     return graph
+
+
+def _swap_extras(graph, clip, refs, model, positive, negative, w, h):
+    """Its nodes are 100+ and 120+, clear of the pictures' 40-89.
+    A face swap's head mask (only the head changes, the rest stays as it was, LanPaint if chosen) and
+    Refine face (the head again at 1024 px, pasted back)."""
+    mask = (clip.get("mask") or {}).get("file")
+    image = ["8", 0]
+    if mask:
+        body = refs[0][1]
+        graph.update({
+            "100": {"class_type": "MMVisionLoadStill", "inputs": {"file": body}},
+            "101": {"class_type": "ImageScale", "inputs": {"image": ["100", 0], "upscale_method": "lanczos", "width": w, "height": h, "crop": "disabled"}},
+            "102": {"class_type": "VAEEncode", "inputs": {"pixels": ["101", 0], "vae": ["3", 0]}},
+            "103": {"class_type": "MMVisionLoadMask", "inputs": {"file": mask, "width": w, "height": h,
+                                                                 "grow": int(clip["mask"].get("grow", 8)), "feather": 0}},
+            "104": {"class_type": "SetLatentNoiseMask", "inputs": {"samples": ["102", 0], "mask": ["103", 0]}},
+            # The soft-edged mask for putting the new head into the untouched body picture.
+            "105": {"class_type": "MMVisionLoadMask", "inputs": {"file": mask, "width": w, "height": h,
+                                                                 "grow": int(clip["mask"].get("grow", 8)),
+                                                                 "feather": int(clip["mask"].get("feather", 12))}},
+        })
+        if clip.get("sampler") == "lanpaint":
+            # LanPaint's KSampler, as in the workflow: euler, simple, denoise 1, 2 thinking steps, Image First.
+            graph[SAMPLER_NODE] = {"class_type": "LanPaint_KSampler", "inputs": {
+                "model": model, "seed": int(clip["seed"]), "steps": int(clip.get("lanSteps") or 20), "cfg": float(clip["cfg"]),
+                "sampler_name": "euler", "scheduler": "simple", "positive": positive, "negative": negative,
+                "latent_image": ["104", 0], "denoise": 1.0, "LanPaint_NumSteps": 2, "LanPaint_PromptMode": "Image First",
+                "LanPaint_Info": "LanPaint KSampler.", "Inpainting_mode": "\U0001f5bc\ufe0f Image Inpainting"}}
+            for k in ("11", "12", "13", "14"):
+                graph.pop(k, None)
+        else:
+            graph[SAMPLER_NODE]["inputs"]["latent_image"] = ["104", 0]
+        graph.pop("6", None)
+        graph["106"] = {"class_type": "ImageCompositeMasked", "inputs": {
+            "destination": ["101", 0], "source": ["8", 0], "x": 0, "y": 0, "resize_source": False, "mask": ["105", 0]}}
+        image = ["106", 0]
+    if clip.get("refine") and mask:
+        # Refine face: the head cut out at 1024 px, rendered again by plain Klein with itself as the reference,
+        # only inside the mask and part of the way (refine strength), then pasted back.
+        strength = float(clip.get("refineStrength", 0.5))
+        graph.update({
+            "120": {"class_type": "MMVisionLoadMask", "inputs": {"file": mask, "width": w, "height": h,
+                                                                 "grow": int(clip["mask"].get("grow", 8)) + 8,
+                                                                 "feather": int(clip["mask"].get("feather", 12))}},
+            "121": {"class_type": "MMVisionCropToMask", "inputs": {"image": image, "mask": ["120", 0], "padding": 0.35, "size": 1024}},
+            "122": {"class_type": "VAEEncode", "inputs": {"pixels": ["121", 0], "vae": ["3", 0]}},
+            "123": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["2", 0], "text": REFINE_PROMPT}},
+            "124": {"class_type": "ReferenceLatent", "inputs": {"conditioning": ["123", 0], "latent": ["122", 0]}},
+            "125": {"class_type": "ConditioningZeroOut", "inputs": {"conditioning": ["123", 0]}},
+            "126": {"class_type": "SetLatentNoiseMask", "inputs": {"samples": ["122", 0], "mask": ["121", 1]}},
+            "127": {"class_type": "Flux2Scheduler", "inputs": {"steps": 8, "width": 1024, "height": 1024}},
+            "128": {"class_type": "SplitSigmasDenoise", "inputs": {"sigmas": ["127", 0], "denoise": strength}},
+            "129": {"class_type": "CFGGuider", "inputs": {"model": ["1", 0], "positive": ["124", 0], "negative": ["125", 0], "cfg": 1.0}},
+            "130": {"class_type": "KSamplerSelect", "inputs": {"sampler_name": "euler"}},
+            "131": {"class_type": "RandomNoise", "inputs": {"noise_seed": int(clip["seed"]) + 1}},
+            "132": {"class_type": "SamplerCustomAdvanced", "inputs": {
+                "noise": ["131", 0], "guider": ["129", 0], "sampler": ["130", 0], "sigmas": ["128", 1], "latent_image": ["126", 0]}},
+            "133": {"class_type": "VAEDecode", "inputs": {"samples": ["132", 0], "vae": ["3", 0]}},
+            "134": {"class_type": "MMVisionPasteCrop", "inputs": {"image": image, "crop": ["133", 0], "crop_mask": ["121", 1], "box": ["121", 2]}},
+        })
+        image = ["134", 0]
+    graph[SAVE_NODE]["inputs"]["images"] = image
 
 
 # Live previews while it samples: ComfyUI picks TAESD or a quick colour preview by itself.

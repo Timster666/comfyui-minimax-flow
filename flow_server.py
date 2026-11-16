@@ -13,6 +13,7 @@ aren't installed says which files it needs.
 """
 
 import asyncio
+import base64
 import json
 import logging
 import math
@@ -69,11 +70,15 @@ DEFAULT_UI = {
     # The Klein tab: its settings, prompt and four slots (image ids from the Add image library, or None).
     # size is "match" (image 1's shape) or an aspect ratio.
     "kleinSettings": {"model": "Klein 9B Distilled (BF16)", "steps": 4, "cfg": 1.0, "res": 1.0, "size": "match", "aspect": "1:1",
-                      "seedMode": "random", "seed": 48213, "loras": []},
+                      "seedMode": "random", "seed": 48213, "loras": [],
+                      # Face swap: its size, the BFS LoRA, the sampler with a head mask, Refine face, the mask's edge.
+                      "swapRes": 2.0, "swapLora": "", "swapSampler": "standard", "lanSteps": 20, "refine": False,
+                      "refineStrength": 0.5, "maskGrow": 8, "maskFeather": 12},
     "kleinPrompt": "",
     "kleinSlots": [None, None, None, None],
     "kleinMode": "edit",              # Klein: Edit, or Face swap (body and face, with the BFS LoRA)
-    "kleinSwapSlots": [None, None],
+    "kleinSwapSlots": [None] * 5,
+    "kleinSwapMask": None,            # the head mask painted on the body picture: {"image": id, "mask": file}
     "kleinSwapPrompt": "",
     # The Pruna tab: Image (up to nine slots, picture 1-9) or Character sheet (the character and up to three
     # helper pictures with a role each, and the views to draw).
@@ -263,6 +268,8 @@ async def get_state(request):
                     "klein": {"models": kmodels, "aspects": IMAGE_ASPECTS, "megapixels": KLEIN_MEGAPIXELS,
                               "recommendedMP": KLEIN_RECOMMENDED_MP, "cfg": CFG, "slots": klein_bridge.SLOTS,
                               "swap": bool(klein_bridge.bfs_lora()), "swapPrompt": klein_bridge.SWAP_PROMPT,
+                              "swapLoras": klein_bridge.bfs_loras(), "lanpaint": klein_bridge.lanpaint(),
+                              "swapSlots": klein_bridge.SWAP_SLOTS,
                               "missing": kwhy},
                     "pruna": {"models": pmodels, "aspects": PH3_ASPECTS, "megapixels": ph3_bridge.MEGAPIXELS,
                               "slots": ph3_bridge.SLOTS, "steps": ph3_bridge.STEPS, "enhance": bool(ph3_bridge.upsampler()),
@@ -312,6 +319,21 @@ async def put_ui(request):
                 data["ui"][key] = body[key]
         write_project(data)
     return web.json_response({"ok": True})
+
+
+async def upload_mask(request):
+    """A head mask painted in the app (a PNG, white where the picture may change), kept in minimax_flow/masks."""
+    body = await request.json()
+    data = str(body.get("data") or "")
+    if not data.startswith("data:image/png;base64,"):
+        raise web.HTTPBadRequest(text="That isn't a PNG mask.")
+    raw = base64.b64decode(data.split(",", 1)[1])
+    if len(raw) > 40 * 1024 * 1024:
+        raise web.HTTPBadRequest(text="That mask is too big.")
+    name = "m" + uuid.uuid4().hex[:10] + ".png"
+    with open(root_dir("masks", name), "wb") as f:
+        f.write(raw)
+    return web.json_response({"mask": name, "file": "%s/masks/%s" % (ROOT, name)})
 
 
 async def upload_images(request):
@@ -373,7 +395,7 @@ async def generate(request):
     if body.get("kind") == "pruna":
         return await generate_pruna(prompt, s, body)
     if body.get("kind") == "klein" and body.get("mode") == "swap":
-        return await generate_klein(prompt, s, body.get("slots") or [], body.get("negative"), swap=True)
+        return await generate_klein(prompt, s, body.get("slots") or [], body.get("negative"), swap=True, mask=body.get("mask"))
     if not prompt:
         raise web.HTTPBadRequest(text="Write a prompt first.")
     if body.get("kind") == "image":
@@ -521,14 +543,14 @@ def size_like(w0, h0, mp, grid=16):
     return max(grid, round(w0 * k / grid) * grid), max(grid, round(h0 * k / grid) * grid)
 
 
-async def generate_klein(prompt, s, slots, negative=None, swap=False):
+async def generate_klein(prompt, s, slots, negative=None, swap=False, mask=None):
     """A Klein 9B image: an edit of up to four pictures (the slots image 1-4), or from the prompt alone.
     swap: a face swap with the BFS LoRA, picture 1 the body and scene, picture 2 the head; the prompt is notes."""
     models, why = klein_models()
     model = next((m for m in models if m["name"] == s.get("model")), None)
     if not model:
         raise web.HTTPBadRequest(text=why or "That Klein model isn't installed.")
-    res = float(s.get("res", 1.0))
+    res = float(s.get("swapRes", 2.0) if swap else s.get("res", 1.0))
     if res not in KLEIN_MEGAPIXELS:
         raise web.HTTPBadRequest(text="Unknown size.")
     steps = int(s.get("steps", model["steps"]))
@@ -540,7 +562,7 @@ async def generate_klein(prompt, s, slots, negative=None, swap=False):
     size = s.get("size") if s.get("size") == "match" or s.get("size") in IMAGE_ASPECTS else "match"
     seed = int(s.get("seed", 0)) if s.get("seedMode") == "fixed" else random.randrange(2 ** 31)
     loras = [{"name": str(l["name"]), "strength": float(l["strength"])} for l in s.get("loras", []) if l.get("on", True)]
-    count = 2 if swap else klein_bridge.SLOTS
+    count = klein_bridge.SWAP_SLOTS if swap else klein_bridge.SLOTS
     slots = (list(slots) + [None] * count)[:count]
     if swap:
         if not klein_bridge.bfs_lora():
@@ -582,7 +604,24 @@ async def generate_klein(prompt, s, slots, negative=None, swap=False):
             "slots": [next(({"id": i["id"], "name": i["name"]} for k, i in pictures if k == n), None)
                       for n in range(1, count + 1)]}
     if swap:
-        clip.update({"swap": True, "sent": klein_bridge.swap_prompt(prompt)})
+        # Face swap: which BFS LoRA, the head mask (only the head changes) with LanPaint or the plain sampler,
+        # and Refine face. The pictures 3-5 are more of the same face.
+        clip.update({"swap": True, "sent": klein_bridge.swap_prompt(prompt, len(pictures)),
+                     "bfs": klein_bridge.bfs_lora(s.get("swapLora")), "lanSteps": 20})
+        if mask:
+            file = "%s/masks/%s" % (ROOT, os.path.basename(str(mask)))
+            if not os.path.exists(os.path.join(output_dir(), file)):
+                raise web.HTTPBadRequest(text="The head mask is missing: paint it again.")
+            clip["mask"] = {"file": file, "grow": int(s.get("maskGrow", 8)), "feather": int(s.get("maskFeather", 12))}
+            if s.get("swapSampler") == "lanpaint":
+                if not klein_bridge.lanpaint():
+                    raise web.HTTPBadRequest(text="LanPaint isn't installed (scraed/LanPaint in custom_nodes).")
+                clip["sampler"] = "lanpaint"
+                clip["lanSteps"] = max(4, min(60, int(s.get("lanSteps", 20))))
+                clip["steps"] = clip["lanSteps"]
+            if s.get("refine"):
+                clip["refine"] = True
+                clip["refineStrength"] = max(0.2, min(0.9, float(s.get("refineStrength", 0.5))))
     if model["base"] and negative is not None:
         clip["negative"] = str(negative).strip()[:2000]
     refs = [(n, "%s/images/%s" % (ROOT, image["file"])) for n, image in pictures]
@@ -831,7 +870,11 @@ def clip_from_settings(found, kind):
         clip.update({"family": "klein", "size": found.get("size") or "match",
                      "slots": (list(found.get("slots") or []) + [None] * klein_bridge.SLOTS)[:klein_bridge.SLOTS]})
     if klein and found.get("swap"):
-        clip.update({"swap": True, "sent": found.get("sent") or "", "slots": (list(found.get("slots") or []) + [None, None])[:2]})
+        clip.update({"swap": True, "sent": found.get("sent") or "",
+                     "slots": (list(found.get("slots") or []) + [None] * klein_bridge.SWAP_SLOTS)[:klein_bridge.SWAP_SLOTS]})
+        for key in ("bfs", "mask", "sampler", "lanSteps", "refine", "refineStrength"):
+            if key in found:
+                clip[key] = found[key]
     if ph3:
         # Its pictures are named, found again by id when this machine has them; a sheet keeps its views.
         count = 4 if found.get("mode") == "sheet" else ph3_bridge.SLOTS
@@ -1172,6 +1215,7 @@ ROUTES = (
     ("PUT", "/mmflow/api/ui", put_ui),
     ("GET", "/mmflow/api/loras", get_loras),
     ("POST", "/mmflow/api/images", upload_images),
+    ("POST", "/mmflow/api/masks", upload_mask),
     ("POST", "/mmflow/api/images/from-clip", image_from_clip),
     ("PATCH", "/mmflow/api/images/{id}", rename_image),
     ("POST", "/mmflow/api/generate", generate),
