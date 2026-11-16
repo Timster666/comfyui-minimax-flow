@@ -943,7 +943,7 @@ function renderLibPreview() {
     if (!c || kindOf(c) !== "image") { $("libPreview").innerHTML = `<span class="lib-none">Pick an image to see it here.</span>`; return; }
     const ref = refForClip(c.id), inBar = ref && state.attached.includes(ref.id);
     $("libPreview").innerHTML = `
-      <div class="lib-big" draggable="true" data-drag-gen="${c.id}" title="Drag into the prompt"><img src="${clipUrl(c)}" alt="${esc(c.prompt)}" draggable="false"></div>
+      <div class="lib-big" draggable="true" data-drag-gen="${c.id}" data-act="zoomPic" title="Click to see it bigger. Drag into the prompt"><img src="${clipUrl(c)}" alt="${esc(c.prompt)}" draggable="false"></div>
       <p class="lib-caption">${esc(c.prompt)}</p>
       ${libButton(ref?.id, inBar)}`;
     return;
@@ -952,7 +952,7 @@ function renderLibPreview() {
   if (!r) { $("libPreview").innerHTML = `<span class="lib-none">Pick an image to see it here.</span>`; return; }
   const inBar = state.attached.includes(r.id);
   $("libPreview").innerHTML = `
-    <div class="lib-big" draggable="true" data-drag-ref="${r.id}" title="Drag into the prompt"><img src="${r.img}" alt="@${esc(r.name)}" draggable="false"></div>
+    <div class="lib-big" draggable="true" data-drag-ref="${r.id}" data-act="zoomPic" title="Click to see it bigger. Drag into the prompt"><img src="${r.img}" alt="@${esc(r.name)}" draggable="false"></div>
     ${libButton(r.id, inBar)}`;
 }
 // The button under the library's big preview: into the prompt bar, or (Klein) into a slot.
@@ -2045,6 +2045,18 @@ const ACT = {
     if (yes) window.parent.postMessage("mmflow-close", location.origin);
     else $("closeBtn").focus();
   },
+  // Add image's preview, as big as the window: a click or Esc closes it.
+  zoomPic: (id, el) => {
+    const img = el.querySelector("img");
+    if (!img) return;
+    $("zoomImg").src = img.src; $("zoomImg").alt = img.alt;
+    const r = state.refs.find((x) => x.id === state.library.selected), c = isGen() ? clipById(state.library.selectedGen) : null;
+    const w = img.naturalWidth, h = img.naturalHeight;
+    $("zoomCap").textContent = (c ? c.prompt : r ? "@" + r.name : "") + (w ? `  ·  ${w}×${h}` : "");
+    $("zoom").hidden = false;
+    $("zoom").focus();
+  },
+  zoomClose: () => { $("zoom").hidden = true; $("zoomImg").removeAttribute("src"); },
   confirmYes: () => answerConfirm(true),
   confirmNo: () => answerConfirm(false),
   // The grid's selection: the box on a tile, ⌘/Ctrl-click to add or take out one, Shift-click for a range.
@@ -2595,6 +2607,10 @@ document.addEventListener("input", (e) => {
   const el = e.target.closest("[data-input]");
   if (el && INPUT[el.dataset.input]) INPUT[el.dataset.input](el);
 });
+// Esc closes the big picture first, and nothing else.
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !$("zoom").hidden) { e.preventDefault(); e.stopImmediatePropagation(); ACT.zoomClose(); }
+}, true);
 document.addEventListener("keydown", (e) => {
   if (!$("appMenu").hidden && e.key === "Escape") { e.preventDefault(); showAppMenu(false); $("closeBtn").focus(); return; }
   if (!$("confirm").hidden) {

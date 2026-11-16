@@ -363,6 +363,12 @@ body.dragging-ref .composer { border-color: var(--line-strong); }
 .lib-none { color: var(--muted); padding: 16px 8px; font-size: 14px; }
 .lib-preview { flex: 1; min-width: 0; background: #17181b; border-radius: 16px; padding: 16px; display: flex; flex-direction: column; gap: 16px; }
 .lib-big { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; }
+.lib-big { cursor: zoom-in; }
+.zoom { position: fixed; inset: 0; z-index: 100; background: rgba(0,0,0,.92); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 24px; cursor: zoom-out; outline: none; }
+.zoom img { max-width: 100%; max-height: calc(100% - 32px); object-fit: contain; border-radius: 8px; display: block; }
+.zoom-cap { font-size: 13px; color: var(--muted); max-width: 80%; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.zoom-x { position: absolute; top: 16px; right: 16px; width: 40px; height: 40px; border-radius: 20px; border: 0; background: rgba(255,255,255,.12); color: var(--text); font-size: 16px; }
+.zoom-x:hover { background: rgba(255,255,255,.2); }
 .lib-big img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 12px; display: block; }
 .lib-ph { width: 100%; aspect-ratio: 4 / 3; max-height: 100%; border-radius: 12px; display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 15px; }
 .lib-add { width: 100%; }
@@ -676,6 +682,11 @@ body.dragging-ref .composer { border-color: var(--line-strong); }
     <div class="lm-list" id="loraList" role="listbox" aria-label="LoRAs"></div>
     <div class="lm-foot"><label class="lm-all"><input type="checkbox" id="loraAll"><span id="loraAllText">Show all LoRAs</span></label><span>Click to add, again to take out.</span><button class="btn primary" data-act="closeLoras">Done</button></div>
   </div>
+</div>
+<div class="zoom" id="zoom" hidden tabindex="-1" role="dialog" aria-modal="true" aria-label="Picture" data-act="zoomClose">
+  <img id="zoomImg" alt="">
+  <span class="zoom-cap" id="zoomCap"></span>
+  <button class="zoom-x" data-act="zoomClose" aria-label="Close">✕</button>
 </div>
 <div class="confirm" id="confirm" hidden>
   <div class="confirm-box" role="alertdialog" aria-modal="true" aria-labelledby="confirmTitle" aria-describedby="confirmText">
