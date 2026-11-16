@@ -281,7 +281,8 @@ const EDIT = (() => {
     let list = all.filter((c) => (c.prompt || "").toLowerCase().includes(E.q.toLowerCase()));
     if (E.filter === "starred") list = list.filter((c) => c.starred);
     if (E.hideAdded) list = list.filter((c) => !used.has(c.id));
-    list.sort((a, b) => (b.created || 0) - (a.created || 0));
+    // Newest first; clips from an imported project keep the project's order ("pool").
+    list.sort((a, b) => (b.pool || b.created || 0) - (a.pool || a.created || 0));
     const grid = ed("Media");
     grid.style.setProperty("--ed-cols", E.perRow);
     grid.innerHTML = list.length ? list.map((c) => `

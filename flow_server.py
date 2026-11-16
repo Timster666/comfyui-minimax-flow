@@ -1219,8 +1219,11 @@ async def import_project(request):
             for i, clip in enumerate(added):
                 clip["subfolder"] = ROOT + "/clips"
                 clip["imported"] = part.filename
-                clip["created"] = now - i * 0.001   # newest first, so they are easy to find
-            data["clips"] = added + data["clips"]
+                # The grid shows the zip's last clip first (the newest at the top); the Edit tab's media
+                # panel keeps the zip's order, first clip first ("pool").
+                clip["created"] = now - (len(added) - 1 - i) * 0.001
+                clip["pool"] = now - i * 0.001
+            data["clips"] = added[::-1] + data["clips"]
             for image in new_images:
                 image["added"] = now
             data["images"].extend(new_images)
