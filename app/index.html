@@ -480,6 +480,29 @@ body.dragging-ref .composer { border-color: var(--line-strong); }
 .lm-all { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-soft); cursor: pointer; flex: none !important; }
 .lm-all input { accent-color: var(--accent); width: 16px; height: 16px; margin: 0; }
 .lm-all span { flex: none !important; font-size: 13px !important; color: var(--text-soft) !important; }
+.lm-new { display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--line); padding-top: 12px; }
+.lm-add { display: flex; gap: 8px; }
+.lm-up { display: inline-flex; align-items: center; gap: 8px; padding: 0 14px; min-height: 38px; flex: none; }
+.lm-link { flex: 1; min-width: 0; min-height: 38px; border-radius: 10px; border: 1px solid var(--raised-2); background: #151619; color: var(--text); padding: 0 12px; font: inherit; font-size: 13px; }
+.lm-add > .btn:last-child { min-width: 64px; flex: none; }
+.lm-dest { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 8px; }
+.lm-dest select { background: var(--raised); color: var(--text-soft); border: 1px solid var(--raised-2); border-radius: 8px; padding: 3px 6px; font: inherit; font-size: 12px; }
+.lm-xfer { display: flex; flex-direction: column; gap: 6px; max-height: 170px; overflow-y: auto; }
+.lm-xfer:empty { display: none; }
+.lm-x { display: grid; grid-template-columns: 1fr auto; gap: 4px 10px; align-items: center; background: #151619; border: 1px solid var(--raised-2); border-radius: 10px; padding: 8px 10px; font-size: 13px; }
+.lm-x b { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.lm-x small { grid-column: 1; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lm-x.failed small { color: #f08a8a; white-space: normal; }
+.lm-x.done small { color: var(--accent-text); }
+.lm-x .lm-bar { grid-column: 1 / -1; height: 4px; border-radius: 2px; background: var(--raised-2); overflow: hidden; }
+.lm-x .lm-bar i { display: block; height: 100%; background: var(--accent); width: 0; transition: width .3s; }
+.lm-x .lm-bar.wait i { width: 30%; animation: lm-wait 1.2s ease-in-out infinite alternate; }
+@keyframes lm-wait { from { margin-left: 0; } to { margin-left: 70%; } }
+.lm-x button { grid-row: 1 / span 2; grid-column: 2; border: 0; background: transparent; color: var(--muted); font: inherit; font-size: 12px; padding: 4px 8px; border-radius: 8px; cursor: pointer; }
+.lm-x button:hover { background: var(--raised); color: var(--text); }
+.lm.drop { outline: 2px dashed var(--accent); outline-offset: -6px; }
+.lm.drop .lm-list { opacity: .4; }
+.lm-newtag { font-style: normal; font-size: 11px; color: var(--accent-text); background: var(--accent-soft, rgba(120,140,255,.15)); border-radius: 6px; padding: 1px 6px; margin-left: 6px; }
 .lm-folder.other { color: var(--faint); border-top: 1px solid var(--line); margin-top: 6px; }
 .lm-empty code { background: var(--raised); padding: 1px 6px; border-radius: 5px; color: var(--text-soft); }
 
@@ -754,6 +777,16 @@ body.dragging-ref .composer { border-color: var(--line-strong); }
     </div>
     <input class="lm-search" id="loraQuery" type="search" placeholder="Search LoRAs" autocomplete="off" spellcheck="false" aria-label="Search LoRAs">
     <div class="lm-list" id="loraList" role="listbox" aria-label="LoRAs"></div>
+    <div class="lm-new">
+      <div class="lm-add">
+        <button class="btn lm-up" data-act="uploadLora" title="Upload .safetensors files from this computer (or drop them on this window)"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 16V4M7 9l5-5 5 5M5 20h14"/></svg><span>Upload</span></button>
+        <input class="lm-link" id="loraLink" type="url" placeholder="or paste a Hugging Face or Civitai link" autocomplete="off" spellcheck="false" aria-label="LoRA link">
+        <button class="btn" id="loraLinkGo" data-act="linkLora" disabled>Get</button>
+      </div>
+      <label class="lm-dest">New LoRAs go into <select id="loraDest" aria-label="Folder for new LoRAs"></select></label>
+      <div class="lm-xfer" id="loraXfer"></div>
+      <input type="file" id="loraFile" accept=".safetensors" multiple hidden>
+    </div>
     <div class="lm-foot"><label class="lm-all"><input type="checkbox" id="loraAll"><span id="loraAllText">Show all LoRAs</span></label><span>Click to add, again to take out.</span><button class="btn primary" data-act="closeLoras">Done</button></div>
   </div>
 </div>

@@ -1927,6 +1927,7 @@ function connect() {
     let msg;
     try { msg = JSON.parse(e.data); } catch { return; }
     if (msg.type === "mmflow.clip" && msg.data?.clip) upsertClip(msg.data.clip);
+    if (msg.type === "mmflow.loras") { if (LM.open) { XFER.fresh.add(msg.data?.file); pollLinks(); fetchLoras(false); } else api("GET", "loras").then((r) => { OPT.loras = r.loras; LM.sizes = r.sizes || {}; }).catch(() => {}); }
     if (msg.type === "mmflow.models") { load(false); if (MODELS.open) pollModels(false); }
     else if (msg.type === "progress" && msg.data) onProgress(msg.data);
     else if (msg.type === "mmvision_preview" && msg.data) onPreview(msg.data);
@@ -2170,7 +2171,7 @@ const loraShown = () => {
     // P-H3-Image's own LoRA is always on in the Pruna tab: it isn't one to add.
     .filter((n) => !/^p-h3-image_lora/i.test(loraBase(n)))
     .filter((n) => words.every((w) => n.toLowerCase().includes(w)))
-    .sort((a, b) => loraRank(a) - loraRank(b) || a.toLowerCase().localeCompare(b.toLowerCase()));
+    .sort((a, b) => loraRank(a) - loraRank(b) || XFER.fresh.has(b) - XFER.fresh.has(a) || a.toLowerCase().localeCompare(b.toLowerCase()));
 };
 // A LoRA in the settings counts as this file when the name is the same, or the file name is (it was moved).
 const loraUsed = (n) => state.settings.loras.some((l) => l.id === n || loraBase(l.id) === loraBase(n));
@@ -2183,8 +2184,12 @@ function loraHeading(n) {
 
 function openLoras() {
   LM.open = true; LM.q = ""; LM.sel = 0; LM.all = false;
+  XFER.dest = null; XFER.fresh.clear();
   $("loraModal").hidden = false;
+  renderLoraDest();
   renderLoras(true);
+  renderXfer();
+  pollLinks();
   $("loraQuery").focus();
   fetchLoras(false);
 }
@@ -2256,8 +2261,8 @@ function renderLoras(first) {
     const h = loraHeading(name);
     if (h !== heading) { heading = h; if (h) html += `<div class="lm-folder ${loraRank(name) ? "other" : ""}">${esc(h)}</div>`; }
     const on = loraUsed(name);
-    html += `<button class="lm-item ${on ? "on" : ""} ${i === LM.sel ? "sel" : ""}" role="option" aria-selected="${i === LM.sel}" data-act="pickLora" data-id="${esc(name)}" title="${esc(name)}">
-      <span class="lm-name">${esc(loraStem(name))}</span>
+    html += `<button class="lm-item ${on ? "on" : ""} ${i === LM.sel ? "sel" : ""} ${XFER.fresh.has(name) ? "fresh" : ""}" role="option" aria-selected="${i === LM.sel}" data-act="pickLora" data-id="${esc(name)}" title="${esc(name)}">
+      <span class="lm-name">${esc(loraStem(name))}${XFER.fresh.has(name) ? ' <em class="lm-newtag">new</em>' : ""}</span>
       <span class="lm-size">${LM.sizes[name] ? loraSize(LM.sizes[name]) : ""}</span>
       <span class="lm-state">${on ? ICON.check + "Added" : ICON.plus + "Add"}</span></button>`;
   });
@@ -2267,9 +2272,149 @@ function renderLoras(first) {
 $("loraQuery").addEventListener("input", (e) => { LM.q = e.target.value; LM.sel = 0; renderLoras(); });
 $("loraAll").addEventListener("change", (e) => { LM.all = e.target.checked; LM.sel = 0; renderLoras(); $("loraQuery").focus(); });
 $("loraModal").addEventListener("mousedown", (e) => { if (e.target === $("loraModal")) closeLoras(); });
+
+// ---- New LoRAs: uploaded from this computer in pieces, or fetched by the pod from a link ----
+// An upload sends 8 MB at a time; a piece that fails is sent again (the server says where it is), so a flaky
+// connection slows it down rather than losing it. Links are fetched on the pod, so the window can be closed.
+const XFER = { ups: [], links: [], dest: null, timer: null, fresh: new Set() };
+const UP_PIECE = 8 * 1024 * 1024;
+const LORA_DESTS = [["MiniMax H3", "video"], ["P-H3 Image", "pruna"], ["MOSS Image", "image"], ["Flux Klein", "klein"], ["", ""]];
+function renderLoraDest() {
+  const sel = $("loraDest");
+  if (XFER.dest === null) XFER.dest = LORA_FOLDER[loraTab()];
+  sel.innerHTML = LORA_DESTS.map(([f]) => `<option value="${esc(f)}" ${f === XFER.dest ? "selected" : ""}>${f ? "loras/" + esc(f) : "loras (not sorted)"}</option>`).join("");
+}
+$("loraDest").addEventListener("change", (e) => { XFER.dest = e.target.value; });
+$("loraLink").addEventListener("input", (e) => { $("loraLinkGo").disabled = !e.target.value.trim(); });
+$("loraLink").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); ACT.linkLora(); } });
+$("loraFile").addEventListener("change", (e) => { const f = [...e.target.files]; e.target.value = ""; uploadLoras(f); });
+{
+  const box = document.querySelector("#loraModal .lm");
+  let depth = 0;
+  const files = (e) => [...(e.dataTransfer?.items || [])].some((i) => i.kind === "file");
+  box.addEventListener("dragenter", (e) => { if (!files(e)) return; e.preventDefault(); depth++; box.classList.add("drop"); });
+  box.addEventListener("dragover", (e) => { if (files(e)) e.preventDefault(); });
+  box.addEventListener("dragleave", () => { if (--depth <= 0) { depth = 0; box.classList.remove("drop"); } });
+  box.addEventListener("drop", (e) => {
+    e.preventDefault(); e.stopPropagation(); depth = 0; box.classList.remove("drop");
+    uploadLoras([...e.dataTransfer.files]);
+  });
+}
+async function uploadLoras(files) {
+  if (!files.length) return;
+  const bad = files.filter((f) => !/\.safetensors$/i.test(f.name));
+  if (bad.length) say(bad.length === files.length ? "Only .safetensors LoRAs can be added." : `Skipped ${bad.map((f) => f.name).join(", ")}: only .safetensors files.`);
+  for (const file of files.filter((f) => !bad.includes(f))) await uploadLora(file, XFER.dest ?? LORA_FOLDER[loraTab()]);
+}
+async function uploadLora(file, folder) {
+  // A quick look at the start, so a wrong file is turned down before it's sent.
+  try {
+    const head = new DataView(await file.slice(0, 9).arrayBuffer());
+    const n = head.byteLength >= 9 ? Number(head.getBigUint64(0, true)) : 0;
+    if (n < 2 || n + 8 > file.size || head.getUint8(8) !== 0x7b) { say(file.name + " isn't a safetensors file."); return; }
+  } catch { /* read later by the server */ }
+  const up = { kind: "up", at: Date.now() / 1000, key: "u" + Math.random().toString(36).slice(2), name: file.name, folder, size: file.size, sent: 0, speed: 0, state: "starting", error: "", ctl: null };
+  XFER.ups.unshift(up); renderXfer();
+  let overwrite = false;
+  try {
+    const r = await api("POST", "lora-upload", { name: file.name, folder, size: file.size });
+    up.id = r.id;
+    if (r.exists) {
+      overwrite = await askConfirm("Replace " + file.name + "?", `There's already a LoRA called ${file.name} in ${folder ? "loras/" + folder : "loras"}. Upload this one in its place?`, "Replace");
+      if (!overwrite) { cancelUpload(up); XFER.ups = XFER.ups.filter((u) => u !== up); renderXfer(); return; }
+    }
+    up.state = "sending"; renderXfer();
+    let tries = 0, last = performance.now(), lastSent = 0;
+    while (up.sent < file.size) {
+      if (up.state === "cancelled") return;
+      up.ctl = new AbortController();
+      try {
+        const res = await fetch(`/mmflow/api/lora-upload/${up.id}?offset=${up.sent}`, {
+          method: "PUT", body: file.slice(up.sent, Math.min(file.size, up.sent + UP_PIECE)), signal: up.ctl.signal,
+          headers: { "Content-Type": "application/octet-stream" },
+        });
+        if (res.status === 404) throw Object.assign(new Error(await res.text()), { final: true });
+        if (!res.ok) throw Object.assign(new Error((await res.text()) || res.statusText), { final: res.status === 400 });
+        up.sent = (await res.json()).offset;
+        tries = 0;
+      } catch (error) {
+        if (up.state === "cancelled") return;
+        if (error.final || ++tries > 8) throw error;
+        up.state = "retrying"; renderXfer();
+        await new Promise((r) => setTimeout(r, Math.min(15000, 800 * 2 ** (tries - 1))));
+        // Where the server got to (a piece may have arrived even though the answer didn't).
+        up.state = "sending";
+        continue;
+      }
+      const now = performance.now();
+      if (now - last > 400) {
+        const sp = ((up.sent - lastSent) * 1000) / (now - last);
+        up.speed = up.speed ? 0.7 * up.speed + 0.3 * sp : sp;
+        last = now; lastSent = up.sent;
+      }
+      renderXfer();
+    }
+    up.state = "checking"; renderXfer();
+    const done = await api("POST", `lora-upload/${up.id}/finish`, { overwrite });
+    up.state = "done"; up.file = done.file;
+    loraArrived(done.file);
+  } catch (error) {
+    if (up.state === "cancelled") return;
+    up.state = "failed"; up.error = error.message;
+    if (up.id) api("DELETE", "lora-upload/" + up.id).catch(() => {});
+  }
+  renderXfer();
+}
+function cancelUpload(up, why) {
+  up.state = "cancelled"; up.error = why || "Cancelled.";
+  up.ctl?.abort();
+  if (up.id) api("DELETE", "lora-upload/" + up.id).catch(() => {});
+  renderXfer();
+}
+async function pollLinks() {
+  clearTimeout(XFER.timer);
+  try {
+    const before = new Set(XFER.links.filter((j) => j.state === "done").map((j) => j.id));
+    XFER.links = (await api("GET", "lora-links")).jobs;
+    XFER.links.filter((j) => j.state === "done" && !before.has(j.id) && j.file).forEach((j) => XFER.fresh.add(j.file));
+  } catch { /* tried again below */ }
+  renderXfer();
+  if (XFER.links.some((j) => j.state === "queued" || j.state === "downloading")) XFER.timer = setTimeout(pollLinks, LM.open ? 1000 : 4000);
+}
+// A LoRA is in: list it, and show it at the top of the list until the window is opened again.
+function loraArrived(file) {
+  XFER.fresh.add(file);
+  fetchLoras(false).then(() => say(loraStem(file) + " is ready to add."));
+}
+function xferRow(x) {
+  const total = x.kind === "up" ? x.size : x.total, done = x.kind === "up" ? x.sent : x.done;
+  const going = ["starting", "sending", "retrying", "checking", "queued", "downloading"].includes(x.state);
+  const pct = total ? Math.min(100, (100 * done) / total) : 0;
+  const left = x.speed > 0 && total ? timeText((total - done) / x.speed) + " left" : "";
+  const where = x.folder ? "loras/" + x.folder : "loras";
+  let line;
+  if (x.state === "done") line = (x.note === "already there" ? "Already there · " : "Added · ") + (x.file || where) + " · click it in the list to use it";
+  else if (x.state === "failed" || x.state === "cancelled") line = x.error;
+  else if (x.state === "queued") line = "Waiting for the one before";
+  else if (x.state === "starting") line = "Starting…";
+  else if (x.state === "checking") line = "Checking the file…";
+  else if (x.state === "retrying") line = `Connection dropped at ${bytesText(done)} · trying again…`;
+  else line = [total ? `${bytesText(done)} of ${bytesText(total)}` : done ? bytesText(done) : "Connecting…", x.speed > 0 ? bytesText(x.speed) + "/s" : "", left].filter(Boolean).join(" · ");
+  const name = x.name || x.url.replace(/^https:\/\/(www\.)?/, "");
+  const btn = going ? `<button data-act="cancelXfer" data-id="${esc(x.key || x.id)}">Cancel</button>`
+    : `<button data-act="clearXfer" data-id="${esc(x.key || x.id)}" aria-label="Clear">${ICON.x}</button>`;
+  const bar = going ? `<div class="lm-bar ${!total || x.state === "checking" || x.state === "queued" ? "wait" : ""}"><i style="width:${pct.toFixed(1)}%"></i></div>` : "";
+  return `<div class="lm-x ${x.state}" title="${esc(x.url || x.name)}"><b>${esc(name)}</b>${btn}<small>${esc(line)}</small>${bar}</div>`;
+}
+function renderXfer() {
+  if (!LM.open) return;
+  const hidden = XFER.hide || new Set();
+  $("loraXfer").innerHTML = [...XFER.ups, ...XFER.links].sort((a, b) => b.at - a.at).filter((x) => !hidden.has(x.key || x.id)).map(xferRow).join("");
+}
 // Capture, so the window has its keys wherever the focus is, and Escape closes it and nothing else.
 document.addEventListener("keydown", (e) => {
-  if (!LM.open) return;
+  if (!LM.open || !$("confirm").hidden) return;
+  if (e.target === $("loraLink") && e.key !== "Escape") return;
   const list = loraShown();
   if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); closeLoras(); }
   else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
@@ -2571,6 +2716,31 @@ const ACT = {
   loraPicker: () => openLoras(),
   closeLoras: () => closeLoras(),
   refreshLoras: () => fetchLoras(true),
+  uploadLora: () => $("loraFile").click(),
+  linkLora: async () => {
+    const url = $("loraLink").value.trim();
+    if (!url) return;
+    $("loraLinkGo").disabled = true;
+    try {
+      XFER.links = (await api("POST", "lora-links", { url, folder: XFER.dest ?? LORA_FOLDER[loraTab()] })).jobs;
+      $("loraLink").value = "";
+      pollLinks();
+    } catch (error) {
+      say(error.message);
+      $("loraLinkGo").disabled = false;
+    }
+    renderXfer();
+  },
+  cancelXfer: (id) => {
+    const up = XFER.ups.find((u) => u.key === id);
+    if (up) return cancelUpload(up);
+    api("POST", `lora-links/${id}/cancel`).then((r) => { XFER.links = r.jobs; renderXfer(); }).catch((e) => say(e.message));
+  },
+  clearXfer: (id) => {
+    XFER.ups = XFER.ups.filter((u) => u.key !== id);
+    (XFER.hide ||= new Set()).add(id);
+    renderXfer();
+  },
   pickLora: (name) => toggleLoraFile(name),
   toggleLora: (id) => { const l = state.settings.loras.find((x) => x.id === id); l.on = !l.on; render(); },
   removeLora: (id) => { state.settings.loras = state.settings.loras.filter((x) => x.id !== id); render(); },

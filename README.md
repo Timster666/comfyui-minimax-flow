@@ -95,6 +95,21 @@ The app has five tabs, and it always opens on **Video**.
   isn't one of these. Another model's folder is hidden unless you tick **Show all LoRAs**. Folder names
   are matched loosely (`minimax_h3`, `moss`, `klein` work too). Moving a LoRA into a folder doesn't break
   saved settings or **Use this prompt and settings** on older clips: a LoRA is found by its file name.
+
+  New LoRAs can be added from the same window, into the folder picked under **New LoRAs go into**
+  (this tab's folder at first):
+  - **Upload** (or drop `.safetensors` files on the window) sends a file from your computer in 8 MB
+    pieces. A piece that fails is sent again, so a dropped connection slows an upload down rather than
+    losing it. The file is checked to be a safetensors file, and a LoRA with the same name is only
+    replaced if you say so.
+  - **Paste a link** and click **Get**: the pod downloads it, so it's fast and goes on with the window
+    closed. Hugging Face links are to the file (open it on the site and copy the address); Civitai
+    links are to the model page (with `?modelVersionId=` for a particular version, otherwise the
+    newest) or an `api/download` link; any other https link to a `.safetensors` file works too.
+    Gated Hugging Face repositories need `HF_TOKEN` on the pod, and Civitai LoRAs that need a login need
+    `CIVITAI_TOKEN`.
+
+  Partial files are kept in `models/.downloads/loras`, so ComfyUI never lists half a LoRA.
 - **Edit** puts your videos together, like a very simple CapCut: your videos on the left, a player
   on the right and one timeline track below. Add a video with its **+**, by double-clicking it or
   with Enter (it goes into the gap between clips nearest the playhead), or drag it onto the timeline
@@ -263,6 +278,7 @@ In ComfyUI's output folder, under `minimax_flow/`:
 - `klein_bridge.py`: Klein 9B graphs, with up to four reference pictures
 - `ph3_bridge.py`: P-H3-Image graphs (Pruna tab), with up to nine pictures and the prompt upsampler
 - `model_store.py` and `model_catalog.json`: the Models page's list and background downloads
+- `lora_in.py`: new LoRAs from the LoRA window: uploads in pieces, and Hugging Face and Civitai links
 - `edit_media.py`: the Edit tab's filmstrips, waveforms and export, with PyAV
 - `edit_project.py`: edit projects as zip files (export and import)
 - `clip_info.py`: the prompt and settings saved in each file, and reading them back on import

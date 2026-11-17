@@ -26,7 +26,7 @@ import uuid
 
 from aiohttp import web
 
-from . import clip_info, comfy_link, edit_media, edit_project, h3_graph, klein_bridge, model_store, moss_bridge, ph3_bridge
+from . import clip_info, comfy_link, edit_media, edit_project, h3_graph, klein_bridge, lora_in, model_store, moss_bridge, ph3_bridge
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 APP_DIR = os.path.join(HERE, "app")
@@ -354,6 +354,59 @@ async def models_action(request):
     except RuntimeError as error:
         raise web.HTTPBadRequest(text=str(error))
     return web.json_response(store.status())
+
+
+# ---- LoRAs into the loras folder: uploaded in pieces, or fetched from a link ----
+def lora_added(file):
+    """A LoRA is in: the lists are read again, and the app is told."""
+    from server import PromptServer
+    lora_list(refresh=True)
+    PromptServer.instance.send_sync("mmflow.loras", {"file": file}, None)
+
+
+async def lora_upload(request):
+    """POST {name, folder, size} starts an upload; PUT ?offset= sends a piece (the answer is where to go on from);
+    POST .../finish {overwrite} checks the file and puts it in place; DELETE cancels."""
+    inc = lora_in.INCOMING
+    uid = request.match_info.get("id")
+    try:
+        if request.method == "POST" and not uid:
+            body = await request.json()
+            return web.json_response(inc.start_upload(body.get("name"), body.get("folder"), body.get("size", 0)))
+        if request.method == "PUT":
+            data = await request.read()
+            return web.json_response({"offset": inc.write(uid, request.query.get("offset", "0"), data)})
+        if request.method == "POST":
+            body = await request.json()
+            file = inc.finish(uid, bool(body.get("overwrite")))
+            lora_added(file)
+            return web.json_response({"file": file})
+        inc.cancel_upload(uid)
+        return web.json_response({})
+    except KeyError:
+        raise web.HTTPNotFound(text="That upload isn't going on any more: start it again.")
+    except FileExistsError as error:
+        raise web.HTTPConflict(text="%s is already there." % error)
+    except ValueError as error:
+        raise web.HTTPBadRequest(text=str(error))
+
+
+async def lora_links(request):
+    """GET: the links being fetched; POST {url, folder}: fetch one; POST .../{id}/cancel."""
+    inc = lora_in.INCOMING
+    inc.on_done = lora_added
+    if request.method == "GET":
+        return web.json_response({"jobs": inc.status()})
+    jid = request.match_info.get("id")
+    if jid:
+        inc.cancel_job(jid)
+        return web.json_response({"jobs": inc.status()})
+    body = await request.json()
+    try:
+        inc.link(body.get("url"), body.get("folder"))
+    except ValueError as error:
+        raise web.HTTPBadRequest(text=str(error))
+    return web.json_response({"jobs": inc.status()})
 
 
 async def upload_mask(request):
@@ -1255,6 +1308,13 @@ ROUTES = (
     ("POST", "/mmflow/api/images", upload_images),
     ("POST", "/mmflow/api/masks", upload_mask),
     ("GET", "/mmflow/api/models", get_models),
+    ("POST", "/mmflow/api/lora-upload", lora_upload),
+    ("PUT", "/mmflow/api/lora-upload/{id}", lora_upload),
+    ("POST", "/mmflow/api/lora-upload/{id}/finish", lora_upload),
+    ("DELETE", "/mmflow/api/lora-upload/{id}", lora_upload),
+    ("GET", "/mmflow/api/lora-links", lora_links),
+    ("POST", "/mmflow/api/lora-links", lora_links),
+    ("POST", "/mmflow/api/lora-links/{id}/cancel", lora_links),
     ("POST", "/mmflow/api/models/{id}/{action}", models_action),
     ("POST", "/mmflow/api/images/from-clip", image_from_clip),
     ("PATCH", "/mmflow/api/images/{id}", rename_image),
