@@ -772,9 +772,10 @@ async def generate_pruna(prompt, s, body):
         raise web.HTTPBadRequest(text=why or "P-H3-Image isn't installed.")
     sheet = body.get("mode") == "sheet"
     res = float(s.get("sheetRes" if sheet else "res", 8.0 if sheet else 4.0))
-    if res not in ph3_bridge.MEGAPIXELS:
-        raise web.HTTPBadRequest(text="Unknown size.")
-    enhance = bool(s.get("enhance"))
+    if res not in model.get("megapixels", ph3_bridge.MEGAPIXELS):
+        raise web.HTTPBadRequest(text="%s doesn't come in %g MP." % (model["name"], res))
+    runs = [model]
+    enhance = bool(s.get("enhance")) and not model.get("h3image")   # H3-Image reads the prompt as written
     if enhance and not ph3_bridge.upsampler():
         raise web.HTTPBadRequest(text="Enhance prompt needs Pruna's prompt upsampler "
                                       "(p-h3-image_prompt_upsampler_bf16.safetensors in models/text_encoders).")
@@ -816,44 +817,57 @@ async def generate_pruna(prompt, s, body):
         ratio = float(sheet_in.get("ratio") or 2.5)
         if not 0.3 <= ratio <= 6:
             raise web.HTTPBadRequest(text="That sheet shape is too narrow or too wide.")
-        w, h = ph3_bridge.size_for(ratio * 1000, 1000, res)
-        aspect = ph3_bridge.ratio_name(w, h)
-    else:
-        first = picture_size(image_path(pictures[0][1])) if pictures and pictures[0][0] == 1 else None
+    first = picture_size(image_path(pictures[0][1])) if pictures and pictures[0][0] == 1 else None
+
+    def size_at(mp):
+        if sheet:
+            w, h = ph3_bridge.size_for(ratio * 1000, 1000, mp)
+            return w, h, ph3_bridge.ratio_name(w, h)
         if size == "match" and first:
-            w, h = ph3_bridge.size_for(first[0], first[1], res)
-            aspect = nearest_aspect(w, h, PH3_ASPECTS)
-        else:
-            aspect = size if size != "match" else "1:1"
-            w, h = dims(aspect, res, ph3_bridge.GRID, PH3_ASPECTS)
+            w, h = ph3_bridge.size_for(first[0], first[1], mp)
+            return w, h, nearest_aspect(w, h, PH3_ASPECTS)
+        aspect = size if size != "match" else "1:1"
+        w, h = dims(aspect, mp, ph3_bridge.GRID, PH3_ASPECTS)
+        return w, h, aspect
+
     text = sheet_in["text"].strip()[:6000] if sheet else ph3_bridge.model_prompt(prompt, [n for n, _ in pictures])
-    clip = {"id": "p" + uuid.uuid4().hex[:10], "kind": "image", "family": "ph3", "mode": "sheet" if sheet else "image",
-            "prompt": prompt or "Character sheet", "model": model["name"], "profile": model["id"],
-            "steps": ph3_bridge.STEPS, "cfg": 1.0, "res": res, "size": "sheet" if sheet else size, "aspect": aspect,
-            "width": w, "height": h, "seed": seed, "loras": loras, "enhance": enhance,
-            "sent": ph3_bridge.sent_text(text, bool(pictures), enhance, w, h),
-            "status": "queued", "step": 0, "file": None, "subfolder": ROOT + "/stills", "starred": False, "created": time.time(),
-            "slots": [next(({"id": i["id"], "name": i["name"]} for k, i in pictures if k == n), None) for n in range(1, count + 1)]}
-    if sheet:
-        roles = (list(sheet_in.get("roles") or []) + ["character", "face", "outfit", "detail"])[:4]
-        clip["sheet"] = {"views": [str(v) for v in sheet_in.get("views") or []][:16], "preset": str(sheet_in.get("preset") or ""),
-                         "bg": str(sheet_in.get("bg") or "white"), "roles": [str(r) for r in roles], "ratio": ratio}
     refs = ["%s/images/%s" % (ROOT, image["file"]) for _, image in pictures]
-    try:
-        graph = ph3_bridge.build_graph(clip, refs, name=clip_info.file_stem(clip))
-        clip["prompt_id"] = await comfy_link.queue_prompt(graph, clip_info.extra_data(clip, ph3_bridge.EXTRA_DATA))
-    except ph3_bridge.Missing as error:
-        raise web.HTTPBadRequest(text=str(error))
-    except Exception as error:
-        LOG.exception("MiniMax H3 Vision couldn't queue a P-H3-Image picture")
-        raise web.HTTPBadRequest(text="ComfyUI refused the image: %s" % error)
+    made = []
+    for run in runs:
+        mp = res
+        w, h, aspect = size_at(mp)
+        h3image = bool(run.get("h3image"))
+        clip = {"id": "p" + uuid.uuid4().hex[:10], "kind": "image", "family": "ph3", "mode": "sheet" if sheet else "image",
+                "prompt": prompt or "Character sheet", "model": run["name"], "profile": run["id"],
+                "steps": run["steps"], "cfg": 1.0, "res": mp, "size": "sheet" if sheet else size, "aspect": aspect,
+                "width": w, "height": h, "seed": seed, "loras": loras if run.get("loras", True) else [],
+                "enhance": enhance and not h3image,
+                "sent": ph3_bridge.sent_text(text, bool(pictures), enhance and not h3image, w, h, h3image),
+                "status": "queued", "step": 0, "file": None, "subfolder": ROOT + "/stills", "starred": False,
+                "created": time.time() + 0.001 * len(made),
+                "slots": [next(({"id": i["id"], "name": i["name"]} for k, i in pictures if k == n), None) for n in range(1, count + 1)]}
+        if sheet:
+            roles = (list(sheet_in.get("roles") or []) + ["character", "face", "outfit", "detail"])[:4]
+            clip["sheet"] = {"views": [str(v) for v in sheet_in.get("views") or []][:16], "preset": str(sheet_in.get("preset") or ""),
+                             "bg": str(sheet_in.get("bg") or "white"), "roles": [str(r) for r in roles], "ratio": ratio}
+        try:
+            graph = ph3_bridge.build_graph(clip, refs, name=clip_info.file_stem(clip))
+            clip["prompt_id"] = await comfy_link.queue_prompt(graph, clip_info.extra_data(clip, ph3_bridge.EXTRA_DATA))
+        except ph3_bridge.Missing as error:
+            raise web.HTTPBadRequest(text=str(error))
+        except Exception as error:
+            LOG.exception("MiniMax H3 Vision couldn't queue a P-H3-Image picture")
+            raise web.HTTPBadRequest(text="ComfyUI refused the image: %s" % error)
+        made.append(clip)
     async with _lock:
         data = read_project()
-        data["clips"].insert(0, clip)
+        for clip in made:
+            data["clips"].insert(0, clip)
         write_project(data)
     ensure_watcher()
-    broadcast(clip)
-    return web.json_response({"clip": clip})
+    for clip in made:
+        broadcast(clip)
+    return web.json_response({"clip": made[0], "clips": made})
 
 
 def name_from(prompt, taken):
@@ -956,7 +970,7 @@ def clip_from_settings(found, kind):
     ph3 = kind == "image" and found.get("family") == "ph3"
     if ph3:
         models, _ = pruna_models()
-        table, sizes, default_aspect = PH3_ASPECTS, ph3_bridge.MEGAPIXELS, "1:1"
+        table, sizes, default_aspect = PH3_ASPECTS, sorted(set(ph3_bridge.MEGAPIXELS + ph3_bridge.H3IMAGE_MEGAPIXELS)), "1:1"
     elif klein:
         models, _ = klein_models()
         table, sizes, default_aspect = IMAGE_ASPECTS, KLEIN_MEGAPIXELS, "1:1"
