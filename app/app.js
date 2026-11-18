@@ -2056,6 +2056,7 @@ function connect() {
     try { msg = JSON.parse(e.data); } catch { return; }
     if (msg.type === "mmflow.clip" && msg.data?.clip) upsertClip(msg.data.clip);
     if (msg.type === "mmflow.loras") { if (LM.open) { XFER.fresh.add(msg.data?.file); pollLinks(); fetchLoras(false); } else api("GET", "loras").then((r) => { OPT.loras = r.loras; LM.sizes = r.sizes || {}; }).catch(() => {}); }
+    if (msg.type === "mmflow.prompts" && typeof PB !== "undefined" && PB.open && !PB.dirty) pbPollDrive();
     if (msg.type === "mmflow.models") { load(false); if (MODELS.open) pollModels(false); }
     else if (msg.type === "progress" && msg.data) onProgress(msg.data);
     else if (msg.type === "mmvision_preview" && msg.data) onPreview(msg.data);
@@ -2757,6 +2758,7 @@ const ACT = {
   // Not installed: open the Models page at this tab's models.
   whyMissing: () => { say(missingWhy()); openModels(state.tab); },
   openModels: () => { showAppMenu(false); openModels(); },
+  openBuilder: () => { ACT.closePopups?.(); openBuilder(); },
   tokenSave: async () => {
     const token = $("hfToken").value.trim();
     if (!token) { say("Paste your Hugging Face token first."); $("hfToken").focus(); return; }

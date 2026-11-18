@@ -211,6 +211,27 @@ Klein numbers the pictures in the order it gets them, so when a slot before it i
 model reads is renumbered to match (slots 1 and 3 filled: "image 3" is sent as "image 2"). MOSS-Image's
 `flux2-vae_small` isn't used for Klein: its pictures need the full VAE encoder.
 
+## Prompt builder
+
+**Builder** in the prompt bar opens a library of your own prompts, in three panels:
+
+- **Categories** and their subcategories: **+ Category**, and on each row (when you point at it) add a
+  subcategory, rename (or double-click the name) and delete. Drag rows to reorder them, or a subcategory onto
+  another category to move it there.
+- **Prompts** of the category picked on the left (or, with the search field, of all of them). Click a prompt to
+  add it to the text field, at the cursor, with a space after it. **Add prompt** at the top and bottom of the list;
+  on each prompt Edit, Move (to any category), Delete (with Undo) and Add (a new one below it). Drag a prompt onto
+  another prompt to put it before that one, or onto a category or subcategory to move it there. A prompt has an
+  optional name and its text.
+- **Prompt**: the text field, starting with what's in the prompt. **Reset** goes back to that, **Cancel** closes
+  without changing the prompt, **Apply** (Ctrl/⌘+Enter) puts the text into the prompt. **Save as prompt** keeps the
+  text in the library, in the category picked on the left.
+
+Changes to the library are saved at once, in `minimax_flow/prompt_library.json`. With Google Drive set up, the
+library is also kept in `vision-prompts.json` in the Drive folder: fetched when the builder is first opened after
+ComfyUI starts, and saved there a few seconds after each change. Two pods' changes are merged prompt by prompt (the
+newer change wins, and deletes are kept), so the library follows you to every new pod.
+
 ## Google Drive
 
 Edit projects and video `.zip`s can be saved to a Google Drive folder and opened from it: **Edit › Project ›
@@ -322,6 +343,8 @@ In ComfyUI's output folder, under `minimax_flow/`:
 - `klein_bridge.py`: Klein 9B graphs, with up to four reference pictures
 - `ph3_bridge.py`: P-H3-Image graphs (Pruna tab), with up to nine pictures and the prompt upsampler
 - `model_store.py` and `model_catalog.json`: the Models page's list and background downloads
+- `prompt_lib.py`: the prompt builder's library, and keeping it in step with Google Drive
+- `app/builder.js`: the prompt builder window
 - `gdrive.py`: saving project zips to, and opening them from, a Google Drive folder with rclone
 - `lora_in.py`: new LoRAs from the LoRA window: uploads in pieces, and Hugging Face and Civitai links
 - `edit_media.py`: the Edit tab's filmstrips, waveforms and export, with PyAV
