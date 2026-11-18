@@ -657,7 +657,7 @@ function videoResHTML(s, T) {
   const pct = (100 * native) / (stops.length - 1);
   return `<div class="field">
       <div class="field-head"><label class="label" for="resSlide">Resolution</label>
-        <button class="value value-edit ${s.res === 1 ? "rec" : ""}" id="resVal" data-act="editRes" title="Click to type a size, like 0.98">${resText(s)}</button></div>
+        <button class="value value-edit ${s.res === 1 ? "rec" : ""}" id="resVal" data-act="editValue" data-id="res" title="Click to type a size, like 0.98">${resText(s)}</button></div>
       <div class="steps-wrap">
         <input id="resSlide" type="range" min="0" max="${stops.length - 1}" step="1" value="${at}" data-input="resSlide" aria-valuetext="${esc(resText(s))}">
         <span class="rec-mark" style="left:calc(${pct}% + ${(0.5 - pct / 100) * 16}px)" aria-hidden="true"></span>
@@ -672,6 +672,45 @@ function resStop(res, stops) {
   let best = 0;
   stops.forEach((v, i) => { if (Math.abs(v - res) < Math.abs(stops[best] - res)) best = i; });
   return best;
+}
+// A slider's value can be clicked and typed in: Resolution (Video), Length, Steps and Guidance. What's typed is
+// kept within the slider's range, and Steps snaps to the numbers the model takes.
+const VALUE_FIELDS = {
+  res: { id: "resVal", name: "Resolution", unit: "MP", get: (s) => s.res, set: (v) => setVideoRes(v), range: () => OPT.videoMP || { min: 0.1, max: 2 } },
+  len: { id: "lenVal", name: "Length", unit: "s", get: (s) => s.len, range: () => OPT.length, whole: true,
+    set: (v) => { state.settings.len = v; render(); } },
+  steps: { id: "stepsVal", name: "Steps", unit: "steps", get: (s) => s.steps, whole: true,
+    range: () => { const m = modelOf(state.settings.model); return { min: m.minSteps || 1, max: m.maxSteps, every: m.stepSize || 1 }; },
+    set: (v, r) => { state.settings.steps = r.min + Math.round((v - r.min) / r.every) * r.every; render(); } },
+  cfg: { id: "cfgVal", name: "Guidance", unit: "", get: (s) => s.cfg, range: () => (isKlein() ? OPT.klein.cfg : OPT.image.cfg) || OPT.image.cfg,
+    set: (v) => { state.settings.cfg = Math.round(v * 10) / 10; render(); } },
+};
+function editValue(field) {
+  const f = VALUE_FIELDS[field], btn = $(f.id), r = f.range();
+  if (!btn) return;
+  const box = document.createElement("span");
+  box.className = "res-edit";
+  box.innerHTML = `<input id="valueInput" type="text" inputmode="${f.whole ? "numeric" : "decimal"}" autocomplete="off" value="${f.get(state.settings)}" aria-label="${f.name} (${r.min} to ${r.max})">${f.unit ? " " + f.unit : ""}`;
+  btn.replaceWith(box);
+  const inp = $("valueInput");
+  inp.focus(); inp.select();
+  let done = false;
+  const finish = (keep) => {
+    if (done) return;
+    done = true;
+    let v = parseFloat(String(inp.value).replace(",", "."));
+    inp.blur();
+    if (!keep || !Number.isFinite(v)) return render();
+    if (v < r.min || v > r.max) say(`${f.name}: ${r.min} to ${r.max}${f.unit && f.unit !== "steps" ? " " + f.unit : ""}.`);
+    v = Math.min(r.max, Math.max(r.min, f.whole ? Math.round(v) : v));
+    f.set(v, r);
+  };
+  inp.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); finish(true); }
+    else if (e.key === "Escape") { e.preventDefault(); finish(false); }
+    e.stopPropagation();
+  });
+  inp.addEventListener("blur", () => finish(true));
 }
 function setVideoRes(mp) {
   const lim = OPT.videoMP || { min: 0.1, max: 2 };
@@ -1290,7 +1329,7 @@ function renderSettings() {
   const box = $("settings");
   box.hidden = !state.settingsOpen;
   if (!state.settingsOpen) return;
-  if (document.activeElement?.id === "resInput") return;   // a size being typed in
+  if (document.activeElement?.id === "valueInput") return;   // a value being typed in
   // Fit between the top bar and the button.
   box.style.maxHeight = Math.max(240, $("pill").getBoundingClientRect().top - 12 - belowTop()) + "px";
 
@@ -1323,7 +1362,7 @@ function renderSettings() {
     </div>`}
 
     ${isImage() ? "" : `<div class="field">
-      <div class="field-head"><label class="label" for="len">Length</label><span class="value" id="lenVal">${s.len} s</span></div>
+      <div class="field-head"><label class="label" for="len">Length</label><button class="value value-edit" id="lenVal" data-act="editValue" data-id="len" title="Click to type a length">${s.len} s</button></div>
       <input id="len" type="range" min="${OPT.length.min}" max="${OPT.length.max}" step="1" value="${s.len}" data-input="len">
     </div>`}
 
@@ -1335,7 +1374,7 @@ function renderSettings() {
     </div>` : videoResHTML(s, T)}
 
     <div class="field">
-      <div class="field-head"><label class="label" for="steps">Steps</label><span class="value ${s.steps === model.steps ? "rec" : ""}" id="stepsVal">${stepsText(s.steps, model.steps)}</span></div>
+      <div class="field-head"><label class="label" for="steps">Steps</label><button class="value value-edit ${s.steps === model.steps ? "rec" : ""}" id="stepsVal" data-act="editValue" data-id="steps" title="Click to type a number of steps">${stepsText(s.steps, model.steps)}</button></div>
       <div class="steps-wrap">
         <input id="steps" type="range" min="${minSteps}" max="${model.maxSteps}" step="${stepSize}" value="${s.steps}" data-input="steps" aria-describedby="stepsRec">
         <span class="rec-mark" style="left:calc(${recPct}% + ${(0.5 - recPct / 100) * 16}px)" aria-hidden="true"></span>
@@ -1431,7 +1470,7 @@ function kleinSettingsHTML(s, model, T, minSteps, stepSize, recPct) {
     </div>
 
     <div class="field" ${swap && headOnly() && s.swapSampler === "lanpaint" ? "hidden" : ""}>
-      <div class="field-head"><label class="label" for="steps">Steps</label><span class="value ${s.steps === model.steps ? "rec" : ""}" id="stepsVal">${stepsText(s.steps, model.steps)}</span></div>
+      <div class="field-head"><label class="label" for="steps">Steps</label><button class="value value-edit ${s.steps === model.steps ? "rec" : ""}" id="stepsVal" data-act="editValue" data-id="steps" title="Click to type a number of steps">${stepsText(s.steps, model.steps)}</button></div>
       <div class="steps-wrap">
         <input id="steps" type="range" min="${minSteps}" max="${model.maxSteps}" step="${stepSize}" value="${s.steps}" data-input="steps" aria-describedby="stepsRec">
         <span class="rec-mark" style="left:calc(${recPct}% + ${(0.5 - recPct / 100) * 16}px)" aria-hidden="true"></span>
@@ -1564,7 +1603,7 @@ function guidanceField(s, model) {
   const g = (isKlein() ? OPT.klein.cfg : OPT.image.cfg) || OPT.image.cfg, rec = model.cfg;
   const pct = ((rec - g.min) / (g.max - g.min)) * 100;
   return `<div class="field">
-      <div class="field-head"><label class="label" for="cfg">Guidance</label><span class="value ${s.cfg === rec ? "rec" : ""}" id="cfgVal">${cfgText(s.cfg, rec)}</span></div>
+      <div class="field-head"><label class="label" for="cfg">Guidance</label><button class="value value-edit ${s.cfg === rec ? "rec" : ""}" id="cfgVal" data-act="editValue" data-id="cfg" title="Click to type a guidance value">${cfgText(s.cfg, rec)}</button></div>
       <div class="steps-wrap">
         <input id="cfg" type="range" min="${g.min}" max="${g.max}" step="${g.step}" value="${s.cfg}" data-input="cfg" aria-describedby="cfgRec">
         <span class="rec-mark" style="left:calc(${pct}% + ${(0.5 - pct / 100) * 16}px)" aria-hidden="true"></span>
@@ -2883,32 +2922,7 @@ const ACT = {
   },
   recSteps: () => { state.settings.steps = modelOf(state.settings.model).steps; render(); },
   nativeRes: () => setVideoRes(1.0),
-  editRes: () => {
-    const btn = $("resVal"), lim = OPT.videoMP || { min: 0.1, max: 2 };
-    const box = document.createElement("span");
-    box.className = "res-edit";
-    box.innerHTML = `<input id="resInput" type="text" inputmode="decimal" autocomplete="off" value="${state.settings.res}" aria-label="Resolution in MP (${lim.min} to ${lim.max})"> MP`;
-    btn.replaceWith(box);
-    const inp = $("resInput");
-    inp.focus(); inp.select();
-    let done = false;
-    const finish = (keep) => {
-      if (done) return;
-      done = true;
-      const v = parseFloat(String(inp.value).replace(",", "."));
-      inp.blur();
-      if (keep && v > 0) {
-        if (v < lim.min || v > lim.max) say(`Sizes go from ${lim.min} to ${lim.max} MP.`);
-        setVideoRes(v);
-      } else render();
-    };
-    inp.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") { e.preventDefault(); finish(true); }
-      else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); finish(false); }
-      e.stopPropagation();
-    });
-    inp.addEventListener("blur", () => finish(true));
-  },
+  editValue: (field) => editValue(field),
   seedMode: (id) => { state.settings.seedMode = id; render(); },
   rollSeed: () => { state.settings.seed = newSeed(); render(); },
   loraPicker: () => openLoras(),
