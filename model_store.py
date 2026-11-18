@@ -2,7 +2,8 @@
 
 Downloads run one file at a time in a child Python process (huggingface_hub's hf_hub_download, with hf_xet when it
 is installed, like the RunPod template's start.sh), into models/.downloads, then move into place. Progress is the
-size of what has arrived so far. HF_TOKEN in the environment is used for gated repositories (Klein).
+size of what has arrived so far. Gated repositories (Klein) need a Hugging Face token: HF_TOKEN from the pod, or one
+pasted on the Models page, kept until ComfyUI restarts or, if asked, in models/.downloads/hf_token on the volume.
 """
 
 import asyncio
@@ -30,6 +31,13 @@ if not paths:
     sys.exit("NOTFOUND %s isn't in %s" % (name, repo))
 print(hf_hub_download(repo, sorted(paths, key=len)[0], local_dir=stage), flush=True)
 """
+# Who a token belongs to (it checks the token), in the child process too.
+WHOAMI = r"""
+import json, os
+from huggingface_hub import HfApi
+info = HfApi(token=os.environ["MMFLOW_CHECK_TOKEN"]).whoami()
+print(json.dumps({"name": info.get("name") or info.get("fullname") or "?"}))
+"""
 # The sizes of a repository's files, in the child process too (it needs the network).
 SIZES = r"""
 import json, sys
@@ -44,6 +52,82 @@ for p in api.list_repo_files(repo):
 info = {i.path: i.size for i in api.get_paths_info(repo, list(paths.values()))}
 print(json.dumps({n: info.get(p) for n, p in paths.items()}))
 """
+
+
+# ---- The Hugging Face token ---------------------------------------------------
+_PASTED = {"token": None, "user": None}
+
+
+def token_file():
+    return os.path.join(models_dir(), ".downloads", "hf_token")
+
+
+def token():
+    """The token downloads use: the pod's HF_TOKEN, else the one pasted on the Models page, else the remembered one."""
+    if os.environ.get("HF_TOKEN"):
+        return os.environ["HF_TOKEN"]
+    if _PASTED["token"]:
+        return _PASTED["token"]
+    try:
+        with open(token_file(), encoding="utf-8") as f:
+            saved = f.read().strip()
+        return saved or None
+    except OSError:
+        return None
+
+
+def token_state():
+    """Where the token comes from ("pod", "pasted", "saved" or None), and whose it is when known."""
+    if os.environ.get("HF_TOKEN"):
+        return {"from": "pod", "user": None}
+    if os.path.isfile(token_file()):
+        return {"from": "saved", "user": _PASTED["user"]}
+    if _PASTED["token"]:
+        return {"from": "pasted", "user": _PASTED["user"]}
+    return {"from": None, "user": None}
+
+
+def child_env():
+    env = {**os.environ, "HF_HUB_DISABLE_TELEMETRY": "1", "HF_HUB_DISABLE_PROGRESS_BARS": "1"}
+    t = token()
+    if t:
+        env["HF_TOKEN"] = t
+    return env
+
+
+async def set_token(value, remember):
+    """Check a pasted token with Hugging Face and use it; with remember, also keep it on the volume. ValueError if
+    Hugging Face doesn't take it."""
+    value = (value or "").strip()
+    if not value.startswith("hf_") or len(value) < 20 or any(c.isspace() for c in value):
+        raise ValueError("That isn't a Hugging Face token: they start with hf_.")
+    proc = await asyncio.create_subprocess_exec(sys.executable, "-c", WHOAMI, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+                                                env={**os.environ, "HF_HUB_DISABLE_TELEMETRY": "1", "MMFLOW_CHECK_TOKEN": value})
+    out, err = await proc.communicate()
+    if proc.returncode != 0:
+        text = err.decode("utf-8", "replace")
+        if "401" in text or "Invalid" in text or "Unauthorized" in text:
+            raise ValueError("Hugging Face turned that token down: check it, or make a new read token.")
+        raise ValueError("Couldn't reach Hugging Face to check the token: " + (text.strip().splitlines() or ["unknown error"])[-1][:200])
+    _PASTED.update(token=value, user=json.loads(out.decode().strip().splitlines()[-1]).get("name"))
+    path = token_file()
+    if remember:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(value)
+    elif os.path.isfile(path):
+        os.remove(path)
+    return token_state()
+
+
+def forget_token():
+    _PASTED.update(token=None, user=None)
+    try:
+        os.remove(token_file())
+    except OSError:
+        pass
+    return token_state()
 
 
 def catalog():
@@ -113,7 +197,7 @@ class Store:
         import subprocess
         for repo, names in by_repo.items():
             try:
-                out = subprocess.run([sys.executable, "-c", SIZES, repo, *sorted(names)], capture_output=True, text=True, timeout=60)
+                out = subprocess.run([sys.executable, "-c", SIZES, repo, *sorted(names)], capture_output=True, text=True, timeout=60, env=child_env())
                 for name, size in json.loads(out.stdout.strip().splitlines()[-1]).items():
                     if size:
                         self.sizes[repo + "/" + name] = size
@@ -149,7 +233,7 @@ class Store:
                            "bytes": sum(f["size"] or 0 for f in files)})
         usage = shutil.disk_usage(models_dir())
         return {"groups": groups, "job": self.job, "queue": list(self.queue),
-                "disk": {"free": usage.free, "total": usage.total}, "token": bool(os.environ.get("HF_TOKEN"))}
+                "disk": {"free": usage.free, "total": usage.total}, "token": token_state()}
 
     # ---- Downloads -----------------------------------------------------------
     def download(self, group_id):
@@ -223,8 +307,7 @@ class Store:
         try:
             self.proc = await asyncio.create_subprocess_exec(
                 sys.executable, "-c", FETCH, repo, name, stage,
-                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-                env={**os.environ, "HF_HUB_DISABLE_TELEMETRY": "1", "HF_HUB_DISABLE_PROGRESS_BARS": "1"})
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=child_env())
             watch = asyncio.ensure_future(self._watch(stage))
             out, err = await self.proc.communicate()
             watch.cancel()
@@ -264,10 +347,10 @@ class Store:
         if "NOTFOUND" in err:
             return "%s isn't in %s any more." % (name, repo)
         if any(k in err for k in ("GatedRepo", "401", "403", "Access to model", "gated")):
-            if not os.environ.get("HF_TOKEN"):
-                return ("%s is gated: set HF_TOKEN on the pod (a Hugging Face read token) and accept the license at "
-                        "https://huggingface.co/%s." % (repo, repo))
-            return "Hugging Face refused %s: accept the license at https://huggingface.co/%s with the account of your HF_TOKEN." % (repo, repo)
+            if not token():
+                return ("%s is gated: paste a Hugging Face read token at the top of this page (or set HF_TOKEN on the pod), "
+                        "and accept the license at https://huggingface.co/%s." % (repo, repo))
+            return "Hugging Face refused %s: accept the license at https://huggingface.co/%s with the account of your token." % (repo, repo)
         if "No space left" in err:
             return "The disk is full."
         return "Download failed: %s" % tail[:300]

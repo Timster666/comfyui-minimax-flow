@@ -233,6 +233,12 @@ when it is in. Gated models (Klein) need `HF_TOKEN` set where ComfyUI runs, and 
 Face. **Delete** removes a group's files, keeping any another installed group needs. A tab's **Not installed**
 opens the page at that tab's models.
 
+
+Gated models (Klein) need a Hugging Face read token: the pod's `HF_TOKEN`, or paste one at the top of the Models
+page. A pasted token is checked with Hugging Face and used until ComfyUI restarts; with **Remember on this pod** it
+is kept in `models/.downloads/hf_token` (readable only by its owner) until you click **Remove**. It is also used for
+LoRA links to gated Hugging Face repositories.
+
 ## P-H3-Image files (Pruna tab)
 
 ComfyUI 0.44 or newer (it has P-H3-Image's nodes built in). From

@@ -20,6 +20,8 @@ import uuid
 
 import folder_paths
 
+from . import model_store
+
 FOLDERS = ["MiniMax H3", "MOSS Image", "Flux Klein", "P-H3 Image", ""]
 CHUNK_MAX = 64 * 1024 * 1024
 UA = "MiniMax-H3-Vision"
@@ -256,7 +258,7 @@ class Incoming:
         proc = await asyncio.create_subprocess_exec(
             sys.executable, "-c", HF_FETCH, src["repo"], src["rev"], src["path"], stage,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-            env={**os.environ, "HF_HUB_DISABLE_TELEMETRY": "1", "HF_HUB_DISABLE_PROGRESS_BARS": "1"})
+            env=model_store.child_env())   # with the Hugging Face token from the Models page, for gated LoRAs
         job["proc"] = proc
         watch = asyncio.ensure_future(self._watch(job, stage))
         path = None
@@ -276,7 +278,7 @@ class Incoming:
                 raise RuntimeError("That file isn't on Hugging Face (check the link).")
             if any(k in err for k in ("GatedRepo", "RepositoryNotFound", "401 Client Error", "403 Client Error")):
                 raise RuntimeError("Hugging Face refused it: the repository is gated, private or doesn't exist. For a gated "
-                                   "one, set HF_TOKEN on the pod and accept its terms on huggingface.co.")
+                                   "one, paste a Hugging Face token on the Models page (gear menu) and accept its terms on huggingface.co.")
             raise RuntimeError("Download failed: " + (err.strip().splitlines() or ["unknown error"])[-1][:300])
         return path
 

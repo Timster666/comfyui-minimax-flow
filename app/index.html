@@ -388,6 +388,13 @@ body.dragging-ref .composer { border-color: var(--line-strong); }
 .disk.tight .disk-text b { color: var(--danger); }
 .token { font-size: 11.5px; padding: 2px 8px; border-radius: 999px; background: var(--raised); color: var(--muted); white-space: nowrap; }
 .token.ok { background: #1f3a26; color: #9fdcae; }
+.mtoken { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 12px 20px; border-bottom: 1px solid var(--line); }
+.mtoken:empty { display: none; }
+.mtoken-field { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-soft); }
+.mtoken-field input { width: 260px; min-height: 34px; border-radius: 8px; border: 1px solid var(--raised-2); background: #151619; color: var(--text); padding: 0 10px; font: inherit; font-size: 13px; }
+.mtoken-keep { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
+.mtoken .hint { flex-basis: 100%; font-size: 12px; }
+.mtoken .hint a { color: var(--accent-text); }
 .models-filter { margin-left: auto; padding: 3px; border-radius: 11px; }
 .models-filter button { min-height: 32px; padding: 0 14px; font-size: 13px; border-radius: 8px; white-space: nowrap; }
 .models-body { overflow-y: auto; padding: 8px 20px 20px; }
@@ -830,6 +837,7 @@ body.dragging-ref .composer { border-color: var(--line-strong); }
       <div class="seg models-filter" id="modelsFilter"></div>
       <button class="zoom-x models-x" data-act="closeModels" aria-label="Close">✕</button>
     </div>
+    <div class="mtoken" id="modelsToken"></div>
     <div class="models-body" id="modelsBody"></div>
   </div>
 </div>

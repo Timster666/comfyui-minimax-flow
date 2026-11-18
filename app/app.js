@@ -822,6 +822,28 @@ async function modelAction(id, action) {
     pollModels(false);
   } catch (error) { say(error.message); }
 }
+// The Hugging Face token gated models (Klein) need: the pod's HF_TOKEN, or one pasted here. Drawn again only when
+// it changes, so the field isn't cleared while you type.
+function renderToken(t) {
+  const key = JSON.stringify(t), box = $("modelsToken");
+  if (box.dataset.key === key && !MODELS.tokenBusy) return;
+  if (box.contains(document.activeElement) && box.dataset.key === key) return;
+  box.dataset.key = key;
+  if (t.from === "pod") {
+    box.innerHTML = `<span class="token ok">Hugging Face token: the pod's HF_TOKEN</span>`;
+  } else if (t.from) {
+    box.innerHTML = `<span class="token ok">Hugging Face token${t.user ? " of " + esc(t.user) : ""} · ${t.from === "saved" ? "remembered on this pod" : "until ComfyUI restarts"}</span>
+      <button class="link" data-act="tokenForget">Remove</button>`;
+  } else {
+    box.innerHTML = `<label class="mtoken-field"><span>Hugging Face token</span>
+        <input id="hfToken" type="password" autocomplete="off" spellcheck="false" placeholder="hf_…" aria-describedby="hfTokenHint"></label>
+      <label class="mtoken-keep"><input type="checkbox" id="hfRemember"> Remember on this pod</label>
+      <button class="btn" data-act="tokenSave" id="hfTokenGo">Use token</button>
+      <span class="hint" id="hfTokenHint">Gated models (Klein) need one: make a read token at <a href="https://huggingface.co/settings/tokens" target="_blank" rel="noopener">huggingface.co/settings/tokens</a> and accept the model's license there. Without Remember, it's kept until ComfyUI restarts.</span>`;
+    $("hfToken").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); ACT.tokenSave(); } });
+  }
+}
+
 function renderModels(scroll) {
   const d = MODELS.data;
   if (!d) return;
@@ -831,8 +853,8 @@ function renderModels(scroll) {
   const tight = d.disk.free - pending < 0.1 * d.disk.total;
   $("modelsDisk").innerHTML = `<span class="disk ${tight ? "tight" : ""}" title="${bytesText(used)} used of ${bytesText(d.disk.total)}">
       <span class="disk-bar"><span class="disk-used" style="width:${pct(used).toFixed(1)}%"></span><span class="disk-next" style="left:${pct(used).toFixed(1)}%;width:${pct(pending).toFixed(1)}%"></span></span>
-      <span class="disk-text"><b>${bytesText(d.disk.free)}</b> free of ${bytesText(d.disk.total)}${pending ? ` · ${bytesText(pending)} on the way` : ""}</span></span>
-    <span class="token ${d.token ? "ok" : ""}">${d.token ? "HF_TOKEN set" : "No HF_TOKEN (Klein needs one)"}</span>`;
+      <span class="disk-text"><b>${bytesText(d.disk.free)}</b> free of ${bytesText(d.disk.total)}${pending ? ` · ${bytesText(pending)} on the way` : ""}</span></span>`;
+  renderToken(d.token || {});
   const byId = Object.fromEntries(d.groups.map((g) => [g.id, g]));
   const card = (g) => {
     const job = d.job && d.job.group === g.id ? d.job : null;
@@ -847,7 +869,7 @@ function renderModels(scroll) {
     }
     const size = g.state === "installed" ? bytesText(g.bytes) : g.missingBytes ? bytesText(g.missingBytes) + (g.state === "partly" ? " to go" : "") + (g.unknownSize ? "+" : "") : g.unknownSize ? "size …" : "";
     return `<div class="mcard m-${g.state}" id="mg-${g.id}">
-      <h3>${esc(g.name)} <span class="mstate ${g.state}">${label}</span>${g.gated ? '<span class="mstate">Needs HF_TOKEN</span>' : ""}</h3>
+      <h3>${esc(g.name)} <span class="mstate ${g.state}">${label}</span>${g.gated && !(d.token && d.token.from) ? '<span class="mstate">Needs a Hugging Face token</span>' : ""}</h3>
       <p>${esc(g.about || "")}</p>
       ${needs.length ? `<span class="mneeds">Also needs: ${needs.map(esc).join(", ")}</span>` : ""}
       <div class="mside"><span class="msize">${size}</span><div class="mbtns">
@@ -2735,6 +2757,24 @@ const ACT = {
   // Not installed: open the Models page at this tab's models.
   whyMissing: () => { say(missingWhy()); openModels(state.tab); },
   openModels: () => { showAppMenu(false); openModels(); },
+  tokenSave: async () => {
+    const token = $("hfToken").value.trim();
+    if (!token) { say("Paste your Hugging Face token first."); $("hfToken").focus(); return; }
+    $("hfTokenGo").disabled = true; $("hfTokenGo").textContent = "Checking…";
+    try {
+      MODELS.data = await api("POST", "models-token", { token, remember: $("hfRemember").checked });
+      const t = MODELS.data.token;
+      say(`Token works${t.user ? " (" + t.user + ")" : ""}: gated models can be downloaded now.`);
+      renderModels(false);
+    } catch (error) {
+      say(error.message);
+      $("hfTokenGo").disabled = false; $("hfTokenGo").textContent = "Use token";
+    }
+  },
+  tokenForget: async () => {
+    try { MODELS.data = await api("DELETE", "models-token"); say("The token is removed."); renderModels(false); }
+    catch (error) { say(error.message); }
+  },
   openDrive: () => { showAppMenu(false); openDrive(); },
   closeDrive: () => closeDrive(),
   driveRefresh: () => driveFiles(true),

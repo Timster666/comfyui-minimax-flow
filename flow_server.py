@@ -369,6 +369,19 @@ async def get_models(request):
     return web.json_response(model_store.STORE.status())
 
 
+async def models_token(request):
+    """POST {token, remember}: check a Hugging Face token and use it for downloads; DELETE: forget it."""
+    if request.method == "DELETE":
+        model_store.forget_token()
+    else:
+        body = await request.json()
+        try:
+            await model_store.set_token(body.get("token"), bool(body.get("remember")))
+        except ValueError as error:
+            raise web.HTTPBadRequest(text=str(error))
+    return web.json_response(model_store.STORE.status())
+
+
 async def models_action(request):
     group, action = request.match_info["id"], request.match_info["action"]
     store = model_store.STORE
@@ -1439,6 +1452,8 @@ ROUTES = (
     ("POST", "/mmflow/api/images", upload_images),
     ("POST", "/mmflow/api/masks", upload_mask),
     ("GET", "/mmflow/api/models", get_models),
+    ("POST", "/mmflow/api/models-token", models_token),
+    ("DELETE", "/mmflow/api/models-token", models_token),
     ("POST", "/mmflow/api/lora-upload", lora_upload),
     ("PUT", "/mmflow/api/lora-upload/{id}", lora_upload),
     ("POST", "/mmflow/api/lora-upload/{id}/finish", lora_upload),
