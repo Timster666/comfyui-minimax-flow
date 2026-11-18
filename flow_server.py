@@ -70,6 +70,7 @@ DEFAULT_UI = {
     "imageSettings": {"model": "MOSS-Image SFT (INT8)", "steps": 50, "cfg": 3.0, "res": 1.0, "aspect": "1:1",
                       "seedMode": "random", "seed": 48213, "loras": []},
     "attached": [],
+    "subjects": [],
     "perRow": 3,
     "prompt": "",
     "imagePrompt": "",
@@ -585,9 +586,16 @@ async def generate(request):
     async with _lock:
         data = read_project()
         names = {i["name"] for i in data["images"]}
-        unknown = [n for n in MENTION_RE.findall(prompt) if n not in names]
-        if unknown:
-            raise web.HTTPBadRequest(text="There is no image called @%s." % unknown[0])
+        subjects = None
+        if body.get("subjects") is not None:
+            try:
+                subjects = h3_graph.clean_subjects(body["subjects"], data["images"], prompt)
+            except ValueError as error:
+                raise web.HTTPBadRequest(text=str(error))
+        else:
+            unknown = [n for n in MENTION_RE.findall(prompt) if n not in names]
+            if unknown:
+                raise web.HTTPBadRequest(text="There is no image called @%s." % unknown[0])
         w, h = video_dims(aspect, res)
         clip = {"id": "c" + uuid.uuid4().hex[:10], "prompt": prompt, "model": model["name"], "profile": model["id"],
                 "steps": steps, "res": res, "aspect": aspect, "len": length, "width": w, "height": h, "seed": seed,
@@ -598,8 +606,11 @@ async def generate(request):
         if scheduler:
             clip["scheduler"] = scheduler
         images = list(data["images"])
+        if subjects is not None:
+            clip["subjects"] = subjects
         # The pictures it uses, so a project export finds them even after a rename.
-        clip["refs"] = [{"id": i["id"], "name": i["name"]} for i in edit_project.refs_of(clip, images)]
+        clip["refs"] = ([dict(p) for subject in subjects for p in subject["images"]] if subjects is not None
+                        else [{"id": i["id"], "name": i["name"]} for i in edit_project.refs_of(clip, images)])
 
     try:
         graph = h3_graph.build_graph(clip, images, name=clip_info.file_stem(clip))

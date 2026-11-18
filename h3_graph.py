@@ -226,6 +226,44 @@ def frames(seconds):
     return 5 + 17 * max(1, int(round((count - 5) / 17.0)))
 
 
+SUBJECT_TAG = re.compile(r"<Subject (\d+)>")
+DESCRIPTION_MAX = 300
+
+
+def clean_subjects(raw, images, prompt=""):
+    """The Video tab's subjects as kept with a clip: [{"images": [{"id", "name"}], "desc"}], in slot order (empty ones
+    kept, so <Subject N> keeps meaning slot N). ValueError when a picture is gone, there are too many pictures, or the
+    prompt names a subject that has none."""
+    by_id = {i["id"]: i for i in images}
+    out = []
+    for subject in list(raw or [])[:H3_PICTURES]:
+        pics = []
+        for image_id in (subject or {}).get("images") or []:
+            image = by_id.get(image_id)
+            if not image:
+                raise ValueError("A picture in Subject %d isn't in Add image any more." % (len(out) + 1))
+            if image_id not in [p["id"] for p in pics]:
+                pics.append({"id": image["id"], "name": image["name"]})
+        out.append({"images": pics, "desc": str((subject or {}).get("desc") or "").strip()[:DESCRIPTION_MAX]})
+    total = sum(len(s["images"]) for s in out)
+    if total > H3_PICTURES:
+        raise ValueError("H3 takes at most %d pictures; the subjects have %d. Take some out." % (H3_PICTURES, total))
+    for number in sorted({int(n) for n in SUBJECT_TAG.findall(prompt)}):
+        if number < 1 or number > len(out) or not out[number - 1]["images"]:
+            raise ValueError("The prompt names <Subject %d>, but it has no pictures." % number)
+    return out
+
+
+def subject_prompt(clip):
+    """The prompt H3 gets for a clip with subjects: the subjects with pictures, numbered from 1 in slot order, each
+    defined by its description (if any) and all its pictures; the prompt's <Subject N> renumbered to match."""
+    kept = [(n, s) for n, s in enumerate(clip["subjects"], 1) if s["images"]]
+    number = {old: new for new, (old, _) in enumerate(kept, 1)}
+    body = SUBJECT_TAG.sub(lambda m: "<Subject %d>" % number.get(int(m.group(1)), int(m.group(1))), clip["prompt"])
+    subjects = [{"name": None, "description": s["desc"], "picture_count": len(s["images"])} for _, s in kept]
+    return compose_reference_prompt("", body, subjects=subjects, tagged=True), [p for _, s in kept for p in s["images"]]
+
+
 def mentions(text):
     return re.findall(r"@([A-Za-z0-9_]+)", text)
 
@@ -253,19 +291,28 @@ def build_graph(clip, images, files=None, name=None):
     if missing or gaps:
         raise Missing("%s needs %s." % (profile["title"], and_list(missing + gaps)))
 
-    # The @images in the prompt, in the order they were uploaded: each is one subject with one picture.
-    by_name = {image["name"].lower(): image for image in images}
-    mentioned = []
-    for word in mentions(clip["prompt"]):
-        image = by_name.get(word.lower())
-        if image and image["id"] not in mentioned:
-            mentioned.append(image["id"])
-    cast = [image for image in images if image["id"] in mentioned][:H3_PICTURES]
+    by_id = {image["id"]: image for image in images}
+    if clip.get("subjects") is not None:
+        # The Video tab's subjects: one or more pictures each, in slot order.
+        subject_text, pictures = subject_prompt(clip)
+        cast = [by_id[p["id"]] for p in pictures if p["id"] in by_id][:H3_PICTURES]
+    else:
+        # An older clip: the @images in the prompt, in the order they were uploaded, one picture each.
+        by_name = {image["name"].lower(): image for image in images}
+        mentioned = []
+        for word in mentions(clip["prompt"]):
+            image = by_name.get(word.lower())
+            if image and image["id"] not in mentioned:
+                mentioned.append(image["id"])
+        cast = [image for image in images if image["id"] in mentioned][:H3_PICTURES]
+        subject_text = None
 
     # A family's fl2va model takes a prompt alone. Anything with pictures goes to its ref2va model.
     unet = unet_ref if cast or not unet_text else unet_text
     text_only = unet == unet_text and not cast
-    if cast:
+    if cast and subject_text:
+        prompt = subject_text
+    elif cast:
         prompt = compose_reference_prompt("", clip["prompt"], subjects=[{"name": i["name"], "picture_count": 1} for i in cast])
     else:
         prompt = compose_prompt("", clip["prompt"])
@@ -385,11 +432,13 @@ def tag_subjects(text, subjects):
 
 
 def compose_reference_prompt(style, action, subjects=(), first_frame=False, last_frame=False,
-                             camera="", speaker="", dialogue="", sound="", music="", language="English", voice=None):
+                             camera="", speaker="", dialogue="", sound="", music="", language="English", voice=None,
+                             tagged=False):
     """A take with references: the six sections of the full-reference guide.
 
     Picture numbers follow H3 Take: first frame, last frame, then references.
-    subjects are dicts with a name and a description. voice says whose timbre <Audio 1> carries:
+    subjects are dicts with a name and a description. tagged: the action already says <Subject N> (the Video tab's
+    subjects), so there are no @names to turn into tags. voice says whose timbre <Audio 1> carries:
     {"subject": N} for a subject in the shot, or {"description": "..."} for an unseen voice.
     """
     subjects = list(subjects)
@@ -417,8 +466,8 @@ def compose_reference_prompt(style, action, subjects=(), first_frame=False, last
             picture += 1
             tags.append("<Picture %s>" % picture)
         where = tags[0] if len(tags) == 1 else ", ".join(tags[:-1]) + " and " + tags[-1]
-        who = (subject.get("description") or subject["name"]).strip().rstrip(".")
-        definitions.append("<Subject %s> is %s in %s." % (number, who, where))
+        who = (subject.get("description") or subject.get("name") or "").strip().rstrip(".")
+        definitions.append("<Subject %s> is %s in %s." % (number, who, where) if who else "<Subject %s> is shown in %s." % (number, where))
         retention.append("<Subject %s> (appears in [Shot 1]): fully_preserved - their identity and appearance are retained." % number)
 
     voiced = bool(voice) and bool(dialogue.strip())
@@ -435,7 +484,7 @@ def compose_reference_prompt(style, action, subjects=(), first_frame=False, last
         tasks.append("reference generation")
     if voiced:
         tasks.append("audio reference")
-    body = tag_subjects(action.strip(), subjects)
+    body = action.strip() if tagged else tag_subjects(action.strip(), subjects)
     missing = [
         "<Subject %s>" % number for number, _ in enumerate(subjects, 1)
         if "<Subject %s>" % number not in body
@@ -449,7 +498,7 @@ def compose_reference_prompt(style, action, subjects=(), first_frame=False, last
     if camera.strip():
         shot += " " + camera.strip()
     if dialogue.strip():
-        shot += " " + dialogue_line(tag_subjects(speaker, subjects), dialogue, language, voice=voiced)
+        shot += " " + dialogue_line(speaker if tagged else tag_subjects(speaker, subjects), dialogue, language, voice=voiced)
     if last_tag:
         shot += " The shot ends on %s." % last_tag
 
