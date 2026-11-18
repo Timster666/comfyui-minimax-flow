@@ -3816,7 +3816,10 @@ async function load(first = true) {
       state.imageEditSlot = [state.refs.some((r) => r.id === ui.imageEditSource) ? ui.imageEditSource : null];
       state.negative = typeof ui.imageNegative === "string" ? ui.imageNegative : "";
       state.negativeOpen = !!ui.negativeOpen;
-      state.attached = (ui.attached || []).filter((id) => state.refs.some((r) => r.id === id));
+      // A prompt bar saved by the subjects version (kept on the saved/video-subjects branch) has its pictures in
+      // ui.subjects: they come back into the strip.
+      const fromSubjects = (ui.subjects || []).flatMap((x) => x.refs || []);
+      state.attached = [...new Set([...(ui.attached || []), ...fromSubjects])].filter((id) => state.refs.some((r) => r.id === id));
       state.perRow = ui.perRow || 3;
       state.prompt = state.drafts[state.tab];
       state.caret = state.prompt.length;
