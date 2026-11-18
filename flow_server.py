@@ -26,7 +26,7 @@ import uuid
 
 from aiohttp import web
 
-from . import clip_info, comfy_link, edit_media, edit_project, gdrive, h3_graph, klein_bridge, lora_in, model_store, moss_bridge, ph3_bridge
+from . import clip_info, comfy_link, edit_media, edit_project, gdrive, prompt_lib, h3_graph, klein_bridge, lora_in, model_store, moss_bridge, ph3_bridge
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 APP_DIR = os.path.join(HERE, "app")
@@ -367,6 +367,32 @@ async def get_models(request):
         model_store.STORE.load_sizes(root_dir())
         model_store.STORE.on_done = models_done
     return web.json_response(model_store.STORE.status())
+
+
+# ---- The prompt builder's library (here, and in the Google Drive folder when it is set up) ----
+def prompts_changed():
+    from server import PromptServer
+    PromptServer.instance.send_sync("mmflow.prompts", {}, None)
+
+
+async def prompts(request):
+    """GET: the library (fetched from Drive on the first read); PUT {lib}: the library after a change (merged with
+    what is here); POST .../sync: fetch, merge and upload now."""
+    lib = prompt_lib.LIBRARY
+    lib.on_change = prompts_changed
+    path = root_dir("prompt_library.json")
+    if request.method == "GET":
+        return web.json_response(await lib.get(path))
+    if request.method == "PUT":
+        body = await request.json()
+        try:
+            return web.json_response(await lib.put(path, body.get("lib")))
+        except ValueError as error:
+            raise web.HTTPBadRequest(text=str(error))
+    lib.load(path)
+    if lib.drive_on():
+        await lib.sync()
+    return web.json_response(lib.view())
 
 
 async def models_token(request):
@@ -1452,6 +1478,9 @@ ROUTES = (
     ("POST", "/mmflow/api/images", upload_images),
     ("POST", "/mmflow/api/masks", upload_mask),
     ("GET", "/mmflow/api/models", get_models),
+    ("GET", "/mmflow/api/prompts", prompts),
+    ("PUT", "/mmflow/api/prompts", prompts),
+    ("POST", "/mmflow/api/prompts/sync", prompts),
     ("POST", "/mmflow/api/models-token", models_token),
     ("DELETE", "/mmflow/api/models-token", models_token),
     ("POST", "/mmflow/api/lora-upload", lora_upload),
