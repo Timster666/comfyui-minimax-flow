@@ -136,6 +136,14 @@ While a clip renders you see its steps and a moving live preview (with `taeh3`, 
 image renders you see its steps and ComfyUI's live preview. MOSS-Image follows Comfy-Org's template
 (er_sde / simple, the recommended negative prompt), at 50 steps and guidance 3.0.
 
+### Video sizes
+
+The Video tab's **Resolution** slider goes from 0.1 to 2 MP; click the size to type any value in between (0.98,
+say). Sides are multiples of 32, as MiniMax asks. **1.0 MP is H3-Base's own size**, as large as its
+768 × 1344 pixel limit allows in each shape: 1344×768 (16:9), 768×1344 (9:16), 992×992 (1:1), 1152×864 (4:3),
+864×1152 (3:4) and 1536×672 (21:9). Sizes up to 1 MP stay within that limit, small sizes are picked to keep
+the frame's shape, and 1.5 and 2 MP go above H3's own size on purpose.
+
 ## MiniMax H3 files
 
 The models the Video tab needs, into ComfyUI's `models` folder:

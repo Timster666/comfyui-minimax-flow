@@ -48,6 +48,12 @@ KLEIN_RECOMMENDED_MP = [1.0, 1.5, 2.0]
 PH3_ASPECTS = {"1:1": [1, 1], "4:3": [4, 3], "3:2": [3, 2], "16:9": [16, 9], "21:9": [21, 9],
                "3:4": [3, 4], "2:3": [2, 3], "9:16": [9, 16]}
 MEGAPIXELS = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.5, 2.0]
+VIDEO_MP = {"min": 0.1, "max": 2.0}     # any size in between can be typed in, in hundredths
+# H3-Base's own size (MiniMax: 1344x768 at 16:9, sides in multiples of 32, at most 768x1344 pixels). "1.0 MP" is
+# this, as large as the limit allows in each shape, rather than 1024x1024 pixels, which is just over it.
+H3_LIMIT = 1344 * 768
+H3_NATIVE = {"16:9": (1344, 768), "9:16": (768, 1344), "1:1": (992, 992), "4:3": (1152, 864), "3:4": (864, 1152),
+             "21:9": (1536, 672)}
 LENGTH = {"min": 2, "max": 20, "fps": 24}
 IMAGE_TYPES = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 NAME_RE = re.compile(r"^[A-Za-z0-9_]{1,40}$")
@@ -227,6 +233,33 @@ def dims(aspect, mp, grid=32, table=None):
     return w, h
 
 
+def video_dims(aspect, mp):
+    """MiniMax H3's width and height: 1.0 MP is H3's own size; up to it, sizes stay within its pixel limit; and a
+    size that would come out more than 3% the wrong shape (small ones, rounded to 32) is picked for its shape.
+    app.js has the same rules."""
+    if abs(mp - 1.0) < 1e-6:
+        return H3_NATIVE[aspect]
+    a, b = ASPECTS[aspect]
+    ratio, pixels, g = a / b, mp * 1024 * 1024, 32
+    cap = H3_LIMIT if mp <= 1.0 else None
+    w = max(g, round(math.sqrt(pixels * ratio) / g) * g)
+    h = max(g, round(math.sqrt(pixels / ratio) / g) * g)
+    if abs(w / h / ratio - 1) <= 0.03 and (cap is None or w * h <= cap):
+        return w, h
+    best = None
+    for h in range(g, 4096, g):
+        for w in {max(g, math.floor(h * ratio / g) * g), math.ceil(h * ratio / g) * g}:
+            if cap and w * h > cap:
+                continue
+            area, shape = abs(w * h / pixels - 1), abs(w / h / ratio - 1)
+            if area > 0.12:
+                continue
+            score = shape + 0.35 * area
+            if best is None or score < best[0] - 1e-12:
+                best = (score, w, h)
+    return best[1], best[2]
+
+
 def recover(data):
     """Renders that were running when ComfyUI stopped will never finish."""
     for clip in data["clips"]:
@@ -258,7 +291,7 @@ async def get_state(request):
     return web.json_response({
         **data,
         "options": {"editSizes": EDIT_SIZES, "samplers": sampling_choices()[0], "schedulers": sampling_choices()[1],
-                    "beta57": h3_graph.BETA57, "models": models, "aspects": ASPECTS, "megapixels": MEGAPIXELS, "length": LENGTH,
+                    "beta57": h3_graph.BETA57, "models": models, "aspects": ASPECTS, "megapixels": MEGAPIXELS, "videoMP": VIDEO_MP, "length": LENGTH,
                     "loras": loras, "missing": why, "root": ROOT,
                     "image": {"models": imodels, "aspects": IMAGE_ASPECTS, "megapixels": IMAGE_MEGAPIXELS,
                               "recommendedMP": IMAGE_RECOMMENDED_MP, "cfg": CFG,
@@ -495,9 +528,9 @@ async def generate(request):
     if not model:
         raise web.HTTPBadRequest(text=why or "That model isn't installed.")
     aspect = s.get("aspect") if s.get("aspect") in ASPECTS else "16:9"
-    res = float(s.get("res", 0.2))
-    if res not in MEGAPIXELS:
-        raise web.HTTPBadRequest(text="Unknown size.")
+    res = round(float(s.get("res", 0.6)), 2)
+    if not VIDEO_MP["min"] <= res <= VIDEO_MP["max"]:
+        raise web.HTTPBadRequest(text="The size must be %g to %g MP." % (VIDEO_MP["min"], VIDEO_MP["max"]))
     steps = int(s.get("steps", model["steps"]))
     low, high, every = model.get("minSteps", 1), model["maxSteps"], model.get("stepSize", 1)
     if not (low <= steps <= high and (steps - low) % every == 0):
@@ -516,7 +549,7 @@ async def generate(request):
         unknown = [n for n in MENTION_RE.findall(prompt) if n not in names]
         if unknown:
             raise web.HTTPBadRequest(text="There is no image called @%s." % unknown[0])
-        w, h = dims(aspect, res)
+        w, h = video_dims(aspect, res)
         clip = {"id": "c" + uuid.uuid4().hex[:10], "prompt": prompt, "model": model["name"], "profile": model["id"],
                 "steps": steps, "res": res, "aspect": aspect, "len": length, "width": w, "height": h, "seed": seed,
                 "loras": loras, "status": "queued", "step": 0, "file": None, "subfolder": ROOT + "/clips",
@@ -943,6 +976,8 @@ def clip_from_settings(found, kind):
     w, h = found.get("width") or 0, found.get("height") or 0
     aspect = found.get("aspect") if found.get("aspect") in table else nearest_aspect(w, h, table) if w and h else default_aspect
     res = found.get("res") if found.get("res") in sizes else nearest((w * h) / (1024 * 1024), sizes) if w and h else sizes[0]
+    if kind != "image" and isinstance(found.get("res"), (int, float)) and VIDEO_MP["min"] <= found["res"] <= VIDEO_MP["max"]:
+        res = round(float(found["res"]), 2)   # a typed video size, like 0.98
     clip = {"kind": kind, "prompt": found["prompt"],
             "model": model["name"] if model else found.get("model") or os.path.splitext(os.path.basename(found.get("profile") or found.get("unet") or "Unknown model"))[0],
             "profile": model["id"] if model else found.get("profile"),

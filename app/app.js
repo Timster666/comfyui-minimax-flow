@@ -158,6 +158,7 @@ const attach = (id) => { if (!state.attached.includes(id)) state.attached.push(i
 
 // Width and height for an aspect ratio at a size in megapixels. H3 wants sides in steps of 32, MOSS-Image in steps of 16.
 function dims(aspect, mp, kind = state.tab) {
+  if (kind === "video") return videoDims(aspect, mp);
   const [a, b] = aspectOf(aspect);
   const grid = kind === "image" || kind === "klein" ? 16 : 32;
   const pixels = mp * 1024 * 1024;
@@ -166,6 +167,30 @@ function dims(aspect, mp, kind = state.tab) {
   return [w, h];
 }
 const sizeText = (aspect, mp) => dims(aspect, mp).join("×");
+// MiniMax H3's sizes, as flow_server.video_dims works them out: 1.0 MP is H3's own size (1344x768 at 16:9, as
+// large as its pixel limit allows in each shape); up to it, sizes stay within that limit; and a size that would
+// come out more than 3% the wrong shape is picked for its shape.
+const H3_LIMIT = 1344 * 768;
+const H3_NATIVE = { "16:9": [1344, 768], "9:16": [768, 1344], "1:1": [992, 992], "4:3": [1152, 864], "3:4": [864, 1152], "21:9": [1536, 672] };
+function videoDims(aspect, mp) {
+  if (Math.abs(mp - 1) < 1e-6 && H3_NATIVE[aspect]) return H3_NATIVE[aspect];
+  const [a, b] = aspectOf(aspect), ratio = a / b, pixels = mp * 1024 * 1024, g = 32, cap = mp <= 1 ? H3_LIMIT : 0;
+  // Python's round() rounds halves to even; the same here, so both always agree.
+  const rnd = (x) => { const f = Math.floor(x), d = x - f; return d > 0.5 ? f + 1 : d < 0.5 ? f : f % 2 ? f + 1 : f; };
+  let w = Math.max(g, rnd(Math.sqrt(pixels * ratio) / g) * g), h = Math.max(g, rnd(Math.sqrt(pixels / ratio) / g) * g);
+  if (Math.abs(w / h / ratio - 1) <= 0.03 && (!cap || w * h <= cap)) return [w, h];
+  let best = null;
+  for (let hh = g; hh < 4096; hh += g) {
+    for (const ww of new Set([Math.max(g, Math.floor((hh * ratio) / g) * g), Math.ceil((hh * ratio) / g) * g])) {
+      if (cap && ww * hh > cap) continue;
+      const area = Math.abs((ww * hh) / pixels - 1), shape = Math.abs(ww / hh / ratio - 1);
+      if (area > 0.12) continue;
+      const score = shape + 0.35 * area;
+      if (!best || score < best[0] - 1e-12) best = [score, ww, hh];
+    }
+  }
+  return [best[1], best[2]];
+}
 
 async function api(method, path, body) {
   const form = body instanceof FormData;
@@ -625,6 +650,36 @@ function refSize(r) {
 }
 // The size a Klein render comes out at: image 1's shape (Match image 1), or an aspect ratio, at the resolution.
 // An edit is made at the picture's own shape, scaled to the resolution in steps of 16 px. null until its size is known.
+// The Video tab's size: a slider over the usual sizes, and the value can be clicked to type any size in between
+// (0.98, say). 1.0 MP is H3's own size, marked on the slider.
+function videoResHTML(s, T) {
+  const stops = T.megapixels, at = resStop(s.res, stops), native = stops.indexOf(1.0);
+  const pct = (100 * native) / (stops.length - 1);
+  return `<div class="field">
+      <div class="field-head"><label class="label" for="resSlide">Resolution</label>
+        <button class="value value-edit ${s.res === 1 ? "rec" : ""}" id="resVal" data-act="editRes" title="Click to type a size, like 0.98">${resText(s)}</button></div>
+      <div class="steps-wrap">
+        <input id="resSlide" type="range" min="0" max="${stops.length - 1}" step="1" value="${at}" data-input="resSlide" aria-valuetext="${esc(resText(s))}">
+        <span class="rec-mark" style="left:calc(${pct}% + ${(0.5 - pct / 100) * 16}px)" aria-hidden="true"></span>
+      </div>
+      <div class="field-head steps-foot"><span class="hint">1.0 MP is H3's own size. Click the size to type another, like 0.98.</span>
+        <button class="link" data-act="nativeRes" style="visibility:${s.res === 1 ? "hidden" : "visible"}">Use 1.0</button></div>
+    </div>`;
+}
+const resText = (s) => `${mpText(s.res)} · ${sizeText(s.aspect, s.res)}`;
+// The slider's place for a size: the stop it is, or the nearest one for a typed size.
+function resStop(res, stops) {
+  let best = 0;
+  stops.forEach((v, i) => { if (Math.abs(v - res) < Math.abs(stops[best] - res)) best = i; });
+  return best;
+}
+function setVideoRes(mp) {
+  const lim = OPT.videoMP || { min: 0.1, max: 2 };
+  mp = Math.round(Math.min(lim.max, Math.max(lim.min, mp)) * 100) / 100;
+  state.settings.res = mp;
+  render();
+}
+
 function editSize(res = state.imageSettings.res) {
   const r = slotRef(0, state.imageEditSlot);
   if (!r || !r.w) return null;
@@ -1235,6 +1290,7 @@ function renderSettings() {
   const box = $("settings");
   box.hidden = !state.settingsOpen;
   if (!state.settingsOpen) return;
+  if (document.activeElement?.id === "resInput") return;   // a size being typed in
   // Fit between the top bar and the button.
   box.style.maxHeight = Math.max(240, $("pill").getBoundingClientRect().top - 12 - belowTop()) + "px";
 
@@ -1271,12 +1327,12 @@ function renderSettings() {
       <input id="len" type="range" min="${OPT.length.min}" max="${OPT.length.max}" step="1" value="${s.len}" data-input="len">
     </div>`}
 
-    <div class="field">
+    ${isImage() ? `<div class="field">
       <label class="label" for="res">Resolution</label>
       <select class="select" id="res" data-change="res">
         ${T.megapixels.map((mp) => `<option value="${mp}" ${mp === s.res ? "selected" : ""}>${mpText(mp)} (${sizeText(s.aspect, mp)})${(T.recommendedMP || []).includes(mp) ? " · recommended" : ""}</option>`).join("")}
       </select>
-    </div>
+    </div>` : videoResHTML(s, T)}
 
     <div class="field">
       <div class="field-head"><label class="label" for="steps">Steps</label><span class="value ${s.steps === model.steps ? "rec" : ""}" id="stepsVal">${stepsText(s.steps, model.steps)}</span></div>
@@ -2826,6 +2882,33 @@ const ACT = {
     render(); saveUi();
   },
   recSteps: () => { state.settings.steps = modelOf(state.settings.model).steps; render(); },
+  nativeRes: () => setVideoRes(1.0),
+  editRes: () => {
+    const btn = $("resVal"), lim = OPT.videoMP || { min: 0.1, max: 2 };
+    const box = document.createElement("span");
+    box.className = "res-edit";
+    box.innerHTML = `<input id="resInput" type="text" inputmode="decimal" autocomplete="off" value="${state.settings.res}" aria-label="Resolution in MP (${lim.min} to ${lim.max})"> MP`;
+    btn.replaceWith(box);
+    const inp = $("resInput");
+    inp.focus(); inp.select();
+    let done = false;
+    const finish = (keep) => {
+      if (done) return;
+      done = true;
+      const v = parseFloat(String(inp.value).replace(",", "."));
+      inp.blur();
+      if (keep && v > 0) {
+        if (v < lim.min || v > lim.max) say(`Sizes go from ${lim.min} to ${lim.max} MP.`);
+        setVideoRes(v);
+      } else render();
+    };
+    inp.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); finish(true); }
+      else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); finish(false); }
+      e.stopPropagation();
+    });
+    inp.addEventListener("blur", () => finish(true));
+  },
   seedMode: (id) => { state.settings.seedMode = id; render(); },
   rollSeed: () => { state.settings.seed = newSeed(); render(); },
   loraPicker: () => openLoras(),
@@ -3026,6 +3109,15 @@ const INPUT = {
     $("cfgBtn").style.visibility = s.cfg === rec ? "hidden" : "visible";
     $("pill").textContent = summary();
     saveUi();
+  },
+  resSlide: (el) => {
+    const s = state.settings;
+    s.res = tabOpt().megapixels[Number(el.value)];
+    $("resVal").textContent = resText(s);
+    $("resVal").classList.toggle("rec", s.res === 1);
+    el.setAttribute("aria-valuetext", resText(s));
+    document.querySelector('[data-act="nativeRes"]').style.visibility = s.res === 1 ? "hidden" : "visible";
+    $("pill").textContent = summary(); saveUi();
   },
   len: (el) => { state.settings.len = Number(el.value); $("lenVal").textContent = el.value + " s"; $("pill").textContent = summary(); saveUi(); },
   loraStrength: (el) => {
@@ -3616,7 +3708,8 @@ async function load(first = true) {
         if (T.models.length && !T.models.some((m) => m.name === s.model)) s.model = T.models[0].name;
         const m = modelOf(s.model), lo = m.minSteps || 1, every = m.stepSize || 1;
         if (s.steps < lo || s.steps > m.maxSteps || (s.steps - lo) % every) s.steps = m.steps;
-        if (!T.megapixels.includes(s.res)) s.res = tab === "video" ? 0.6 : 1.0;
+        const lim = OPT.videoMP || { min: 0.1, max: 2 };
+        if (tab === "video" ? !(s.res >= lim.min && s.res <= lim.max) : !T.megapixels.includes(s.res)) s.res = tab === "video" ? 0.6 : 1.0;
         if (!T.aspects[s.aspect]) s.aspect = tab === "video" ? "16:9" : "1:1";
         if (tab !== "video" && !(s.cfg >= OPT.image.cfg.min && s.cfg <= OPT.image.cfg.max)) s.cfg = m.cfg;
         if (tab === "pruna") {
