@@ -195,6 +195,8 @@ const EDIT = (() => {
             <button role="menuitem" id="edProjSave">${SVG.zip}<span>Export project<small>The timeline, its videos and their reference images, as a .zip</small></span></button>
             <label role="menuitem">${SVG.open}<span>Import project<small>A project's .zip replaces this timeline. A single video's .zip joins the media panel</small></span>
               <input type="file" accept=".zip,application/zip" id="edProjOpen" hidden></label>
+            <button role="menuitem" id="edDriveSave" class="ed-drive" hidden>${SVG.zip}<span>Save project to Google Drive<small>The same .zip, put straight into your Drive folder</small></span></button>
+            <button role="menuitem" id="edDriveOpen" class="ed-drive" hidden>${SVG.open}<span>Open from Google Drive<small>A project or video .zip from your Drive folder</small></span></button>
           </div>
         </div>
         <button class="ed-export" id="edExportBtn">${SVG.exp}Export</button>`;
@@ -202,12 +204,23 @@ const EDIT = (() => {
       ed("ExportBtn").addEventListener("click", openExport);
       ed("ProjBtn").addEventListener("click", (e) => { e.stopPropagation(); projectMenu(ed("ProjMenu").hidden); });
       ed("ProjSave").addEventListener("click", () => { projectMenu(false); exportProject(); });
+      ed("DriveSave").addEventListener("click", () => { projectMenu(false); saveToDrive(); });
+      ed("DriveOpen").addEventListener("click", () => { projectMenu(false); openDrive(); });
       ed("ProjOpen").addEventListener("change", (e) => { projectMenu(false); const f = e.target.files[0]; e.target.value = ""; if (f) importProject(f); });
       document.addEventListener("pointerdown", (e) => { if (!e.target.closest(".ed-proj")) projectMenu(false); });
     }
     if (document.activeElement !== ed("Name")) ed("Name").value = E.name;
     ed("ExportBtn").disabled = !E.pieces.length;
     ed("ProjSave").disabled = !E.pieces.length;
+    ed("DriveSave").hidden = ed("DriveOpen").hidden = !DRIVE.on;
+    ed("DriveSave").disabled = !E.pieces.length;
+  }
+  async function saveToDrive() {
+    if (!E.pieces.length) return;
+    pause();
+    clearTimeout(saveTimer);
+    try { await api("PUT", "edit", { name: E.name, pieces: E.pieces, ratio: E.ratio, muted: E.muted }); } catch {}
+    driveSave({});
   }
   function projectMenu(open) {
     if (!ed("ProjMenu")) return;
@@ -240,7 +253,13 @@ const EDIT = (() => {
     form.append("file", file, file.name);
     let r;
     try { r = await api("POST", "import-zip", form); } catch (error) { say(error.message); return; }
-    // Its videos and reference pictures are added either way.
+    return opened(r, file.name);
+  }
+  // A zip was opened (from this computer or Google Drive): its videos and pictures are added either way, and a
+  // project's timeline is used if wanted.
+  async function opened(r, name) {
+    const file = { name };
+    pause();
     importedZip(r);
     if (!r.edit) {
       drawMedia();
@@ -793,6 +812,8 @@ const EDIT = (() => {
 
   /* ---------------- what app.js calls ---------------- */
   return {
+    opened,
+    driveChanged() { if (E.visible) header(); },
     load(edit) {
       if (!edit) return;
       E.name = edit.name || "Untitled edit";

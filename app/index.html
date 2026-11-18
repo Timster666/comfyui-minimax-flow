@@ -500,6 +500,15 @@ body.dragging-ref .composer { border-color: var(--line-strong); }
 @keyframes lm-wait { from { margin-left: 0; } to { margin-left: 70%; } }
 .lm-x button { grid-row: 1 / span 2; grid-column: 2; border: 0; background: transparent; color: var(--muted); font: inherit; font-size: 12px; padding: 4px 8px; border-radius: 8px; cursor: pointer; }
 .lm-x button:hover { background: var(--raised); color: var(--text); }
+.dm-list .dm-file { display: grid; grid-template-columns: 1fr auto auto; gap: 12px; align-items: center; width: 100%; text-align: left; border: 0; background: transparent; color: var(--text); font: inherit; font-size: 14px; padding: 11px 10px; border-radius: 10px; cursor: pointer; }
+.dm-list .dm-file:hover, .dm-list .dm-file:focus-visible { background: var(--raised); outline: none; }
+.dm-file b { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.dm-file small { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.dm-file span { color: var(--muted); font-size: 13px; }
+.dm-file:hover span { color: var(--text); }
+.dm-file[disabled] { opacity: .5; cursor: default; }
+.dm-empty { color: var(--muted); font-size: 14px; padding: 24px 10px; text-align: center; line-height: 1.5; }
+.dm-empty.bad { color: #f08a8a; }
 .lm.drop { outline: 2px dashed var(--accent); outline-offset: -6px; }
 .lm.drop .lm-list { opacity: .4; }
 .lm-newtag { font-style: normal; font-size: 11px; color: var(--accent-text); background: var(--accent-soft, rgba(120,140,255,.15)); border-radius: 6px; padding: 1px 6px; margin-left: 6px; }
@@ -704,6 +713,10 @@ body.dragging-ref .composer { border-color: var(--line-strong); }
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
           Models
         </button>
+        <button class="app-menu-item" role="menuitem" data-act="openDrive" id="driveItem" hidden>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7.7 3.5h8.6l5.2 9-4.3 7.5H6.8L2.5 12.5z"/><path d="M7.7 3.5 12 11M16.3 3.5 8.6 17M2.5 12.5h13.7"/></svg>
+          Google Drive
+        </button>
         <button class="app-menu-item" role="menuitem" data-act="close" id="exitItem" hidden>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg>
           Exit MiniMax H3 Vision
@@ -768,6 +781,21 @@ body.dragging-ref .composer { border-color: var(--line-strong); }
 </div>
 
 <div class="ctx" id="ctx" role="menu" aria-label="Clip" hidden></div>
+<div class="lm-scrim" id="driveModal" hidden>
+  <div class="lm dm" role="dialog" aria-modal="true" aria-labelledby="driveTitle">
+    <div class="lm-head">
+      <div><h2 id="driveTitle">Google Drive</h2><div class="lm-count" id="driveCount">Your projects folder</div></div>
+      <button class="btn lm-refresh" data-act="driveRefresh" title="Read the folder again"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.6-6.4M21 4v5h-5"/></svg><span>Refresh</span></button>
+      <button class="lm-close" data-act="closeDrive" aria-label="Close">×</button>
+    </div>
+    <div class="lm-xfer" id="driveJobs"></div>
+    <div class="lm-list dm-list" id="driveList"></div>
+    <div class="lm-foot">
+      <span class="lm-hint" id="driveHint">Open a project or video .zip. Save to Drive from Edit › Project, or a video's ⋯ menu.</span>
+      <button class="btn primary" data-act="closeDrive">Done</button>
+    </div>
+  </div>
+</div>
 <div class="lm-scrim" id="loraModal" hidden>
   <div class="lm" role="dialog" aria-modal="true" aria-labelledby="loraTitle">
     <div class="lm-head">
