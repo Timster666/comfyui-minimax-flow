@@ -26,7 +26,7 @@ import uuid
 
 from aiohttp import web
 
-from . import clip_info, comfy_link, edit_media, edit_project, h3_graph, klein_bridge, lora_in, model_store, moss_bridge, ph3_bridge
+from . import clip_info, comfy_link, edit_media, edit_project, gdrive, h3_graph, klein_bridge, lora_in, model_store, moss_bridge, ph3_bridge
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 APP_DIR = os.path.join(HERE, "app")
@@ -1205,6 +1205,11 @@ def free_name(folder, stem, ext):
 
 async def export_project(request):
     """The edit and the videos it uses as one zip in minimax_flow/exports, to keep or to open elsewhere."""
+    counts, file = await pack_project()
+    return web.json_response(dict(counts, file=file, subfolder=ROOT + "/exports"))
+
+
+async def pack_project():
     async with _lock:
         data = read_project()
     if not data["edit"]["pieces"]:
@@ -1219,14 +1224,19 @@ async def export_project(request):
     except Exception as error:
         LOG.exception("MiniMax H3 Vision couldn't save the edit project")
         raise web.HTTPBadRequest(text="Couldn't save the project: %s" % error)
-    return web.json_response(dict(counts, file=file, subfolder=ROOT + "/exports"))
+    return counts, file
 
 
 async def export_clip(request):
     """One video and its reference pictures as a zip in minimax_flow/exports."""
+    counts, file = await pack_clip(request.match_info["id"])
+    return web.json_response(dict(counts, file=file, subfolder=ROOT + "/exports"))
+
+
+async def pack_clip(clip_id):
     async with _lock:
         data = read_project()
-    clip = next((c for c in data["clips"] if c["id"] == request.match_info["id"]), None)
+    clip = next((c for c in data["clips"] if c["id"] == clip_id), None)
     if not clip or clip.get("kind", "video") != "video" or not clip.get("file"):
         raise web.HTTPBadRequest(text="Only a finished video can be saved as a zip.")
     folder = root_dir("exports")
@@ -1239,7 +1249,7 @@ async def export_clip(request):
     except Exception as error:
         LOG.exception("MiniMax H3 Vision couldn't save the video as a zip")
         raise web.HTTPBadRequest(text="Couldn't save the zip: %s" % error)
-    return web.json_response(dict(counts, file=file, subfolder=ROOT + "/exports"))
+    return counts, file
 
 
 async def import_project(request):
@@ -1260,37 +1270,109 @@ async def import_project(request):
                 if not chunk:
                     break
                 f.write(chunk)
-        async with _lock:
-            data = read_project()
-            existing = {c["id"]: c for c in data["clips"]}
-            try:
-                edit, added, same, new_images, same_images = await asyncio.to_thread(
-                    edit_project.unpack, temp, existing, root_dir("clips"), clip_path, data["images"], root_dir("images"), image_path)
-            except edit_project.Bad as error:
-                raise web.HTTPBadRequest(text=str(error))
-            now = time.time()
-            for i, clip in enumerate(added):
-                clip["subfolder"] = ROOT + "/clips"
-                clip["imported"] = part.filename
-                # The grid shows the zip's last clip first (the newest at the top); the Edit tab's media
-                # panel keeps the zip's order, first clip first ("pool").
-                clip["created"] = now - (len(added) - 1 - i) * 0.001
-                clip["pool"] = now - i * 0.001
-            data["clips"] = added[::-1] + data["clips"]
-            for image in new_images:
-                image["added"] = now
-            data["images"].extend(new_images)
-            if edit is not None and request.query.get("timeline") == "1":
-                data["edit"] = edit
-            write_project(data)
+        try:
+            result = await open_zip(temp, part.filename, request.query.get("timeline") == "1")
+        except edit_project.Bad as error:
+            raise web.HTTPBadRequest(text=str(error))
     finally:
         try:
             os.remove(temp)
         except OSError:
             pass
+    return web.json_response(result)
+
+
+async def open_zip(temp, filename, timeline=False):
+    """A zip's videos and pictures into the app; edit_project.Bad when it isn't one of ours."""
+    async with _lock:
+        data = read_project()
+        existing = {c["id"]: c for c in data["clips"]}
+        edit, added, same, new_images, same_images = await asyncio.to_thread(
+            edit_project.unpack, temp, existing, root_dir("clips"), clip_path, data["images"], root_dir("images"), image_path)
+        now = time.time()
+        for i, clip in enumerate(added):
+            clip["subfolder"] = ROOT + "/clips"
+            clip["imported"] = filename
+            # The grid shows the zip's last clip first (the newest at the top); the Edit tab's media
+            # panel keeps the zip's order, first clip first ("pool").
+            clip["created"] = now - (len(added) - 1 - i) * 0.001
+            clip["pool"] = now - i * 0.001
+        data["clips"] = added[::-1] + data["clips"]
+        for image in new_images:
+            image["added"] = now
+        data["images"].extend(new_images)
+        if edit is not None and timeline:
+            data["edit"] = edit
+        write_project(data)
     for clip in added:
         broadcast(clip)
-    return web.json_response({"edit": edit, "clips": added, "same": same, "images": new_images, "sameImages": same_images})
+    return {"edit": edit, "clips": added, "same": same, "images": new_images, "sameImages": same_images}
+
+
+# ---- Google Drive: projects saved to and opened from a folder (GDRIVE_FOLDER, GDRIVE_TOKEN) ----
+def drive_ready():
+    why = gdrive.problem()
+    if why == "off":
+        raise web.HTTPNotFound(text="Google Drive isn't set up: set GDRIVE_FOLDER and GDRIVE_TOKEN on the pod.")
+    if why:
+        raise web.HTTPBadRequest(text=why)
+
+
+async def drive_state(request):
+    why = gdrive.problem()
+    return web.json_response({"on": why != "off", "problem": None if why == "off" else why, "jobs": gdrive.DRIVE.status()})
+
+
+async def drive_files(request):
+    drive_ready()
+    try:
+        files = await gdrive.DRIVE.files(fresh=request.query.get("fresh") == "1")
+    except RuntimeError as error:
+        raise web.HTTPBadRequest(text=str(error))
+    return web.json_response({"files": files})
+
+
+async def drive_save(request):
+    """POST {} saves the edit project; {"clip": id} one video's zip."""
+    drive_ready()
+    body = await request.json()
+    clip_id = body.get("clip")
+
+    async def make():
+        try:
+            _, file = await (pack_clip(clip_id) if clip_id else pack_project())
+        except web.HTTPException as error:
+            raise RuntimeError(error.text)
+        return os.path.join(root_dir("exports"), file)
+
+    if not clip_id:
+        async with _lock:
+            if not read_project()["edit"]["pieces"]:
+                raise web.HTTPBadRequest(text="The edit is empty.")
+    job = gdrive.DRIVE.add("save", "", make=make)
+    return web.json_response({"job": job, "jobs": gdrive.DRIVE.status()})
+
+
+async def drive_open(request):
+    drive_ready()
+    body = await request.json()
+    name = os.path.basename(str(body.get("name") or ""))
+    if not name.lower().endswith(".zip"):
+        raise web.HTTPBadRequest(text="Only .zip files can be opened.")
+
+    async def opener(path, filename):
+        try:
+            return await open_zip(path, filename)
+        except edit_project.Bad as error:
+            raise RuntimeError(str(error))
+
+    job = gdrive.DRIVE.add("open", name, temp=root_dir("exports", ".drive_%s.zip" % uuid.uuid4().hex[:8]), opener=opener)
+    return web.json_response({"job": job, "jobs": gdrive.DRIVE.status()})
+
+
+async def drive_cancel(request):
+    gdrive.DRIVE.cancel(request.match_info["id"])
+    return web.json_response({"jobs": gdrive.DRIVE.status()})
 
 
 async def cancel_export(request):
@@ -1327,6 +1409,11 @@ ROUTES = (
     ("POST", "/mmflow/api/export", start_export),
     ("DELETE", "/mmflow/api/export/{job}", cancel_export),
     ("POST", "/mmflow/api/edit/export-project", export_project),
+    ("GET", "/mmflow/api/gdrive", drive_state),
+    ("GET", "/mmflow/api/gdrive/files", drive_files),
+    ("POST", "/mmflow/api/gdrive/save", drive_save),
+    ("POST", "/mmflow/api/gdrive/open", drive_open),
+    ("POST", "/mmflow/api/gdrive/{id}/cancel", drive_cancel),
     ("POST", "/mmflow/api/edit/import-project", import_project),
     ("POST", "/mmflow/api/clips/{id}/export", export_clip),
     ("POST", "/mmflow/api/import-zip", import_project),

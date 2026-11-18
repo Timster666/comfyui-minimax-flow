@@ -2064,7 +2064,8 @@ function openMenu(id, x, y) {
   const m = $("ctx");
   m.innerHTML = `
     <button role="menuitem" data-act="menuDownload" ${c.status === "done" ? "" : 'aria-disabled="true" class="off"'}>${ICON.download}Download</button>${kindOf(c) === "video" ? `
-    <button role="menuitem" data-act="menuExportZip" ${c.status === "done" && c.file ? "" : 'aria-disabled="true" class="off"'}>${ICON.download}Export .zip with reference images</button>` : ""}
+    <button role="menuitem" data-act="menuExportZip" ${c.status === "done" && c.file ? "" : 'aria-disabled="true" class="off"'}>${ICON.download}Export .zip with reference images</button>${DRIVE.on ? `
+    <button role="menuitem" data-act="menuDriveZip" ${c.status === "done" && c.file ? "" : 'aria-disabled="true" class="off"'}>${ICON.upload}Save .zip to Google Drive</button>` : ""}` : ""}
     <button role="menuitem" data-act="menuDelete" class="danger">${ICON.trash}${isBusy(c) ? "Cancel and delete" : "Delete"}</button>
     <span class="ctx-line"></span>${kindOf(c) === "video" ? (EDIT.has(c.id)
       ? `<button role="menuitem" aria-disabled="true" class="off" title="This video is on the edit's timeline already.">${ICON.check}Already in the edit</button>`
@@ -2272,6 +2273,111 @@ function renderLoras(first) {
 $("loraQuery").addEventListener("input", (e) => { LM.q = e.target.value; LM.sel = 0; renderLoras(); });
 $("loraAll").addEventListener("change", (e) => { LM.all = e.target.checked; LM.sel = 0; renderLoras(); $("loraQuery").focus(); });
 $("loraModal").addEventListener("mousedown", (e) => { if (e.target === $("loraModal")) closeLoras(); });
+
+// ---- Google Drive: project and video zips saved to and opened from a folder (GDRIVE_FOLDER on the pod) ----
+// The pod does the transfers, so they go on with the window closed; when an open finishes, its videos are added
+// wherever you are (and in Edit, a project's timeline is offered).
+const DRIVE = { on: false, problem: null, jobs: [], files: null, error: null, open: false, timer: null, handled: new Set(), loading: false };
+async function driveStatus() {
+  try {
+    const r = await api("GET", "gdrive");
+    DRIVE.on = r.on; DRIVE.problem = r.problem;
+    driveJobs(r.jobs, true);
+  } catch { DRIVE.on = false; }
+  $("driveItem").hidden = !DRIVE.on;
+  EDIT.driveChanged();
+}
+function driveJobs(jobs, first) {
+  const before = new Map(DRIVE.jobs.map((j) => [j.id, j.state]));
+  DRIVE.jobs = jobs;
+  for (const j of jobs) {
+    if (first) { DRIVE.handled.add(j.id); continue; }
+    if (DRIVE.handled.has(j.id) || !["done", "failed"].includes(j.state)) continue;
+    DRIVE.handled.add(j.id);
+    if (j.state === "failed") { say((j.kind === "save" ? "Couldn't save to Google Drive: " : "Couldn't open " + j.name + ": ") + j.error); continue; }
+    if (j.kind === "save") { say(`Saved ${j.name} to Google Drive.`); DRIVE.files = null; if (DRIVE.open) driveFiles(true); }
+    else driveOpened(j);
+  }
+  if (jobs.some((j) => !["done", "failed", "cancelled"].includes(j.state))) {
+    clearTimeout(DRIVE.timer);
+    DRIVE.timer = setTimeout(drivePoll, DRIVE.open ? 700 : 1500);
+  }
+  renderDrive();
+  return before;
+}
+async function drivePoll() {
+  try { driveJobs((await api("GET", "gdrive")).jobs); } catch { DRIVE.timer = setTimeout(drivePoll, 3000); }
+}
+async function driveOpened(job) {
+  const r = job.result;
+  if (!r) return;
+  if (state.tab === "edit") { if (r.edit) closeDrive(); return EDIT.opened(r, job.name); }
+  importedZip(r);
+  if (r.clips.length === 1) { if (state.tab !== "video") ACT.tab("video"); openClip(r.clips[0].id); }
+  else { if (state.tab !== "video") ACT.tab("video"); render(); }
+  say(`Opened ${job.name}: ` + zipSummary(r) + "." + (r.edit ? " Its timeline can be opened from Edit › Project › Open from Google Drive." : ""));
+}
+async function driveSave(body) {
+  try {
+    const r = await api("POST", "gdrive/save", body);
+    say("Saving to Google Drive…");
+    driveJobs(r.jobs);
+  } catch (error) { say(error.message); }
+}
+async function driveFiles(fresh) {
+  DRIVE.loading = true; renderDrive();
+  try { DRIVE.files = (await api("GET", "gdrive/files" + (fresh ? "?fresh=1" : ""))).files; DRIVE.error = null; }
+  catch (error) { DRIVE.error = error.message; }
+  DRIVE.loading = false; renderDrive();
+}
+function openDrive() {
+  DRIVE.open = true;
+  $("driveModal").hidden = false;
+  renderDrive();
+  driveFiles(true);
+  drivePoll();
+  setTimeout(() => $("driveModal").querySelector(".dm-file, .lm-close")?.focus(), 50);
+}
+function closeDrive() { DRIVE.open = false; $("driveModal").hidden = true; }
+function driveRow(j) {
+  const going = !["done", "failed", "cancelled"].includes(j.state);
+  const pct = j.total ? Math.min(100, (100 * j.done) / j.total) : 0;
+  const left = j.speed > 0 && j.total ? timeText((j.total - j.done) / j.speed) + " left" : "";
+  const amount = [j.total ? `${bytesText(j.done)} of ${bytesText(j.total)}` : j.done ? bytesText(j.done) : "", j.speed > 0 ? bytesText(j.speed) + "/s" : "", left].filter(Boolean).join(" · ");
+  const line = {
+    queued: "Waiting for the one before", packing: "Making the .zip…", sending: amount || "Sending…", fetching: amount || "Fetching…",
+    opening: "Adding its videos…", done: j.kind === "save" ? "Saved to Google Drive" : "Opened", failed: j.error, cancelled: "Cancelled.",
+  }[j.state] || "";
+  const name = j.name || (j.kind === "save" ? "Saving to Google Drive" : "");
+  const btn = going && j.state !== "opening" ? `<button data-act="driveCancel" data-id="${esc(j.id)}">Cancel</button>` : "";
+  const bar = going ? `<div class="lm-bar ${!j.total || ["packing", "queued", "opening"].includes(j.state) ? "wait" : ""}"><i style="width:${pct.toFixed(1)}%"></i></div>` : "";
+  return `<div class="lm-x ${j.state}"><b>${j.kind === "save" ? "↑ " : "↓ "}${esc(name)}</b>${btn}<small>${esc(line)}</small>${bar}</div>`;
+}
+function renderDrive() {
+  if (!DRIVE.open) return;
+  const recent = DRIVE.jobs.filter((j) => !["done", "cancelled"].includes(j.state) || Date.now() / 1000 - j.at < 120);
+  $("driveJobs").innerHTML = [...recent].reverse().map(driveRow).join("");
+  const busy = new Set(DRIVE.jobs.filter((j) => j.kind === "open" && !["done", "failed", "cancelled"].includes(j.state)).map((j) => j.name));
+  let html;
+  if (DRIVE.problem) html = `<div class="dm-empty bad">${esc(DRIVE.problem)}</div>`;
+  else if (DRIVE.error) html = `<div class="dm-empty bad">${esc(DRIVE.error)}</div>`;
+  else if (!DRIVE.files) html = `<div class="dm-empty">Reading the folder…</div>`;
+  else if (!DRIVE.files.length) html = `<div class="dm-empty">No .zip files in the folder yet.<br>Save one from Edit › Project, or a video's ⋯ menu.</div>`;
+  else html = DRIVE.files.map((f) => `<button class="dm-file" data-act="driveOpen" data-id="${esc(f.name)}" ${busy.has(f.name) ? "disabled" : ""}>
+      <b title="${esc(f.name)}">${esc(f.name.replace(/\.zip$/i, ""))}</b><small>${bytesText(f.size)} · ${esc(driveDate(f.modified))}</small><span>${busy.has(f.name) ? "Opening…" : "Open"}</span></button>`).join("");
+  $("driveList").innerHTML = html;
+  $("driveCount").textContent = DRIVE.files && !DRIVE.problem ? `${DRIVE.files.length} .zip file${DRIVE.files.length === 1 ? "" : "s"} in your folder` : "Your projects folder";
+  $("driveModal").querySelector(".lm-refresh").classList.toggle("spin", DRIVE.loading);
+}
+function driveDate(iso) {
+  const d = new Date(iso);
+  if (isNaN(d)) return "";
+  const same = d.toDateString() === new Date().toDateString();
+  return same ? "today " + d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+    : d.toLocaleDateString([], { day: "numeric", month: "short", year: d.getFullYear() === new Date().getFullYear() ? undefined : "numeric" });
+}
+$("driveModal").addEventListener("mousedown", (e) => { if (e.target === $("driveModal")) closeDrive(); });
+document.addEventListener("keydown", (e) => { if (DRIVE.open && e.key === "Escape" && $("confirm").hidden) { e.preventDefault(); e.stopPropagation(); closeDrive(); } }, true);
 
 // ---- New LoRAs: uploaded from this computer in pieces, or fetched by the pod from a link ----
 // An upload sends 8 MB at a time; a piece that fails is sent again (the server says where it is), so a flaky
@@ -2523,6 +2629,15 @@ const ACT = {
   // Not installed: open the Models page at this tab's models.
   whyMissing: () => { say(missingWhy()); openModels(state.tab); },
   openModels: () => { showAppMenu(false); openModels(); },
+  openDrive: () => { showAppMenu(false); openDrive(); },
+  closeDrive: () => closeDrive(),
+  driveRefresh: () => driveFiles(true),
+  driveOpen: async (name) => {
+    try { driveJobs((await api("POST", "gdrive/open", { name })).jobs); say("Opening " + name + " from Google Drive…"); }
+    catch (error) { say(error.message); }
+  },
+  driveCancel: (id) => api("POST", `gdrive/${id}/cancel`).then((r) => driveJobs(r.jobs)).catch((e) => say(e.message)),
+  menuDriveZip: () => { const id = closeMenu(); const c = clipById(id); if (c && c.status === "done" && c.file) driveSave({ clip: id }); },
   closeModels: () => closeModels(),
   modelsFilter: (id) => { MODELS.filter = id; renderModels(false); $("modelsBody").scrollTop = 0; },
   modelGet: (id) => modelAction(id, "download"),
@@ -3484,6 +3599,7 @@ async function load(first = true) {
     state.refs = data.images.map(fromImage);
     state.clips = data.clips.filter((c) => !deleted.has(c.id));
     if (first) {
+      driveStatus();
       const ui = data.ui || {};
       Object.assign(state.videoSettings, ui.settings || {});
       Object.assign(state.imageSettings, ui.imageSettings || {});

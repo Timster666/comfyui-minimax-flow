@@ -203,6 +203,19 @@ Klein numbers the pictures in the order it gets them, so when a slot before it i
 model reads is renumbered to match (slots 1 and 3 filled: "image 3" is sent as "image 2"). MOSS-Image's
 `flux2-vae_small` isn't used for Klein: its pictures need the full VAE encoder.
 
+## Google Drive
+
+Edit projects and video `.zip`s can be saved to a Google Drive folder and opened from it: **Edit › Project ›
+Save project to Google Drive** and **Open from Google Drive**, a video's **⋯ › Save .zip to Google Drive**, and
+**Google Drive** in the gear menu. The machine ComfyUI runs on copies straight to and from Drive with
+[rclone](https://rclone.org), one file at a time, with progress and Cancel; the window can be closed meanwhile.
+A name that's taken in the folder gets `_2`, `_3`…
+
+It needs `rclone` on the machine and two environment variables: `GDRIVE_FOLDER`, the folder's link, and
+`GDRIVE_TOKEN`, the line in `{ }` that `rclone authorize "drive"` prints after you sign in to Google (run it on any
+computer with a browser). Without them, nothing about Drive is shown. The RunPod template installs rclone; its
+README has the steps.
+
 ## Models page
 
 **Gear menu → Models** lists the model files each tab uses (`model_catalog.json`), in groups, with what is
@@ -278,6 +291,7 @@ In ComfyUI's output folder, under `minimax_flow/`:
 - `klein_bridge.py`: Klein 9B graphs, with up to four reference pictures
 - `ph3_bridge.py`: P-H3-Image graphs (Pruna tab), with up to nine pictures and the prompt upsampler
 - `model_store.py` and `model_catalog.json`: the Models page's list and background downloads
+- `gdrive.py`: saving project zips to, and opening them from, a Google Drive folder with rclone
 - `lora_in.py`: new LoRAs from the LoRA window: uploads in pieces, and Hugging Face and Civitai links
 - `edit_media.py`: the Edit tab's filmstrips, waveforms and export, with PyAV
 - `edit_project.py`: edit projects as zip files (export and import)
