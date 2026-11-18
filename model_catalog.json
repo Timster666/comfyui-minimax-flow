@@ -66,6 +66,14 @@
                ["Comfy-Org/MiniMax-H3", "minimax_h3_fl2va_pruned_int8_convrot.safetensors", "diffusion_models"]]},
     {"id": "ph3-upsampler", "tab": "pruna", "name": "P-H3 prompt upsampler (BF16)", "env": "ENABLE_PH3_UPSAMPLER", "with": ["ENABLE_PH3_IMAGE"], "needs": ["ph3-image"],
      "about": "For the Pruna tab's Enhance prompt.",
-     "files": [["PrunaAI/P-H3-Image-Comfy", "p-h3-image_prompt_upsampler_bf16.safetensors", "text_encoders"]]}
+     "files": [["PrunaAI/P-H3-Image-Comfy", "p-h3-image_prompt_upsampler_bf16.safetensors", "text_encoders"]]},
+    {"id": "h3-image", "tab": "pruna", "name": "MiniMax H3-Image (INT8)", "env": "ENABLE_H3_IMAGE", "needs": ["h3-base"],
+     "about": "MiniMax's own image model for the Pruna tab (4 to 16 MP, 6 steps), with its VAE. It uses MiniMax H3's text encoder. Needs ComfyUI 0.45 or newer.",
+     "files": [["Comfy-Org/MiniMax-H3-Image", "minimax_h3_image_pruned_int8_convrot.safetensors", "diffusion_models"],
+               ["Comfy-Org/MiniMax-H3-Image", "minimax_h3_image_vae_fp16.safetensors", "vae"]]},
+    {"id": "h3-image-w4a8", "tab": "pruna", "name": "MiniMax H3-Image (W4A8, smaller)", "env": "ENABLE_H3_IMAGE_W4A8", "needs": ["h3-base"],
+     "about": "A smaller H3-Image (12.5 GB instead of 21 GB) for cards with less memory, with its VAE.",
+     "files": [["Comfy-Org/MiniMax-H3-Image", "minimax_h3_image_pruned_w4a8.safetensors", "diffusion_models"],
+               ["Comfy-Org/MiniMax-H3-Image", "minimax_h3_image_vae_fp16.safetensors", "vae"]]}
   ]
 }

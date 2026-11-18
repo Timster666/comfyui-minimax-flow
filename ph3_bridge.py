@@ -10,6 +10,12 @@ Enhance prompt runs Pruna's prompt upsampler first (TextGenerateV2 on the upsamp
 templates): it gets "Aspect ratio: 4:3 / Request: ..." and the pictures, and writes the long prompt the
 model then reads. Off, the text goes to the model as it is.
 
+MiniMax's own image model, MiniMax-H3-Image (ComfyUI 0.45 or newer), is offered in the same tab, so the two can be
+compared on the same prompt and pictures: Comfy-Org's image_minimax_h3_image_t2i/edit templates (the H3-Image
+model, MiniMax H3's Qwen3-VL text encoder, H3-Image's VAE, "MiniMax H3 Image Conditioning", 6 steps euler/simple
+at CFG 1 with the prompt zeroed out as the negative). It works at 4 to 16 MP (16 is MiniMax's sweet spot). It gets
+the prompt as written: no prompt expander (the templates' Qwen3.5 one isn't used).
+
 The slots are picture 1 to picture 9: picture 1 is the one edited, the others are references, and with no
 pictures it is text-to-image. The model calls them <Picture 1>, <Picture 2> ... in the order they come, so
 "picture 3" with slot 2 empty is sent as <Picture 2>. The prompt saved with the image is the one you wrote.
@@ -37,6 +43,14 @@ VAES = ["p-h3-image_vae_bf16", "p-h3-image_vae_int8_convrot", "p-h3-image_vae"]
 UPSAMPLERS = ["p-h3-image_prompt_upsampler_bf16", "p-h3-image_prompt_upsampler_int8_convrot", "p-h3-image_prompt_upsampler_w4a8"]
 FULL = {"p-h3-image_bf16": "P-H3-Image (BF16)", "p-h3-image_int8_convrot": "P-H3-Image (INT8)", "p-h3-image_w4a8": "P-H3-Image (W4A8)"}
 LORA_ROUTE = "MiniMax H3 + P-H3-Image LoRA"
+
+H3IMAGE = {"minimax_h3_image_pruned_int8_convrot": "MiniMax H3-Image (INT8)",
+           "minimax_h3_image_pruned_bf16": "MiniMax H3-Image (BF16)",
+           "minimax_h3_image_pruned_w4a8": "MiniMax H3-Image (W4A8)"}
+H3IMAGE_ENCODERS = ["qwen3vl_32b_minimax_h3_int8_convrot", "qwen3vl_32b_minimax_h3_nvfp4_awq", "qwen3vl_32b_minimax_h3_bf16"]
+H3IMAGE_VAES = ["minimax_h3_image_vae_fp16", "minimax_h3_image_vae_bf16", "minimax_h3_image_vae"]
+H3IMAGE_STEPS = 6
+H3IMAGE_MEGAPIXELS = [4.0, 8.0, 12.0, 16.0]
 
 # Shapes the upsampler is told about: the nearest of these to the real size.
 RATIOS = {"1:1": 1.0, "4:3": 4 / 3, "3:2": 1.5, "16:9": 16 / 9, "21:9": 21 / 9, "3:1": 3.0, "4:1": 4.0,
@@ -98,7 +112,64 @@ def lora():
     return _find("loras", [LORA])
 
 
+def h3image_parts():
+    """H3-Image's text encoder (MiniMax H3's) and VAE, or Missing."""
+    encoder = _find("text_encoders", H3IMAGE_ENCODERS)
+    vae = _find("vae", H3IMAGE_VAES)
+    if not encoder:
+        raise Missing("MiniMax H3's text encoder (qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors) isn't in models/text_encoders: "
+                      "H3-Image uses it.")
+    if not vae:
+        raise Missing("H3-Image's VAE (minimax_h3_image_vae_fp16.safetensors) isn't in models/vae. "
+                      "On RunPod: set ENABLE_H3_IMAGE=true.")
+    return encoder, vae
+
+
+def h3image_models():
+    """MiniMax-H3-Image checkpoints that are installed (with its parts), as rows; [] if none."""
+    files = [f for f in _files("diffusion_models") if _stem(f) in H3IMAGE]
+    if not files:
+        return []
+    try:
+        import nodes
+        if "MiniMaxH3ImageConditioning" not in nodes.NODE_CLASS_MAPPINGS:
+            raise Missing("This ComfyUI is too old for MiniMax H3-Image: it needs ComfyUI 0.45 or newer (the \"MiniMax "
+                          "H3 Image Conditioning\" node). On RunPod: set UPDATE_COMFYUI=true and restart the pod.")
+    except ImportError:
+        pass
+    h3image_parts()
+    order = list(H3IMAGE)
+    files.sort(key=lambda f: order.index(_stem(f)))
+    return [{"id": "h3image:" + f, "name": H3IMAGE[_stem(f)], "file": f, "lora": None, "h3image": True,
+             "steps": H3IMAGE_STEPS, "minSteps": H3IMAGE_STEPS, "maxSteps": H3IMAGE_STEPS, "stepSize": 1, "cfg": 1.0,
+             "megapixels": H3IMAGE_MEGAPIXELS, "recommendedMP": 16.0, "loras": False} for f in files]
+
+
 def models():
+    """Everything the Pruna tab can run: P-H3-Image (MiniMax H3 FL2VA + the LoRA, Pruna's full checkpoints) and
+    MiniMax-H3-Image. Missing when there is none, with P-H3-Image's reason first."""
+    rows, why = [], None
+    try:
+        rows = ph3_models()
+    except Missing as error:
+        why = error
+    try:
+        rows += h3image_models()
+    except Missing as error:
+        why = why or error
+        if not rows:
+            raise
+    if not rows:
+        raise why
+    return rows
+
+
+def route_for(profile):
+    rows = {r["id"]: r for r in models()}
+    return rows.get(profile) or next(iter(rows.values()))
+
+
+def ph3_models():
     """The ways to run P-H3-Image that are installed: MiniMax H3 FL2VA + the LoRA, and Pruna's full checkpoints."""
     try:
         import nodes
@@ -123,7 +194,8 @@ def models():
                       "models/diffusion_models: P-H3-Image's LoRA runs on it.")
     parts()
     for row in rows:
-        row.update({"steps": STEPS, "minSteps": STEPS, "maxSteps": STEPS, "stepSize": 1, "cfg": 1.0})
+        row.update({"steps": STEPS, "minSteps": STEPS, "maxSteps": STEPS, "stepSize": 1, "cfg": 1.0,
+                    "megapixels": MEGAPIXELS, "recommendedMP": 4.0, "loras": True})
     return rows
 
 
@@ -162,11 +234,11 @@ def model_prompt(prompt, filled):
     return PICTURE_RE.sub(swap, prompt)
 
 
-def sent_text(text, has_pictures, enhance, width, height):
-    """What the model (or, with Enhance, the upsampler) is given."""
+def sent_text(text, has_pictures, enhance, width, height, h3image=False):
+    """What the model (or, with Enhance, the upsampler) is given. H3-Image reads an edit as written."""
     if enhance:
         return "Aspect ratio: %s\nRequest: %s" % (ratio_name(width, height), text)
-    if has_pictures and not VERBATIM_RE.match(text):
+    if has_pictures and not h3image and not VERBATIM_RE.match(text):
         return EDIT_PREFIX + text
     return text
 
@@ -177,9 +249,10 @@ def build_graph(clip, refs, name=None):
     clip: the image as the app keeps it (sent = the text for the model or the upsampler, profile = "lora" or a
     checkpoint file, width, height, seed, loras, enhance). refs: files inside the output folder, in slot order.
     """
+    route = route_for(clip["profile"])
+    if route.get("h3image"):
+        return h3image_graph(clip, refs, route, name)
     encoder, vae = parts()
-    rows = {r["id"]: r for r in models()}
-    route = rows.get(clip["profile"]) or next(iter(rows.values()))
     w, h = int(clip["width"]), int(clip["height"])
     graph = {
         "1": {"class_type": "UNETLoader", "inputs": {"unet_name": route["file"], "weight_dtype": "default"}},
@@ -237,6 +310,36 @@ def build_graph(clip, refs, name=None):
         "14": {"class_type": "RandomNoise", "inputs": {"noise_seed": int(clip["seed"])}},
         SAMPLER_NODE: {"class_type": "SamplerCustomAdvanced", "inputs": {
             "noise": ["14", 0], "guider": ["13", 0], "sampler": ["11", 0], "sigmas": ["12", 0], "latent_image": ["10", 1]}},
+        "8": {"class_type": "VAEDecode", "inputs": {"samples": [SAMPLER_NODE, 0], "vae": ["3", 0]}},
+        SAVE_NODE: {"class_type": "SaveImage", "inputs": {"images": ["8", 0],
+                                                          "filename_prefix": "%s/stills/%s" % (ROOT, name or clip["id"])}},
+    })
+    return graph
+
+
+def h3image_graph(clip, refs, route, name=None):
+    """MiniMax-H3-Image, as in Comfy-Org's T2I and edit templates."""
+    encoder, vae = h3image_parts()
+    graph = {
+        "1": {"class_type": "UNETLoader", "inputs": {"unet_name": route["file"], "weight_dtype": "default"}},
+        "2": {"class_type": "CLIPLoader", "inputs": {"clip_name": encoder, "type": "minimax", "device": "default"}},
+        "3": {"class_type": "VAELoader", "inputs": {"vae_name": vae}},
+    }
+    loads = []
+    for n, file in enumerate(refs[:SLOTS]):
+        load = str(40 + 2 * n)
+        graph[load] = {"class_type": "MMVisionLoadStill", "inputs": {"file": file}}
+        loads.append([load, 0])
+    cond = {"clip": ["2", 0], "vae": ["3", 0], "prompt": clip["sent"],
+            "width": int(clip["width"]), "height": int(clip["height"])}
+    for n, link in enumerate(loads):
+        cond["images.image_%d" % (n + 1)] = link
+    graph["10"] = {"class_type": "MiniMaxH3ImageConditioning", "inputs": cond}
+    graph.update({
+        "11": {"class_type": "ConditioningZeroOut", "inputs": {"conditioning": ["10", 0]}},
+        SAMPLER_NODE: {"class_type": "KSampler", "inputs": {
+            "model": ["1", 0], "seed": int(clip["seed"]), "steps": H3IMAGE_STEPS, "cfg": 1.0, "sampler_name": "euler",
+            "scheduler": "simple", "positive": ["10", 0], "negative": ["11", 0], "latent_image": ["10", 1], "denoise": 1.0}},
         "8": {"class_type": "VAEDecode", "inputs": {"samples": [SAMPLER_NODE, 0], "vae": ["3", 0]}},
         SAVE_NODE: {"class_type": "SaveImage", "inputs": {"images": ["8", 0],
                                                           "filename_prefix": "%s/stills/%s" % (ROOT, name or clip["id"])}},

@@ -252,6 +252,23 @@ full checkpoint (`p-h3-image_int8_convrot.safetensors` or another) is in `models
 settings offer it as a second model. The model calls the pictures `<Picture 1>`, `<Picture 2>` … in the
 order it gets them, so "picture 3" with slot 2 empty is sent as `<Picture 2>`.
 
+### MiniMax H3-Image (in the Pruna tab)
+
+MiniMax's own image model is offered as another model in the Pruna tab, to compare with P-H3-Image on the
+same prompt and pictures. It needs ComfyUI 0.45 or newer. From
+[Comfy-Org/MiniMax-H3-Image](https://huggingface.co/Comfy-Org/MiniMax-H3-Image), plus MiniMax H3's text encoder
+(`qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors`, or its INT8 or BF16 version):
+
+| File | Folder |
+|---|---|
+| `minimax_h3_image_pruned_int8_convrot.safetensors` (or `_w4a8`, smaller, or `_bf16`) | `models/diffusion_models/` |
+| `minimax_h3_image_vae_fp16.safetensors` | `models/vae/` |
+
+The graph follows ComfyUI's H3-Image templates: "MiniMax H3 Image Conditioning" with the pictures, 6 steps,
+euler/simple at CFG 1, the prompt zeroed out as the negative. It reads the prompt as written (no prompt
+expander, no Enhance prompt), and MiniMax H3's LoRAs don't fit it. Sizes are 4, 8, 12 and 16 MP: MiniMax's
+sweet spot is about 16 MP (5472×3072 at 16:9), and below 4 MP it looks soft.
+
 ## File names and importing
 
 Finished files are named after the start of their prompt, like

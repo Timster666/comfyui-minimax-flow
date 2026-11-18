@@ -270,7 +270,7 @@ function summary() {
     const [w, h] = prunaSize();
     return [s.model === OPT.pruna.models[0]?.name && OPT.pruna.models.length < 2 ? "P-H3-Image" : s.model,
       sheetOn() ? "Sheet " + sheetLayout().ratioText : s.size === "match" ? (state.prunaSlots[0] ? "Match picture 1" : "1:1") : s.aspect,
-      w + "×" + h, s.seedMode === "fixed" ? "Seed " + s.seed : "Random seed", ...(n ? [n + (n === 1 ? " LoRA" : " LoRAs")] : [])].join(" · ");
+      w + "×" + h, s.seedMode === "fixed" ? "Seed " + s.seed : "Random seed", ...(n && modelOf(s.model).loras !== false ? [n + (n === 1 ? " LoRA" : " LoRAs")] : [])].join(" · ");
   }
   if (editOn()) {
     const size = editSize();
@@ -571,7 +571,9 @@ function renderPrunaBar() {
   $("prunaMode").innerHTML = `<div class="seg">${[["image", "Image"], ["sheet", "Character sheet"]].map(([id, label]) =>
     `<button class="${state.prunaMode === id ? "on" : ""}" data-act="prunaMode" data-id="${id}" aria-pressed="${state.prunaMode === id}">${label}</button>`).join("")}</div>
     <span class="hint">${sheetOn() ? "A sheet of one character from several sides, drawn from its picture." : "Make a picture, or edit picture 1 with up to eight more as references."}</span>`;
-  const en = state.prunaSettings.enhance;
+  const pm = modelOf(state.prunaSettings.model);
+  $("enhanceToggle").hidden = h3img(pm);   // H3-Image reads the prompt as written
+  const en = state.prunaSettings.enhance && !h3img(pm);
   $("enhanceToggle").innerHTML = (en ? "− " : "+ ") + "Enhance prompt" + (en ? " · on" : "");
   $("enhanceToggle").classList.toggle("on", en);
   $("enhanceToggle").setAttribute("aria-pressed", en);
@@ -989,7 +991,7 @@ const headOnly = () => swapOn() && state.kleinSettings.headOnly && !!maskFor(sta
 // What P-H3-Image (or with Enhance, its prompt upsampler) gets, as the server sends it.
 const PH3_RATIOS = { "1:1": 1, "4:3": 4 / 3, "3:2": 1.5, "16:9": 16 / 9, "21:9": 21 / 9, "3:1": 3, "4:1": 4, "3:4": 3 / 4, "2:3": 2 / 3, "9:16": 9 / 16 };
 function prunaSent() {
-  const [w, h] = prunaSize(), enhance = state.prunaSettings.enhance;
+  const h3 = h3img(modelOf(state.prunaSettings.model)), [w, h] = prunaSize(), enhance = state.prunaSettings.enhance && !h3;
   const order = filledSlots();
   let text = sheetOn() ? sheetText()
     : state.prompt.trim().replace(/\bpicture\s?([1-9])\b/gi, (m, n) => { const k = order.indexOf(n - 1); return k < 0 ? m : `<Picture ${k + 1}>`; });
@@ -998,7 +1000,7 @@ function prunaSent() {
     const ar = Object.keys(PH3_RATIOS).reduce((a, b) => (Math.abs(Math.log(PH3_RATIOS[b] / (w / h))) < Math.abs(Math.log(PH3_RATIOS[a] / (w / h))) ? b : a));
     return `Aspect ratio: ${ar}\nRequest: ${text}`;
   }
-  return order.length && !/^\s*(Edit <Picture \d+>|subject_definitions:)/.test(text) ? "Edit <Picture 1>. " + text : text;
+  return order.length && !h3 && !/^\s*(Edit <Picture \d+>|subject_definitions:)/.test(text) ? "Edit <Picture 1>. " + text : text;
 }
 
 // The slots the prompt names that have nothing in them.
@@ -1500,8 +1502,15 @@ function kleinSettingsHTML(s, model, T, minSteps, stepSize, recPct) {
 
 // The Pruna tab's settings: Model, Aspect ratio (Match picture 1) or the sheet's shape and background,
 // Resolution (1-8 MP), Steps (always 8), Seed, LoRAs (the loras/P-H3 Image folder).
+// The Pruna tab runs P-H3-Image and MiniMax's own H3-Image, each with its own sizes.
+const h3img = (m) => !!(m && m.h3image);
+const prunaMPs = (m) => (m && m.megapixels) || OPT.pruna.megapixels;
+// A size the model has: the nearest one (P-H3 goes to 8 MP, H3-Image from 4 to 16).
+const prunaFit = (m, v) => { const l = prunaMPs(m); return l.includes(v) ? v : l.reduce((a, b) => (Math.abs(b - v) < Math.abs(a - v) ? b : a)); };
+
 function prunaSettingsHTML(s, model, T) {
   const r1 = slotRef(0, state.prunaSlots), [w, h] = prunaSize(s), mp = sheetOn() ? s.sheetRes : s.res;
+  const mps = prunaMPs(model), recMP = sheetOn() ? (h3img(model) ? 16 : 8) : model.recommendedMP || 4;
   const sizeOf = (v) => prunaSize({ ...s, res: v, sheetRes: v }).join("×");
   return `
     <div class="field">
@@ -1509,7 +1518,8 @@ function prunaSettingsHTML(s, model, T) {
       ${T.models.length > 1 ? `<select class="select" id="model" data-change="model">
         ${T.models.map((m) => `<option value="${esc(m.name)}" ${m.name === s.model ? "selected" : ""}>${esc(m.name)}</option>`).join("")}
       </select>` : `<div class="fixed-field">${esc(model.name)}</div>`}
-      <span class="hint">${model.id === "lora" ? "MiniMax H3's FL2VA model with Pruna's P-H3-Image LoRA." : "Pruna's full P-H3-Image model."}</span>
+      <span class="hint">${h3img(model) ? "MiniMax's own image model: 6 steps, made for 4 to 16 MP. It reads your prompt as written."
+        : model.id === "lora" ? "MiniMax H3's FL2VA model with Pruna's P-H3-Image LoRA." : "Pruna's full P-H3-Image model."}</span>
     </div>
 
     ${sheetOn() ? `<div class="field">
@@ -1534,14 +1544,15 @@ function prunaSettingsHTML(s, model, T) {
     <div class="field">
       <label class="label" for="res">Resolution</label>
       <select class="select" id="res" data-change="res">
-        ${T.megapixels.map((v) => `<option value="${v}" ${v === mp ? "selected" : ""}>${mpText(v)} (${sizeOf(v)})${v === (sheetOn() ? 8 : 4) ? " · recommended" : ""}</option>`).join("")}
+        ${mps.map((v) => `<option value="${v}" ${v === mp ? "selected" : ""}>${mpText(v)} (${sizeOf(v)})${v === recMP ? " · recommended" : ""}</option>`).join("")}
       </select>
-      <span class="hint">Renders at ${w}×${h}. ${sheetOn() ? "8 MP keeps the faces sharp on a wide sheet." : "8 MP is the model's own size, and the slowest."}</span>
+      <span class="hint">Renders at ${w}×${h}. ${h3img(model) ? "16 MP is MiniMax's sweet spot; below 4 MP it looks soft. On a 32 GB card, 4 to 8 MP."
+        : sheetOn() ? "8 MP keeps the faces sharp on a wide sheet." : "8 MP is the model's own size, and the slowest."}</span>
     </div>
 
     <div class="field">
       <span class="label">Steps</span>
-      <div class="fixed-field">${OPT.pruna.steps || 8}<small>a fixed schedule: more steps don't help</small></div>
+      <div class="fixed-field">${model.steps || OPT.pruna.steps || 8}<small>${h3img(model) ? "the model is made for 6 steps, at guidance 1" : "a fixed schedule: more steps don't help"}</small></div>
     </div>
 
     <div class="field">
@@ -1558,7 +1569,7 @@ function prunaSettingsHTML(s, model, T) {
       </div>
     </div>
 
-    ${lorasField(s)}`;
+    ${model.loras === false ? `<div class="field"><span class="label">LoRAs</span><span class="hint">MiniMax H3's LoRAs don't fit H3-Image, so it renders without them.</span></div>` : lorasField(s)}`;
 }
 
 // Sampler and scheduler. "Model default" (the empty choice) uses what the model is tuned for.
@@ -3088,6 +3099,7 @@ const CHANGE = {
     state.settings.model = el.value; state.settings.steps = m.steps;
     state.settings.sampler = ""; state.settings.scheduler = "";   // back to what the new model is tuned for
     if (isImage() || isKlein()) state.settings.cfg = m.cfg;
+    if (isPruna()) { state.settings.res = prunaFit(m, state.settings.res); state.settings.sheetRes = prunaFit(m, state.settings.sheetRes); }
     render();
   },
   res: (el) => { state.settings[sheetOn() ? "sheetRes" : swapOn() ? "swapRes" : "res"] = Number(el.value); render(); },
@@ -3727,9 +3739,10 @@ async function load(first = true) {
         if (!T.aspects[s.aspect]) s.aspect = tab === "video" ? "16:9" : "1:1";
         if (tab !== "video" && !(s.cfg >= OPT.image.cfg.min && s.cfg <= OPT.image.cfg.max)) s.cfg = m.cfg;
         if (tab === "pruna") {
-          if (!T.megapixels.includes(s.sheetRes)) s.sheetRes = 8.0;
+          const pm = modelOf(s.model);
+          if (!prunaMPs(pm).includes(s.sheetRes)) s.sheetRes = prunaFit(pm, 8.0);
           if (s.size !== "match" && !T.aspects[s.size]) s.size = "match";
-          if (!T.megapixels.includes(s.res)) s.res = 4.0;
+          if (!prunaMPs(pm).includes(s.res)) s.res = prunaFit(pm, 4.0);
         }
         if (tab === "klein") {
           if (s.size !== "match" && !T.aspects[s.size]) s.size = "match";
