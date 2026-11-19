@@ -35,6 +35,14 @@ The app has five tabs, and it always opens on **Video**.
   picture onto another to change the order. A `<Picture N>` with no picture N is flagged, and isn't sent.
   Older clips (with `@names`) still render as they did.
 
+**RefMods** (optional, with Luisa's [ComfyUI-MiniMaxH3Mod](https://github.com/Luisacaotica/ComfyUI-MiniMaxH3Mod)
+node pack; on RunPod `ENABLE_REFMOD=true`): a RefMod is a reference saved as a small file, made from pictures with
+H3's video VAE in a minute, without training. In the Video settings, **RefMods** lists the ones a render carries (up
+to eight, each with a strength), **+ Add a RefMod** picks one, and **+ Make one** makes one from the prompt bar's
+pictures: a name, what it holds (a person, clothing, a style, a place), Compressed (quick to render with) or Full
+(more detail, renders several times slower), and an optional description. When it's made it's added to the
+settings. A RefMod has no tag: describe who is in the shot in the prompt. Without the pack, Vision renders as before.
+
 The **eye** in the prompt bar (every tab) shows exactly what the model would get, if you rendered now: the
 prompt text after Vision's changes, the negative prompt or the upsampler's request where there is one, and the
 pictures in the order they're sent. Point at it to see it, click it to keep it open; **Copy** copies the text.
@@ -353,6 +361,7 @@ In ComfyUI's output folder, under `minimax_flow/`:
 - `model_store.py` and `model_catalog.json`: the Models page's list and background downloads
 - `prompt_lib.py`: the prompt builder's library, and keeping it in step with Google Drive
 - `app/builder.js`: the prompt builder window
+- `refmod_bridge.py`: RefMods (ComfyUI-MiniMaxH3Mod): making them, and adding them to a render
 - `gdrive.py`: saving project zips to, and opening them from, a Google Drive folder with rclone
 - `lora_in.py`: new LoRAs from the LoRA window: uploads in pieces, and Hugging Face and Civitai links
 - `edit_media.py`: the Edit tab's filmstrips, waveforms and export, with PyAV

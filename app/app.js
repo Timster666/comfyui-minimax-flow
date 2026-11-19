@@ -1445,8 +1445,66 @@ function renderSettings() {
     </div>
 
     ${lorasField(s)}
+    ${state.tab === "video" ? refmodsField(s) : ""}
 
     ${samplingFields(s, model)}`;
+}
+
+// ---- RefMods (Video, with the ComfyUI-MiniMaxH3Mod pack) ----
+// Saved references made from pictures (no training); a render carries up to eight, each with a strength.
+const RM = { installed: false, files: [], jobs: [], loaded: false };
+async function loadRefmods() {
+  try { Object.assign(RM, await api("GET", "refmods"), { loaded: true }); } catch { return; }
+  const s = state.videoSettings;
+  if (Array.isArray(s.refmods)) s.refmods = s.refmods.filter((m) => RM.files.includes(m.file));
+  if (state.settingsOpen && state.tab === "video") render();
+}
+function refmodsField(s) {
+  if (!RM.installed) return RM.loaded ? `<div class="field"><span class="label">RefMods</span><span class="hint">Saved references, made from pictures. They need the ComfyUI-MiniMaxH3Mod node pack: on RunPod, set ENABLE_REFMOD=true.</span></div>` : "";
+  const chosen = s.refmods || [], left = RM.files.filter((f) => !chosen.some((m) => m.file === f));
+  const making = RM.jobs.filter((j) => j.state === "making");
+  return `<div class="field">
+      <div class="field-head"><span class="label">RefMods</span><button class="link" data-act="makeRefmod">+ Make one</button></div>
+      ${chosen.map((m) => `<div class="lora">
+          <div class="lora-body">
+            <span class="lora-name" title="${esc(m.file)}">${esc(m.file)}</span>
+            <input type="range" min="0" max="1" step="0.05" value="${m.strength}" data-input="refmodStrength" data-id="${esc(m.file)}" aria-label="Strength of ${esc(m.file)}">
+          </div>
+          <span class="lora-val" data-refmod="${esc(m.file)}">${Number(m.strength).toFixed(2)}</span>
+          <button class="lora-x" data-act="removeRefmod" data-id="${esc(m.file)}" aria-label="Remove ${esc(m.file)}">${ICON.x}</button>
+        </div>`).join("")}
+      ${chosen.length < 8 && left.length ? `<select class="select" data-change="addRefmod" aria-label="Add a RefMod"><option value="">+ Add a RefMod…</option>${left.map((f) => `<option value="${esc(f)}">${esc(f)}</option>`).join("")}</select>` : ""}
+      ${making.map((j) => `<span class="hint">Making ${esc(j.name)}…</span>`).join("")}
+      <span class="hint">${RM.files.length ? "Describe who is in the shot in the prompt: a RefMod has no tag." : "None yet: make one from pictures in the prompt bar."}</span>
+    </div>`;
+}
+function openRefmodMaker() {
+  const pics = state.attached.map((id) => state.refs.find((r) => r.id === id)).filter(Boolean);
+  const box = $("refmodModal");
+  $("rmName").value = pics[0] ? pics[0].name.replace(/[^A-Za-z0-9_-]/g, "").slice(0, 40) : "";
+  $("rmDesc").value = "";
+  $("rmPics").innerHTML = pics.length ? pics.map((r, i) => `<label class="rm-pic"><input type="checkbox" value="${r.id}" checked>
+      <img src="${r.img}" alt=""><span>Picture ${i + 1}</span></label>`).join("")
+    : `<p class="hint">Put the pictures in the prompt bar first (Add image), then make the RefMod from them.</p>`;
+  $("rmGo").disabled = !pics.length;
+  box.hidden = false;
+  setTimeout(() => $("rmName").focus(), 30);
+}
+async function makeRefmod(replace = false) {
+  const pictures = [...document.querySelectorAll("#rmPics input:checked")].map((x) => x.value);
+  const body = { name: $("rmName").value.trim(), pictures, mode: document.querySelector("input[name=rmMode]:checked").value,
+    concept: $("rmKind").value, desc: $("rmDesc").value.trim(), replace };
+  if (!pictures.length) { say("Pick at least one picture."); return; }
+  try {
+    const r = await api("POST", "refmods", body);
+    RM.jobs = r.jobs;
+    $("refmodModal").hidden = true;
+    say(`Making the RefMod ${r.job.name}. It's in ComfyUI's queue; it'll be in the list when it's done.`);
+    render();
+  } catch (error) {
+    if (/already/.test(error.message) && !replace && (await askConfirm("Replace " + body.name + "?", error.message + " Make it again from these pictures?", "Replace"))) return makeRefmod(true);
+    say(error.message);
+  }
 }
 
 // The Klein tab's settings: Model, Size (Match image 1 or an aspect ratio), Resolution, Steps, Guidance (Base
@@ -2078,6 +2136,17 @@ function connect() {
     if (msg.type === "mmflow.clip" && msg.data?.clip) upsertClip(msg.data.clip);
     if (msg.type === "mmflow.loras") { if (LM.open) { XFER.fresh.add(msg.data?.file); pollLinks(); fetchLoras(false); } else api("GET", "loras").then((r) => { OPT.loras = r.loras; LM.sizes = r.sizes || {}; }).catch(() => {}); }
     if (msg.type === "mmflow.prompts" && typeof PB !== "undefined" && PB.open && !PB.dirty) pbPollDrive();
+    if (msg.type === "mmflow.refmods") {
+      const j = msg.data?.job || {};
+      loadRefmods().then(() => {
+        if (j.state === "done") {
+          const s = state.videoSettings;
+          if (!(s.refmods || []).some((m) => m.file === j.name)) s.refmods = [...(s.refmods || []), { file: j.name, strength: 1 }].slice(0, 8);
+          saveUi(); if (state.tab === "video") render();
+          say(`The RefMod ${j.name} is ready, and added to the Video settings.`);
+        } else if (j.state === "failed") say(`Couldn't make the RefMod ${j.name}: ${j.error}`);
+      });
+    }
     if (msg.type === "mmflow.models") { load(false); if (MODELS.open) pollModels(false); }
     else if (msg.type === "progress" && msg.data) onProgress(msg.data);
     else if (msg.type === "mmvision_preview" && msg.data) onPreview(msg.data);
@@ -2179,8 +2248,9 @@ function hideSent(force) {
 function sentHTML(r, error) {
   if (!r) return `<div class="sent-head"><b>What the model gets</b></div><p class="sent-note">${esc(error)}</p>`;
   const parts = r.texts.map((t) => `<div class="sent-part"><span class="sent-label">${esc(t.label)}</span><pre class="sent-text">${esc(t.text) || "<i>(empty)</i>"}</pre></div>`).join("");
+  const mods = (r.refmods || []).length ? `<div class="sent-part"><span class="sent-label">RefMods</span><ul class="sent-pics">${r.refmods.map((m) => `<li>${esc(m)}</li>`).join("")}</ul></div>` : "";
   const pics = r.pictures.length ? `<div class="sent-part"><span class="sent-label">Pictures, in order</span><ul class="sent-pics">${r.pictures.map((p, i) => `<li><b>Picture ${i + 1}</b> ${esc(p)}</li>`).join("")}</ul></div>` : "";
-  return `<div class="sent-head"><b>What ${esc(r.model || "the model")} gets</b><button class="link" data-act="copySent">Copy</button></div>${parts}${pics}
+  return `<div class="sent-head"><b>What ${esc(r.model || "the model")} gets</b><button class="link" data-act="copySent">Copy</button></div>${parts}${pics}${mods}
     <p class="sent-note">${SENT.pinned ? "Click the eye again to close." : "Click the eye to keep this open."}</p>`;
 }
 
@@ -2823,6 +2893,10 @@ const ACT = {
   whyMissing: () => { say(missingWhy()); openModels(state.tab); },
   openModels: () => { showAppMenu(false); openModels(); },
   openBuilder: () => { ACT.closePopups?.(); openBuilder(); },
+  makeRefmod: () => openRefmodMaker(),
+  rmGo: () => makeRefmod(),
+  rmClose: () => { $("refmodModal").hidden = true; },
+  removeRefmod: (file) => { const s = state.videoSettings; s.refmods = (s.refmods || []).filter((m) => m.file !== file); render(); saveUi(); },
   toggleSent: () => { if (SENT.pinned) hideSent(true); else { SENT.key = ""; showSent(true); } },
   copySent: () => { const t = [...document.querySelectorAll("#sentBox .sent-text")].map((x) => x.textContent).join("\n\n"); copyText(t, () => say("Copied what the model gets.")); },
   tokenSave: async () => {
@@ -3111,7 +3185,8 @@ const ACT = {
     const model = tabOpt().models.some((m) => m.name === c.model) ? c.model : state.settings.model;
     Object.assign(state.settings, { model, steps: c.steps, res: c.res, aspect: c.aspect, seedMode: "random",
       loras: c.loras.map((l) => ({ id: l.name, name: l.name, strength: l.strength, on: true })) },
-      kindOf(c) === "image" ? { cfg: c.cfg } : { len: c.len }, { sampler: c.sampler || "", scheduler: c.scheduler || "" });
+      kindOf(c) === "image" ? { cfg: c.cfg } : { len: c.len, refmods: (c.refmods || []).filter((m) => RM.files.includes(m.file)) },
+      { sampler: c.sampler || "", scheduler: c.scheduler || "" });
     if (kindOf(c) === "image") {
       state.negative = c.negative != null ? c.negative : negativeDefault(c.model);
       // An edit comes back as an edit, with its picture when it's still in Add image.
@@ -3180,6 +3255,12 @@ const ACT = {
 };
 
 const CHANGE = {
+  addRefmod: (el) => {
+    if (!el.value) return;
+    const s = state.videoSettings;
+    s.refmods = [...(s.refmods || []), { file: el.value, strength: 1 }].slice(0, 8);
+    render(); saveUi();
+  },
   renameRef: async (el) => {
     const r = state.refs.find((x) => x.id === el.dataset.id);
     const next = el.value.replace(/[^A-Za-z0-9_]/g, "");
@@ -3250,6 +3331,14 @@ const INPUT = {
     $("cfgVal").classList.toggle("rec", s.cfg === rec);
     $("cfgBtn").style.visibility = s.cfg === rec ? "hidden" : "visible";
     $("pill").textContent = summary();
+    saveUi();
+  },
+  refmodStrength: (el) => {
+    const m = (state.videoSettings.refmods || []).find((x) => x.file === el.dataset.id);
+    if (!m) return;
+    m.strength = Number(el.value);
+    const v = document.querySelector(`[data-refmod="${CSS.escape(m.file)}"]`);
+    if (v) v.textContent = m.strength.toFixed(2);
     saveUi();
   },
   resSlide: (el) => {
@@ -3846,6 +3935,7 @@ async function load(first = true) {
     state.clips = data.clips.filter((c) => !deleted.has(c.id));
     if (first) {
       driveStatus();
+      loadRefmods();
       const ui = data.ui || {};
       Object.assign(state.videoSettings, ui.settings || {});
       Object.assign(state.imageSettings, ui.imageSettings || {});
