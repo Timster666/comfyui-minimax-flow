@@ -226,6 +226,29 @@ def frames(seconds):
     return 5 + 17 * max(1, int(round((count - 5) / 17.0)))
 
 
+PICTURE_TAG = re.compile(r"<Picture (\d+)>")
+
+
+def clean_pictures(ids, images, prompt=""):
+    """The Video tab's pictures, in the order of the prompt bar: <Picture 1> is the first. ValueError when one is
+    gone, there are too many, or the prompt names a picture that isn't there."""
+    by_id = {i["id"]: i for i in images}
+    out = []
+    for image_id in ids or []:
+        image = by_id.get(image_id)
+        if not image:
+            raise ValueError("Picture %d isn't in Add image any more." % (len(out) + 1))
+        if image_id not in [p["id"] for p in out]:
+            out.append({"id": image["id"], "name": image["name"]})
+    if len(out) > H3_PICTURES:
+        raise ValueError("H3 takes at most %d pictures; there are %d. Take some out." % (H3_PICTURES, len(out)))
+    for number in sorted({int(n) for n in PICTURE_TAG.findall(prompt)}):
+        if number < 1 or number > len(out):
+            raise ValueError("The prompt names <Picture %d>, but there %s." % (
+                number, "is 1 picture" if len(out) == 1 else "are %d pictures" % len(out)))
+    return out
+
+
 def mentions(text):
     return re.findall(r"@([A-Za-z0-9_]+)", text)
 
@@ -253,19 +276,27 @@ def build_graph(clip, images, files=None, name=None):
     if missing or gaps:
         raise Missing("%s needs %s." % (profile["title"], and_list(missing + gaps)))
 
-    # The @images in the prompt, in the order they were uploaded: each is one subject with one picture.
-    by_name = {image["name"].lower(): image for image in images}
-    mentioned = []
-    for word in mentions(clip["prompt"]):
-        image = by_name.get(word.lower())
-        if image and image["id"] not in mentioned:
-            mentioned.append(image["id"])
-    cast = [image for image in images if image["id"] in mentioned][:H3_PICTURES]
+    verbatim = clip.get("pictures") is not None
+    if verbatim:
+        # The Video tab's pictures, in their order: the prompt says <Picture N> and defines its own subjects.
+        by_id = {image["id"]: image for image in images}
+        cast = [by_id[p["id"]] for p in clip["pictures"] if p["id"] in by_id][:H3_PICTURES]
+    else:
+        # An older clip: the @images in the prompt, in the order they were uploaded, one subject with one picture each.
+        by_name = {image["name"].lower(): image for image in images}
+        mentioned = []
+        for word in mentions(clip["prompt"]):
+            image = by_name.get(word.lower())
+            if image and image["id"] not in mentioned:
+                mentioned.append(image["id"])
+        cast = [image for image in images if image["id"] in mentioned][:H3_PICTURES]
 
     # A family's fl2va model takes a prompt alone. Anything with pictures goes to its ref2va model.
     unet = unet_ref if cast or not unet_text else unet_text
     text_only = unet == unet_text and not cast
-    if cast:
+    if cast and verbatim:
+        prompt = clip["prompt"].strip()
+    elif cast:
         prompt = compose_reference_prompt("", clip["prompt"], subjects=[{"name": i["name"], "picture_count": 1} for i in cast])
     else:
         prompt = compose_prompt("", clip["prompt"])

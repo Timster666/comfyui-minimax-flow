@@ -138,6 +138,10 @@ body.library-open .refs { position: relative; z-index: 6; }
 button.add-ref { background: transparent; font: inherit; font-size: 11px; }
 .add-ref[aria-expanded="true"] { border-color: var(--accent); color: var(--accent-text); }
 .add-ref.drag { border-color: var(--accent); color: var(--accent-text); }
+.pic-tag { border: 0; background: transparent; font: inherit; font-size: 12px; color: var(--text-soft); padding: 2px 4px; border-radius: 6px; cursor: pointer; text-align: center; }
+.pic-tag:hover { background: var(--raised); color: var(--text); }
+.ref.used .pic-tag { color: var(--accent-text); }
+.bad-hint { color: var(--danger); }
 .add-ref input { position: absolute; width: 1px; height: 1px; opacity: 0; overflow: hidden; }
 
 /* Klein's four slots: image 1-4, square, with the picture's own size under each */

@@ -233,7 +233,7 @@ function mentionsIn(text) {
 }
 
 // The prompt as HTML, with known @names highlighted and unknown ones underlined.
-function promptHTML(text, kind = state.tab, slots = kind === "pruna" ? state.prunaSlots : state.kleinSlots) {
+function promptHTML(text, kind = state.tab, slots = kind === "pruna" ? state.prunaSlots : state.kleinSlots, pictureCount = null) {
   if (kind === "image" || kind === "prunaSheet") return esc(text);
   // Klein: "image 1" to "image 4" name the slots, Pruna "picture 1" to "picture 9"; a slot with nothing in it is underlined.
   if (kind === "klein" || kind === "pruna") {
@@ -242,8 +242,12 @@ function promptHTML(text, kind = state.tab, slots = kind === "pruna" ? state.pru
       ? `<span class="${slots[Number(part.slice(-1)) - 1] ? "m" : "bad"}">${esc(part)}</span>` : esc(part)).join("");
   }
   const names = new Set(state.refs.map((r) => r.name));
-  return text.split(/(@[A-Za-z0-9_]+)/).map((part) => {
+  // Video: <Picture N> is marked when there is a picture N (count: a clip's own, else the prompt bar's).
+  const count = pictureCount ?? state.attached.length;
+  return text.split(/(@[A-Za-z0-9_]+|<Picture \d+>)/).map((part) => {
     if (/^@[A-Za-z0-9_]+$/.test(part)) return `<span class="${names.has(part.slice(1)) ? "m" : "bad"}">${esc(part)}</span>`;
+    const n = /^<Picture (\d+)>$/.exec(part);
+    if (n) return `<span class="${Number(n[1]) >= 1 && Number(n[1]) <= count ? "m" : "bad"}">${esc(part)}</span>`;
     return esc(part);
   }).join("");
 }
@@ -613,27 +617,23 @@ function renderRefs() {
   document.querySelector(".composer").classList.toggle("no-refs", isImage());
   // MOSS-Image takes no reference pictures, so the Image tab has no image strip.
   $("refs").hidden = isImage();
-  $("hint").textContent = isImage() ? "MOSS-Image is good at words in pictures: put the text you want in quotes" : "Type @ to use an image";
-  if (isImage()) return;
-  const used = new Set(mentionsIn(state.prompt));
+  if (isImage()) { $("hint").textContent = "MOSS-Image is good at words in pictures: put the text you want in quotes"; return; }
+  // Video: the pictures in order, <Picture 1> first. The prompt is sent as written: it names them and defines
+  // its own subjects. Drag a picture onto another to change the order, or onto the text to write its tag.
   const strip = state.attached.map((id) => state.refs.find((r) => r.id === id)).filter(Boolean);
-  // @names in the prompt with no image (from an old clip, or a deleted image): drop an image on one to fill it in.
-  const known = new Set(state.refs.map((r) => r.name));
-  const missing = [...new Set(mentionsIn(state.prompt))].filter((n) => !known.has(n));
-  $("refs").innerHTML = missing.map((n) => `
-    <div class="ref used ref-gone">
-      <span class="ref-pic ref-missing" data-replace-name="${esc(n)}" title="No image is called @${esc(n)}. Drag an image here from Add image to use it instead.">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 10a3 3 0 1 1 4 2.8c-.6.3-1 .8-1 1.5M12 17h.01"/></svg>
-        <small>Missing</small></span>
-      <span class="ref-name bad-name">@${esc(n)}</span>
-    </div>`).join("") + strip.map((r) => `
-    <div class="ref ${used.has(r.name) ? "used" : ""}">
-      <span class="ref-pic" style="background:${r.tone}" draggable="true" data-drag-ref="${r.id}" data-replace-ref="${r.id}" data-act="showRef" data-id="${r.id}" title="Click to see it in Add image. Drag it into the prompt to put @${esc(r.name)} at the cursor. Drop another image here to replace this one."><img src="${r.img}" alt="" draggable="false">
-        <button class="ref-x" data-act="removeRef" data-id="${r.id}" aria-label="Take @${esc(r.name)} out of the prompt bar">${ICON.x}</button>
+  const named = [...new Set([...state.prompt.matchAll(/<Picture (\d+)>/g)].map((m) => Number(m[1])))];
+  const over = named.filter((n) => n < 1 || n > strip.length);
+  $("hint").innerHTML = over.length
+    ? `<span class="bad-hint">${over.map((n) => "&lt;Picture " + n + "&gt;").join(", ")}: there ${strip.length === 1 ? "is 1 picture" : "are " + strip.length + " pictures"}</span>`
+    : "Type @ to name a picture";
+  $("refs").innerHTML = strip.map((r, i) => `
+    <div class="ref ${named.includes(i + 1) ? "used" : ""}">
+      <span class="ref-pic" style="background:${r.tone}" draggable="true" data-drag-ref="${r.id}" data-replace-ref="${r.id}" data-act="showRef" data-id="${r.id}" title="${esc(r.name)} · click to see it in Add image. Drag it onto the text to write &lt;Picture ${i + 1}&gt;, or onto another picture to change the order."><img src="${r.img}" alt="" draggable="false">
+        <button class="ref-x" data-act="removeRef" data-id="${r.id}" aria-label="Take Picture ${i + 1} out of the prompt bar">${ICON.x}</button>
       </span>
-      <label class="ref-name">@<input value="${esc(r.name)}" data-change="renameRef" data-id="${r.id}" aria-label="Name of @${esc(r.name)}"></label>
+      <button class="ref-name pic-tag" data-act="insertPicture" data-id="${i}" title="Put &lt;Picture ${i + 1}&gt; in the prompt at the cursor">Picture ${i + 1}</button>
     </div>`).join("") + `
-    <button class="add-ref" id="addRef" data-act="openLibrary" aria-expanded="${state.library.open}">${ICON.plus}Add image</button>`;
+    <button class="add-ref" id="addRef" data-act="openLibrary" aria-expanded="${state.library.open}" ${strip.length >= 9 ? "disabled" : ""}>${ICON.plus}Add image</button>`;
 }
 
 /* Klein's four slots, image 1-4. They keep their names: swapping two pictures (drag one onto another) or
@@ -1102,7 +1102,7 @@ function renderPrompt() {
       : sheetOn() ? "Optional notes for the sheet, for example: keep the scarf, no weapon."
       : swapOn() ? "Optional notes, added after the face swap prompt, for example: keep the glasses from the face."
       : isPruna() ? "Describe a picture, or the edit to picture 1. Call the pictures picture 1, picture 2 …, for example: put the lamp from picture 2 on the table in picture 1."
-      : "Describe a shot. Type @ to use one of your images."}</span>`;
+      : "Describe a shot. With pictures, write it as MiniMax does: &lt;Subject 1&gt; is … in &lt;Picture 1&gt;. (type @ to pick a picture)"}</span>`;
   if ($("prompt").value !== state.prompt) $("prompt").value = state.prompt;
   fitPrompt();
   renderMention();
@@ -1118,6 +1118,12 @@ function mentionQuery() {
 function mentionMatches() {
   const q = mentionQuery();
   if (q === null) return [];
+  // Video: the prompt bar's pictures, as <Picture N>.
+  if (state.tab === "video") {
+    const ql = q.toLowerCase();
+    return state.attached.map((id, i) => ({ ...state.refs.find((r) => r.id === id), picture: i }))
+      .filter((r) => r.id && (!ql || String(r.picture + 1).startsWith(ql) || "picture".startsWith(ql) || r.name.toLowerCase().startsWith(ql)));
+  }
   return state.refs.filter((r) => r.name.toLowerCase().startsWith(q.toLowerCase()));
 }
 
@@ -1129,6 +1135,15 @@ function renderMention() {
   const idx = Math.min(state.mentionIndex, Math.max(list.length - 1, 0));
   const used = new Set(mentionsIn(state.prompt));
   box.hidden = false;
+  if (state.tab === "video") {
+    box.innerHTML = `<span class="mention-title">${list.length ? "Pictures in the prompt bar" : state.attached.length ? "No picture matches" : "No pictures yet: Add image puts one in the prompt bar."}</span>`
+      + list.map((r, i) => `
+      <button class="mention-item ${i === idx ? "on" : ""}" data-act="pickMention" data-id="p${r.picture}" role="option" aria-selected="${i === idx}">
+        <span class="mention-thumb" style="background:${r.tone}"><img src="${r.img}" alt=""></span>
+        <span>&lt;Picture ${r.picture + 1}&gt;<span class="mention-sub">${esc(r.name)}</span></span>
+      </button>`).join("") + `<span class="mention-help">↑ ↓ to pick · Enter to insert · Esc to close</span>`;
+    return;
+  }
   box.innerHTML = `<span class="mention-title">${list.length ? (q ? `Images starting with "${esc(q)}"` : "Your images") : state.refs.length ? `No image called @${esc(q)}` : "No images yet. Use Add image to upload one."}</span>`
     + list.map((r, i) => `
       <button class="mention-item ${i === idx ? "on" : ""}" data-act="pickMention" data-id="${r.id}" role="option" aria-selected="${i === idx}">
@@ -1168,8 +1183,9 @@ function insertWord(word, at = null) {
 }
 
 function insertMention(ref) {
-  attach(ref.id);
-  const before = state.prompt.slice(0, state.caret).replace(/@([A-Za-z0-9_]*)$/, "@" + ref.name + " ");
+  const word = ref.picture != null ? `<Picture ${ref.picture + 1}>` : "@" + ref.name;
+  if (ref.picture == null) attach(ref.id);
+  const before = state.prompt.slice(0, state.caret).replace(/@([A-Za-z0-9_]*)$/, word + " ");
   const after = state.prompt.slice(state.caret).replace(/^[A-Za-z0-9_]*\s?/, "");
   state.prompt = before + after;
   state.caret = before.length;
@@ -1322,6 +1338,11 @@ function libButton(refId, inBar) {
     const to = state.library.slot != null ? state.library.slot : list.indexOf(null);
     if (at >= 0) return `<button class="btn lib-add" data-act="libToggle">Take out of ${sheetOn() || swapOn() ? "the " : ""}${slotWord(at)}</button>`;
     return `<button class="btn primary lib-add" data-act="libToggle" ${to < 0 ? "disabled" : ""}>${to < 0 ? "All the slots are full" : "Put in " + (sheetOn() || swapOn() ? "the " : "") + slotWord(to)}</button>`;
+  }
+  if (state.tab === "video") {
+    const n = state.attached.indexOf(refId);
+    if (n >= 0) return `<button class="btn lib-add" data-act="libToggle">Take out (it's Picture ${n + 1})</button>`;
+    return `<button class="btn primary lib-add" data-act="libToggle" ${state.attached.length >= 9 ? "disabled" : ""}>${state.attached.length >= 9 ? "H3 takes at most 9 pictures" : "Add as Picture " + (state.attached.length + 1)}</button>`;
   }
   return `<button class="btn ${inBar ? "" : "primary"} lib-add" data-act="libToggle">${inBar ? "Remove from prompt" : "Add to prompt"}</button>`;
 }
@@ -1717,7 +1738,7 @@ function renderClipSide(c) {
   $("clipSide").innerHTML = `
     <div class="field">
       <span class="label">Prompt</span>
-      <div class="prompt-box"><p class="clip-prompt">${promptHTML(c.prompt)}</p>
+      <div class="prompt-box"><p class="clip-prompt">${promptHTML(c.prompt, "video", undefined, c.pictures ? c.pictures.length : null)}</p>
         <button class="copy prompt-copy" data-act="copyPrompt" aria-label="Copy the prompt" title="Copy the prompt">${ICON.copy}</button></div>
     </div>
     <dl class="facts">
@@ -2095,7 +2116,8 @@ async function generate() {
   render();
   try {
     const { clip } = await api("POST", "generate", { prompt, settings: s, kind: state.tab, negative: isImage() ? state.negative : undefined,
-      slots: isKlein() ? state.kleinSlots : undefined, edit: editOn() ? state.imageEditSlot[0] : undefined });
+      slots: isKlein() ? state.kleinSlots : undefined, edit: editOn() ? state.imageEditSlot[0] : undefined,
+      pictures: state.tab === "video" ? state.attached.filter((id) => state.refs.some((r) => r.id === id)) : undefined });
     upsertClip(clip);
   } catch (error) {
     say(error.message);
@@ -2815,7 +2837,8 @@ const ACT = {
     $("prompt").focus();
     say(isImage() ? "Prompt cleared." : "Prompt and images cleared.");
   },
-  removeRef: (id) => { state.attached = state.attached.filter((x) => x !== id); render(); },
+  removeRef: (id) => { state.attached = state.attached.filter((x) => x !== id); render(); saveUi(); },
+  insertPicture: (i) => { insertWord(`<Picture ${Number(i) + 1}>`); $("prompt").focus(); },
   // A click on an image in the strip (Video) or a filled slot (Klein) puts its name in the prompt at the cursor.
   // A click on an image in the prompt bar (Video) or a filled slot (Klein) opens Add image on that picture.
   // From a slot, picking another picture there puts it in that slot.
@@ -2841,7 +2864,7 @@ const ACT = {
   editThis: (id) => editIn(id, tabOf(clipById(id || state.openId) || {}) === "pruna" ? "pruna" : "klein"),
   editInPruna: (id) => editIn(id, "pruna"),
   menuEditInPruna: () => { const id = closeMenu(); editIn(id, "pruna"); },
-  pickMention: (id) => insertMention(state.refs.find((r) => r.id === id)),
+  pickMention: (id) => insertMention(state.tab === "video" && id[0] === "p" && !state.refs.some((r) => r.id === id) ? { picture: Number(id.slice(1)) } : state.refs.find((r) => r.id === id)),
   openLibrary: () => {
     state.library.open = !state.library.open;
     if (!state.library.open) state.library.slot = null;
@@ -2896,7 +2919,10 @@ const ACT = {
     if (state.attached.includes(id)) { state.attached = state.attached.filter((x) => x !== id); say("@" + ref.name + " taken out of the prompt bar."); }
     else {
       // Adding closes the window; the picture is in the prompt bar, ready to drag onto the text.
-      attach(id); say("@" + ref.name + " added to the prompt. Drag it onto the text, or type @" + ref.name + ", to use it.");
+      if (state.tab === "video" && state.attached.length >= 9) { say("H3 takes at most 9 pictures."); return; }
+      attach(id);
+      say(state.tab === "video" ? `Added as Picture ${state.attached.length}. Write <Picture ${state.attached.length}> in the prompt (or type @) to use it.`
+        : "@" + ref.name + " added to the prompt. Drag it onto the text, or type @" + ref.name + ", to use it.");
       saveUi(); ACT.closePopups(); return;
     }
     const hadFocus = document.activeElement?.classList.contains("lib-item");
@@ -3052,8 +3078,12 @@ const ACT = {
     // Only this clip's reference images: the ones it recorded, else the @names in its prompt.
     if (kindOf(c) === "video") {
       state.attached = [];
-      (c.refs || []).forEach((r) => { if (state.refs.some((x) => x.id === r.id)) attach(r.id); });
-      mentionsIn(c.prompt).forEach((n) => { const r = state.refs.find((x) => x.name === n); if (r) attach(r.id); });
+      if (Array.isArray(c.pictures)) c.pictures.forEach((p) => { if (state.refs.some((x) => x.id === p.id)) attach(p.id); });
+      else if (Array.isArray(c.subjects)) c.subjects.forEach((x) => (x.images || []).forEach((p) => { if (state.refs.some((r) => r.id === p.id)) attach(p.id); }));
+      else {
+        (c.refs || []).forEach((r) => { if (state.refs.some((x) => x.id === r.id)) attach(r.id); });
+        mentionsIn(c.prompt).forEach((n) => { const r = state.refs.find((x) => x.name === n); if (r) attach(r.id); });
+      }
     }
     if (isFull()) document.exitFullscreen();
     state.view = "gallery";
@@ -3587,21 +3617,33 @@ composer.addEventListener("drop", async (e) => {
   if (genId) { try { r = await refFromClip(genId); } catch (error) { say(error.message); return; } }
   else r = state.refs.find((x) => x.id === e.dataTransfer.getData(REF_MIME));
   if (!r) return;
+  // A picture from the prompt bar: onto the text it writes its <Picture N>; onto another picture it moves there.
+  // One brought in from Add image replaces the picture it's dropped on, or else joins the end.
+  if (dragFromBar) {
+    const from = state.attached.indexOf(r.id);
+    if (onText) { if (from >= 0) insertWord(`<Picture ${from + 1}>`); return; }
+    // Onto another picture: it takes that place (the ones between move along). Tags in the prompt stay as written.
+    const target = e.target.closest?.("[data-replace-ref]");
+    const to = target ? state.attached.indexOf(target.dataset.replaceRef) : -1;
+    if (from >= 0 && to >= 0 && from !== to) {
+      state.attached.splice(from, 1); state.attached.splice(to, 0, r.id);
+      render(); saveUi();
+      say(`Moved to Picture ${to + 1}.` + (/<Picture \d+>/.test(state.prompt) ? " Check the prompt's <Picture N> tags still point at the right pictures." : ""));
+    }
+    return;
+  }
   if (target) {
     replaceRef(oldId, oldName, r);
     // Replaced from Add image: that's done, so it closes.
     if (state.library.open && !dragFromBar) ACT.closePopups();
     return;
   }
-  // Only an image dragged from the prompt bar onto the text writes its @name, where the cursor was.
-  // One brought in from Add image (dropped anywhere on the prompt bar) only joins the image strip.
-  if (dragFromBar) { if (onText) insertWord("@" + r.name); return; }
   const had = state.attached.includes(r.id);
   attach(r.id);
   renderRefs();
   if (state.library.open) { renderLibNav(); renderLibList(); renderLibPreview(); }
   saveUi();
-  say(had ? `@${r.name} is in the prompt bar already.` : `@${r.name} added to the prompt bar. Drag it onto the text to use it.`);
+  say(had ? `That picture is Picture ${state.attached.indexOf(r.id) + 1} already.` : `Added as Picture ${state.attached.indexOf(r.id) + 1}. Write <Picture ${state.attached.indexOf(r.id) + 1}> in the prompt (or type @) to use it.`);
 });
 
 // Klein: a picture dropped on a slot goes in that slot (a slot's picture swaps places with what's there); dropped

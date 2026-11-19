@@ -585,9 +585,16 @@ async def generate(request):
     async with _lock:
         data = read_project()
         names = {i["name"] for i in data["images"]}
-        unknown = [n for n in MENTION_RE.findall(prompt) if n not in names]
-        if unknown:
-            raise web.HTTPBadRequest(text="There is no image called @%s." % unknown[0])
+        pictures = None
+        if body.get("pictures") is not None:
+            try:
+                pictures = h3_graph.clean_pictures(body["pictures"], data["images"], prompt)
+            except ValueError as error:
+                raise web.HTTPBadRequest(text=str(error))
+        else:
+            unknown = [n for n in MENTION_RE.findall(prompt) if n not in names]
+            if unknown:
+                raise web.HTTPBadRequest(text="There is no image called @%s." % unknown[0])
         w, h = video_dims(aspect, res)
         clip = {"id": "c" + uuid.uuid4().hex[:10], "prompt": prompt, "model": model["name"], "profile": model["id"],
                 "steps": steps, "res": res, "aspect": aspect, "len": length, "width": w, "height": h, "seed": seed,
@@ -598,8 +605,11 @@ async def generate(request):
         if scheduler:
             clip["scheduler"] = scheduler
         images = list(data["images"])
+        if pictures is not None:
+            clip["pictures"] = pictures
         # The pictures it uses, so a project export finds them even after a rename.
-        clip["refs"] = [{"id": i["id"], "name": i["name"]} for i in edit_project.refs_of(clip, images)]
+        clip["refs"] = ([dict(p) for p in pictures] if pictures is not None
+                        else [{"id": i["id"], "name": i["name"]} for i in edit_project.refs_of(clip, images)])
 
     try:
         graph = h3_graph.build_graph(clip, images, name=clip_info.file_stem(clip))
