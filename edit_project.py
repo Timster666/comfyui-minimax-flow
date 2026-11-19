@@ -25,8 +25,7 @@ CLIP_KIND = "clip"
 VERSION = 1
 # What a clip keeps when it travels in a project.
 CLIP_FIELDS = ("id", "kind", "prompt", "model", "profile", "steps", "cfg", "res", "aspect", "len", "width", "height",
-               "seed", "loras", "starred", "created", "imported", "found", "refs", "sampler", "scheduler", "negative",
-               "subjects")
+               "seed", "loras", "starred", "created", "imported", "found", "refs", "sampler", "scheduler", "negative")
 IMAGE_FIELDS = ("id", "name", "file", "added")
 MENTION = re.compile(r"@([A-Za-z0-9_]+)")
 
@@ -161,7 +160,7 @@ def read(zip_path):
     return project
 
 
-def unpack_images(z, project, images, images_dir, image_path, ids=None):
+def unpack_images(z, project, images, images_dir, image_path):
     """Bring a project's reference pictures in. Returns (new image records, {old name lower: name here}, how many were here).
 
     A picture whose id is already here with a file of the same size is the same picture. Others get
@@ -176,8 +175,6 @@ def unpack_images(z, project, images, images_dir, image_path, ids=None):
         mine = by_id.get(record.get("id"))
         if mine and os.path.exists(image_path(mine)) and os.path.getsize(image_path(mine)) == info.file_size:
             names[record["name"].lower()] = mine["name"]
-            if ids is not None:
-                ids[record.get("id")] = mine
             same += 1
             continue
         image_id = record["id"] if record.get("id") and record["id"] not in by_id else "i" + uuid.uuid4().hex[:10]
@@ -193,8 +190,6 @@ def unpack_images(z, project, images, images_dir, image_path, ids=None):
         image = {"id": image_id, "name": name, "file": file, "added": record.get("added") or 0}
         by_id[image_id] = image
         names[record["name"].lower()] = name
-        if ids is not None:
-            ids[record.get("id")] = image
         added.append(image)
     return added, names, same
 
@@ -213,9 +208,9 @@ def unpack(zip_path, existing, clips_dir, clip_path, images=(), images_dir=None,
     os.makedirs(clips_dir, exist_ok=True)
     added, same, ids = [], 0, {}
     with zipfile.ZipFile(zip_path) as z:
-        new_images, names, same_images, image_ids = ([], {}, 0, {})
+        new_images, names, same_images = ([], {}, 0)
         if images_dir and image_path:
-            new_images, names, same_images = unpack_images(z, project, list(images), images_dir, image_path, image_ids)
+            new_images, names, same_images = unpack_images(z, project, list(images), images_dir, image_path)
         for record in project.get("clips") or []:
             info = z.getinfo(record["zip_file"])
             mine = existing.get(record.get("id"))
@@ -236,20 +231,8 @@ def unpack(zip_path, existing, clips_dir, clip_path, images=(), images_dir=None,
             clip.update({"id": clip_id, "kind": "video", "status": "done", "step": record.get("steps", 0), "file": name})
             clip["prompt"] = rename_mentions(clip.get("prompt"), names)
             pictures = {i["name"].lower(): i for i in list(images) + new_images}
-            if isinstance(clip.get("subjects"), list):
-                # The Video tab's subjects: their pictures by id (an id can change coming in), else by name.
-                here = {i["id"]: i for i in list(images) + new_images}
-                for subject in clip["subjects"]:
-                    pics = []
-                    for p in subject.get("images") or []:
-                        image = image_ids.get(p.get("id")) or here.get(p.get("id")) or pictures.get(names.get(str(p.get("name")).lower(), "").lower())
-                        if image:
-                            pics.append({"id": image["id"], "name": image["name"]})
-                    subject["images"] = pics
-                clip["refs"] = [p for subject in clip["subjects"] for p in subject["images"]]
-            else:
-                clip["refs"] = [{"id": pictures[n.lower()]["id"], "name": pictures[n.lower()]["name"]}
-                                for n in dict.fromkeys(MENTION.findall(clip["prompt"])) if n.lower() in pictures]
+            clip["refs"] = [{"id": pictures[n.lower()]["id"], "name": pictures[n.lower()]["name"]}
+                            for n in dict.fromkeys(MENTION.findall(clip["prompt"])) if n.lower() in pictures]
             clip.setdefault("starred", False)
             ids[record["id"]] = clip_id
             existing = dict(existing, **{clip_id: clip})
