@@ -57,10 +57,7 @@ const state = {
   mentionIndex: 0,
   mentionClosed: false,
   refs: [],                  // every uploaded image: {id, name, file, added, img, tone}
-  attached: [],              // (older versions) ids of the images in the prompt bar
-  // The Video tab's subjects: each one or more pictures (Add image ids) and an optional description. The prompt
-  // names them <Subject 1>, <Subject 2> … by their place here.
-  subjects: [{ refs: [], desc: "" }],
+  attached: [],              // ids of the images in the prompt bar
   library: { open: false, source: "uploads", selected: null, selectedGen: null, query: "", sort: "newest" },
   clips: [],
   tab: "video",              // "video" | "image" | "klein" | "edit": "edit" is the editor (edit.js), the others the gallery and prompt
@@ -157,29 +154,7 @@ const clipUrl = (c) => c.url || (c.file ? fileUrl(c.subfolder || OPT.root + (kin
 const snapFrames = (seconds) => 5 + 17 * Math.max(1, Math.round((seconds * OPT.length.fps - 5) / 17));
 const isBusy = (c) => c.status === "queued" || c.status === "rendering";
 const loraText = (l) => l.name.replace(/\\/g, "/").split("/").pop().replace(/\.[^.]+$/, "") + " · " + Number(l.strength).toFixed(2);
-// ---- The Video tab's subjects -------------------------------------------------
-const H3_PICTURES = 9;
-const subjectRefs = () => state.subjects.flatMap((x) => x.refs);
-const subjectOf = (id) => state.subjects.findIndex((x) => x.refs.includes(id));
-const inSubjects = (id) => subjectOf(id) >= 0;
-const subjectTag = (i) => `<Subject ${i + 1}>`;
-const newSubject = () => ({ refs: [], desc: "" });
-const subjectWhere = (id) => { const i = subjectOf(id); return i < 0 ? "" : "Subject " + (i + 1); };
-// Put a picture in a subject: the one given, else the first empty one, else a new one. Returns where, or -1.
-function attach(id, to = state.library.subject) {
-  const at = subjectOf(id);
-  if (at >= 0) return at;
-  if (subjectRefs().length >= H3_PICTURES) { say(`H3 takes at most ${H3_PICTURES} pictures. Take one out first.`); return -1; }
-  let i = to != null && state.subjects[to] ? to : state.subjects.findIndex((x) => !x.refs.length);
-  if (i < 0) { state.subjects.push(newSubject()); i = state.subjects.length - 1; }
-  state.subjects[i].refs.push(id);
-  return i;
-}
-function detach(id) { state.subjects.forEach((x) => { x.refs = x.refs.filter((r) => r !== id); }); }
-// The prompt's <Subject N> after subjects moved: map is old number -> new number (null: that subject is gone).
-function renumberSubjects(map) {
-  state.prompt = state.prompt.replace(/<Subject (\d+)>/g, (t, n) => (map[n] === undefined ? t : map[n] === null ? t : `<Subject ${map[n]}>`));
-}
+const attach = (id) => { if (!state.attached.includes(id)) state.attached.push(id); };
 
 // Width and height for an aspect ratio at a size in megapixels. H3 wants sides in steps of 32, MOSS-Image in steps of 16.
 function dims(aspect, mp, kind = state.tab) {
@@ -258,7 +233,7 @@ function mentionsIn(text) {
 }
 
 // The prompt as HTML, with known @names highlighted and unknown ones underlined.
-function promptHTML(text, kind = state.tab, slots = kind === "pruna" ? state.prunaSlots : state.kleinSlots, subjects = null) {
+function promptHTML(text, kind = state.tab, slots = kind === "pruna" ? state.prunaSlots : state.kleinSlots, pictureCount = null) {
   if (kind === "image" || kind === "prunaSheet") return esc(text);
   // Klein: "image 1" to "image 4" name the slots, Pruna "picture 1" to "picture 9"; a slot with nothing in it is underlined.
   if (kind === "klein" || kind === "pruna") {
@@ -267,12 +242,12 @@ function promptHTML(text, kind = state.tab, slots = kind === "pruna" ? state.pru
       ? `<span class="${slots[Number(part.slice(-1)) - 1] ? "m" : "bad"}">${esc(part)}</span>` : esc(part)).join("");
   }
   const names = new Set(state.refs.map((r) => r.name));
-  // Video: <Subject N> is marked when that subject has pictures (subjects: a clip's own, else the prompt bar's).
-  const subs = subjects || state.subjects;
-  return text.split(/(@[A-Za-z0-9_]+|<Subject \d+>)/).map((part) => {
+  // Video: <Picture N> is marked when there is a picture N (count: a clip's own, else the prompt bar's).
+  const count = pictureCount ?? state.attached.length;
+  return text.split(/(@[A-Za-z0-9_]+|<Picture \d+>)/).map((part) => {
     if (/^@[A-Za-z0-9_]+$/.test(part)) return `<span class="${names.has(part.slice(1)) ? "m" : "bad"}">${esc(part)}</span>`;
-    const n = /^<Subject (\d+)>$/.exec(part);
-    if (n) { const sub = subs[Number(n[1]) - 1]; return `<span class="${sub && (sub.refs || sub.images || []).length ? "m" : "bad"}">${esc(part)}</span>`; }
+    const n = /^<Picture (\d+)>$/.exec(part);
+    if (n) return `<span class="${Number(n[1]) >= 1 && Number(n[1]) <= count ? "m" : "bad"}">${esc(part)}</span>`;
     return esc(part);
   }).join("");
 }
@@ -336,7 +311,7 @@ function saveUi() {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
     state.drafts[draftKey()] = state.prompt;
-    api("PUT", "ui", { settings: state.videoSettings, imageSettings: state.imageSettings, subjects: state.subjects, attached: [], perRow: state.perRow,
+    api("PUT", "ui", { settings: state.videoSettings, imageSettings: state.imageSettings, attached: state.attached, perRow: state.perRow,
       prompt: state.drafts.video, imagePrompt: state.drafts.image, imageNegative: state.negative, negativeOpen: state.negativeOpen,
       kleinSettings: state.kleinSettings, kleinPrompt: state.drafts.klein, kleinSlots: state.kleinSlots,
       kleinMode: state.kleinMode, kleinSwapSlots: state.kleinSwapSlots, kleinSwapPrompt: state.drafts.kleinSwap, kleinSwapMask: state.kleinSwapMask,
@@ -637,41 +612,28 @@ function renderRefs() {
   renderNegative();
   renderPrunaBar();
   // Reset (top right of the prompt) shows when there is something to clear.
-  $("resetPrompt").hidden = !(state.prompt.trim() || (hasSlots() ? slots().some(Boolean) : !isImage() && (subjectRefs().length || state.subjects.length > 1)));
+  $("resetPrompt").hidden = !(state.prompt.trim() || (hasSlots() ? slots().some(Boolean) : !isImage() && state.attached.length));
   if (hasSlots()) { renderSlots(); return; }
   document.querySelector(".composer").classList.toggle("no-refs", isImage());
   // MOSS-Image takes no reference pictures, so the Image tab has no image strip.
   $("refs").hidden = isImage();
   if (isImage()) { $("hint").textContent = "MOSS-Image is good at words in pictures: put the text you want in quotes"; return; }
-  // Video: the subjects, each with its pictures, a + to add one, and a description. Not redrawn while a
-  // description is being typed.
-  if (document.activeElement?.classList.contains("subj-desc")) return;
-  const named = [...new Set([...state.prompt.matchAll(/<Subject (\d+)>/g)].map((m) => Number(m[1])))];
-  const empty = named.filter((n) => !(state.subjects[n - 1] && state.subjects[n - 1].refs.length));
-  const total = subjectRefs().length;
-  $("hint").innerHTML = empty.length
-    ? `<span class="bad-hint">${empty.map((n) => "&lt;Subject " + n + "&gt;").join(", ")} ${empty.length === 1 ? "has" : "have"} no pictures</span>`
-    : "Type @ to name a subject";
-  $("refs").innerHTML = state.subjects.map((sub, i) => {
-    const used = state.prompt.includes(subjectTag(i));
-    const pics = sub.refs.map((id) => state.refs.find((r) => r.id === id)).filter(Boolean);
-    return `<div class="subj ${used ? "used" : ""}" data-subject="${i}">
-      <div class="subj-head">
-        <button class="subj-tag" data-act="insertSubject" data-id="${i}" title="Put ${esc(subjectTag(i))} in the prompt at the cursor">Subject ${i + 1}</button>
-        <button class="subj-x" data-act="removeSubject" data-id="${i}" aria-label="Remove Subject ${i + 1}" title="Remove Subject ${i + 1}">${ICON.x}</button>
-      </div>
-      <div class="subj-pics">${pics.map((r) => `
-        <span class="ref-pic subj-pic" style="background:${r.tone}" draggable="true" data-drag-ref="${r.id}" data-replace-ref="${r.id}" data-act="showRef" data-id="${r.id}" title="@${esc(r.name)} · click to see it in Add image. Drag it to another subject, or onto the prompt to write ${esc(subjectTag(i))}. Drop another image here to replace it."><img src="${r.img}" alt="" draggable="false">
-          <button class="ref-x" data-act="removeRef" data-id="${r.id}" aria-label="Take @${esc(r.name)} out of Subject ${i + 1}">${ICON.x}</button></span>`).join("")}
-        <button class="subj-add" data-act="addToSubject" data-id="${i}" ${total >= H3_PICTURES ? "disabled" : ""} title="${total >= H3_PICTURES ? `H3 takes at most ${H3_PICTURES} pictures` : `Add a picture to Subject ${i + 1}`}" aria-label="Add a picture to Subject ${i + 1}">${ICON.plus}</button>
-      </div>
-      <input class="subj-desc" value="${esc(sub.desc)}" placeholder="Description (optional)" maxlength="300" data-change="subjectDesc" data-input="subjectDesc" data-id="${i}" aria-label="Description of Subject ${i + 1}" title="Sent to H3, for example: a woman in her 30s with red hair">
-    </div>`;
-  }).join("") + `
-    <div class="subj-more">
-      <button class="add-ref add-subject" id="addRef" data-act="addSubject" ${state.subjects.length >= H3_PICTURES ? "disabled" : ""}>${ICON.plus}Subject</button>
-      <span class="subj-count ${total >= H3_PICTURES ? "full" : ""}">${total} of ${H3_PICTURES} pictures</span>
-    </div>`;
+  // Video: the pictures in order, <Picture 1> first. The prompt is sent as written: it names them and defines
+  // its own subjects. Drag a picture onto another to change the order, or onto the text to write its tag.
+  const strip = state.attached.map((id) => state.refs.find((r) => r.id === id)).filter(Boolean);
+  const named = [...new Set([...state.prompt.matchAll(/<Picture (\d+)>/g)].map((m) => Number(m[1])))];
+  const over = named.filter((n) => n < 1 || n > strip.length);
+  $("hint").innerHTML = over.length
+    ? `<span class="bad-hint">${over.map((n) => "&lt;Picture " + n + "&gt;").join(", ")}: there ${strip.length === 1 ? "is 1 picture" : "are " + strip.length + " pictures"}</span>`
+    : "Type @ to name a picture";
+  $("refs").innerHTML = strip.map((r, i) => `
+    <div class="ref ${named.includes(i + 1) ? "used" : ""}">
+      <span class="ref-pic" style="background:${r.tone}" draggable="true" data-drag-ref="${r.id}" data-replace-ref="${r.id}" data-act="showRef" data-id="${r.id}" title="${esc(r.name)} · click to see it in Add image. Drag it onto the text to write &lt;Picture ${i + 1}&gt;, or onto another picture to change the order."><img src="${r.img}" alt="" draggable="false">
+        <button class="ref-x" data-act="removeRef" data-id="${r.id}" aria-label="Take Picture ${i + 1} out of the prompt bar">${ICON.x}</button>
+      </span>
+      <button class="ref-name pic-tag" data-act="insertPicture" data-id="${i}" title="Put &lt;Picture ${i + 1}&gt; in the prompt at the cursor">Picture ${i + 1}</button>
+    </div>`).join("") + `
+    <button class="add-ref" id="addRef" data-act="openLibrary" aria-expanded="${state.library.open}" ${strip.length >= 9 ? "disabled" : ""}>${ICON.plus}Add image</button>`;
 }
 
 /* Klein's four slots, image 1-4. They keep their names: swapping two pictures (drag one onto another) or
@@ -1140,7 +1102,7 @@ function renderPrompt() {
       : sheetOn() ? "Optional notes for the sheet, for example: keep the scarf, no weapon."
       : swapOn() ? "Optional notes, added after the face swap prompt, for example: keep the glasses from the face."
       : isPruna() ? "Describe a picture, or the edit to picture 1. Call the pictures picture 1, picture 2 …, for example: put the lamp from picture 2 on the table in picture 1."
-      : "Describe a shot. Put pictures in Subject 1, 2 … below and name them in the prompt as <Subject 1>, <Subject 2> (type @ to pick one)."}</span>`;
+      : "Describe a shot. With pictures, write it as MiniMax does: &lt;Subject 1&gt; is … in &lt;Picture 1&gt;. (type @ to pick a picture)"}</span>`;
   if ($("prompt").value !== state.prompt) $("prompt").value = state.prompt;
   fitPrompt();
   renderMention();
@@ -1156,11 +1118,11 @@ function mentionQuery() {
 function mentionMatches() {
   const q = mentionQuery();
   if (q === null) return [];
-  // Video: the subjects, by number or description.
+  // Video: the prompt bar's pictures, as <Picture N>.
   if (state.tab === "video") {
     const ql = q.toLowerCase();
-    return state.subjects.map((x, i) => ({ subject: i, ...x }))
-      .filter((x) => !ql || String(x.subject + 1).startsWith(ql) || "subject".startsWith(ql) || x.desc.toLowerCase().includes(ql));
+    return state.attached.map((id, i) => ({ ...state.refs.find((r) => r.id === id), picture: i }))
+      .filter((r) => r.id && (!ql || String(r.picture + 1).startsWith(ql) || "picture".startsWith(ql) || r.name.toLowerCase().startsWith(ql)));
   }
   return state.refs.filter((r) => r.name.toLowerCase().startsWith(q.toLowerCase()));
 }
@@ -1174,14 +1136,12 @@ function renderMention() {
   const used = new Set(mentionsIn(state.prompt));
   box.hidden = false;
   if (state.tab === "video") {
-    box.innerHTML = `<span class="mention-title">${list.length ? "Your subjects" : "No subject matches"}</span>`
-      + list.map((x, i) => {
-        const first = state.refs.find((r) => r.id === x.refs[0]);
-        return `<button class="mention-item ${i === idx ? "on" : ""}" data-act="pickMention" data-id="s${x.subject}" role="option" aria-selected="${i === idx}">
-          <span class="mention-thumb" style="background:${first ? first.tone : "var(--raised)"}">${first ? `<img src="${first.img}" alt="">` : ""}</span>
-          <span>${esc(subjectTag(x.subject))}<span class="mention-sub">${x.refs.length ? x.refs.length + (x.refs.length === 1 ? " picture" : " pictures") : "No pictures yet"}${x.desc ? " · " + esc(x.desc) : ""}</span></span>
-        </button>`;
-      }).join("") + `<span class="mention-help">↑ ↓ to pick · Enter to insert · Esc to close</span>`;
+    box.innerHTML = `<span class="mention-title">${list.length ? "Pictures in the prompt bar" : state.attached.length ? "No picture matches" : "No pictures yet: Add image puts one in the prompt bar."}</span>`
+      + list.map((r, i) => `
+      <button class="mention-item ${i === idx ? "on" : ""}" data-act="pickMention" data-id="p${r.picture}" role="option" aria-selected="${i === idx}">
+        <span class="mention-thumb" style="background:${r.tone}"><img src="${r.img}" alt=""></span>
+        <span>&lt;Picture ${r.picture + 1}&gt;<span class="mention-sub">${esc(r.name)}</span></span>
+      </button>`).join("") + `<span class="mention-help">↑ ↓ to pick · Enter to insert · Esc to close</span>`;
     return;
   }
   box.innerHTML = `<span class="mention-title">${list.length ? (q ? `Images starting with "${esc(q)}"` : "Your images") : state.refs.length ? `No image called @${esc(q)}` : "No images yet. Use Add image to upload one."}</span>`
@@ -1223,8 +1183,8 @@ function insertWord(word, at = null) {
 }
 
 function insertMention(ref) {
-  const word = ref.subject != null ? subjectTag(ref.subject) : "@" + ref.name;
-  if (ref.subject == null) attach(ref.id);
+  const word = ref.picture != null ? `<Picture ${ref.picture + 1}>` : "@" + ref.name;
+  if (ref.picture == null) attach(ref.id);
   const before = state.prompt.slice(0, state.caret).replace(/@([A-Za-z0-9_]*)$/, word + " ");
   const after = state.prompt.slice(state.caret).replace(/^[A-Za-z0-9_]*\s?/, "");
   state.prompt = before + after;
@@ -1329,7 +1289,7 @@ function renderLibList() {
     + (items.length ? items.map((r) => `
       <div class="lib-item ${r.id === state.library.selected ? "on" : ""}" data-act="libSelect" data-id="${r.id}" role="option" tabindex="${r.id === state.library.selected ? 0 : -1}" aria-selected="${r.id === state.library.selected}" draggable="true" data-drag-ref="${r.id}" title="Drag into the prompt">
         <span class="lib-thumb" style="background:${r.tone}"><img src="${r.img}" alt="" draggable="false"></span>
-        <span class="lib-text"><span class="lib-name">@${esc(r.name)}</span><span class="lib-sub">${inSubjects(r.id) ? "Image · in " + subjectWhere(r.id) : "Image"}</span></span>
+        <span class="lib-text"><span class="lib-name">@${esc(r.name)}</span><span class="lib-sub">${state.attached.includes(r.id) ? "Image · in the prompt bar" : "Image"}</span></span>
       </div>`).join("")
     : `<span class="lib-none">${state.refs.some((r) => !r.from_clip) ? `No images match "${esc(state.library.query)}".` : "No uploads yet. Upload one, or drop images anywhere on the page."}</span>`);
 }
@@ -1341,7 +1301,7 @@ function renderGenList() {
     return `
       <div class="lib-item ${on ? "on" : ""}" data-act="libSelect" data-id="${c.id}" role="option" tabindex="${on ? 0 : -1}" aria-selected="${on}" draggable="true" data-drag-gen="${c.id}" title="Drag into the prompt">
         <span class="lib-thumb" style="background:${toneOf(c.id)}"><img src="${clipUrl(c)}" alt="" draggable="false"></span>
-        <span class="lib-text"><span class="lib-name">${ref ? "@" + esc(ref.name) : esc(c.prompt)}</span><span class="lib-sub">${ref && inSubjects(ref.id) ? "In " + subjectWhere(ref.id) : esc(c.model.replace(/ \(.*\)$/, "")) + " · " + c.aspect}</span></span>
+        <span class="lib-text"><span class="lib-name">${ref ? "@" + esc(ref.name) : esc(c.prompt)}</span><span class="lib-sub">${ref && state.attached.includes(ref.id) ? "In the prompt bar" : esc(c.model.replace(/ \(.*\)$/, "")) + " · " + c.aspect}</span></span>
       </div>`;
   }).join("")
     : `<span class="lib-none">${state.clips.some((c) => kindOf(c) === "image" && c.status === "done") ? `No images match "${esc(state.library.query)}".`
@@ -1352,7 +1312,7 @@ function renderLibPreview() {
   if (isGen()) {
     const c = clipById(state.library.selectedGen);
     if (!c || kindOf(c) !== "image") { $("libPreview").innerHTML = `<span class="lib-none">Pick an image to see it here.</span>`; return; }
-    const ref = refForClip(c.id), inBar = ref && inSubjects(ref.id);
+    const ref = refForClip(c.id), inBar = ref && state.attached.includes(ref.id);
     $("libPreview").innerHTML = `
       <div class="lib-big" draggable="true" data-drag-gen="${c.id}" data-act="zoomPic" title="Click to see it bigger. Drag into the prompt"><img src="${clipUrl(c)}" alt="${esc(c.prompt)}" draggable="false"></div>
       <p class="lib-caption">${esc(c.prompt)}</p>
@@ -1361,7 +1321,7 @@ function renderLibPreview() {
   }
   const r = state.refs.find((x) => x.id === state.library.selected);
   if (!r) { $("libPreview").innerHTML = `<span class="lib-none">Pick an image to see it here.</span>`; return; }
-  const inBar = inSubjects(r.id);
+  const inBar = state.attached.includes(r.id);
   $("libPreview").innerHTML = `
     <div class="lib-big" draggable="true" data-drag-ref="${r.id}" data-act="zoomPic" title="Click to see it bigger. Drag into the prompt"><img src="${r.img}" alt="@${esc(r.name)}" draggable="false"></div>
     ${libButton(r.id, inBar)}`;
@@ -1379,10 +1339,12 @@ function libButton(refId, inBar) {
     if (at >= 0) return `<button class="btn lib-add" data-act="libToggle">Take out of ${sheetOn() || swapOn() ? "the " : ""}${slotWord(at)}</button>`;
     return `<button class="btn primary lib-add" data-act="libToggle" ${to < 0 ? "disabled" : ""}>${to < 0 ? "All the slots are full" : "Put in " + (sheetOn() || swapOn() ? "the " : "") + slotWord(to)}</button>`;
   }
-  if (inBar) return `<button class="btn lib-add" data-act="libToggle">Take out of ${subjectWhere(refId)}</button>`;
-  const to = state.library.subject != null && state.subjects[state.library.subject] ? state.library.subject : state.subjects.findIndex((x) => !x.refs.length);
-  const full = subjectRefs().length >= H3_PICTURES;
-  return `<button class="btn primary lib-add" data-act="libToggle" ${full ? "disabled" : ""}>${full ? `H3 takes at most ${H3_PICTURES} pictures` : to < 0 ? "Add as a new subject" : "Add to Subject " + (to + 1)}</button>`;
+  if (state.tab === "video") {
+    const n = state.attached.indexOf(refId);
+    if (n >= 0) return `<button class="btn lib-add" data-act="libToggle">Take out (it's Picture ${n + 1})</button>`;
+    return `<button class="btn primary lib-add" data-act="libToggle" ${state.attached.length >= 9 ? "disabled" : ""}>${state.attached.length >= 9 ? "H3 takes at most 9 pictures" : "Add as Picture " + (state.attached.length + 1)}</button>`;
+  }
+  return `<button class="btn ${inBar ? "" : "primary"} lib-add" data-act="libToggle">${inBar ? "Remove from prompt" : "Add to prompt"}</button>`;
 }
 
 // Move the selection up or down the list, and keep it in view.
@@ -1776,7 +1738,7 @@ function renderClipSide(c) {
   $("clipSide").innerHTML = `
     <div class="field">
       <span class="label">Prompt</span>
-      <div class="prompt-box"><p class="clip-prompt">${promptHTML(c.prompt, "video", undefined, c.subjects || [])}</p>
+      <div class="prompt-box"><p class="clip-prompt">${promptHTML(c.prompt, "video", undefined, c.pictures ? c.pictures.length : null)}</p>
         <button class="copy prompt-copy" data-act="copyPrompt" aria-label="Copy the prompt" title="Copy the prompt">${ICON.copy}</button></div>
     </div>
     <dl class="facts">
@@ -2155,7 +2117,7 @@ async function generate() {
   try {
     const { clip } = await api("POST", "generate", { prompt, settings: s, kind: state.tab, negative: isImage() ? state.negative : undefined,
       slots: isKlein() ? state.kleinSlots : undefined, edit: editOn() ? state.imageEditSlot[0] : undefined,
-      subjects: state.tab === "video" ? state.subjects.map((x) => ({ images: x.refs, desc: x.desc })) : undefined });
+      pictures: state.tab === "video" ? state.attached.filter((id) => state.refs.some((r) => r.id === id)) : undefined });
     upsertClip(clip);
   } catch (error) {
     say(error.message);
@@ -2870,42 +2832,13 @@ const ACT = {
     if (isKlein()) state.kleinSlots = [null, null, null, null];
     else if (isPruna()) slots().fill(null);
     else if (editOn()) state.imageEditSlot = [null];
-    else if (!isImage()) state.subjects = [newSubject()];
+    else if (!isImage()) state.attached = [];
     render(); saveUi();
     $("prompt").focus();
     say(isImage() ? "Prompt cleared." : "Prompt and images cleared.");
   },
-  removeRef: (id) => { detach(id); render(); saveUi(); },
-  // Subjects (Video): add one, take one away (the prompt's later <Subject N> move down with it), a picture into one
-  // from Add image, its tag into the prompt.
-  addSubject: () => {
-    if (state.subjects.length >= H3_PICTURES) return;
-    state.subjects.push(newSubject());
-    ACT.addToSubject(state.subjects.length - 1);
-  },
-  removeSubject: async (id) => {
-    const i = Number(id), had = state.subjects[i], tag = subjectTag(i);
-    const named = state.prompt.includes(tag);
-    if (named && !(await askConfirm(`Remove Subject ${i + 1}?`, `The prompt names ${tag}: it's taken out of the prompt too, and the subjects after it move up one.`, "Remove"))) return;
-    state.subjects.splice(i, 1);
-    // Its tag leaves the prompt; the later subjects' tags move down one.
-    state.prompt = state.prompt.split(tag).join("").replace(/ {2,}/g, " ").replace(/ ([.,;:!?])/g, "$1").replace(/^\s+/, "");
-    const map = {};
-    for (let n = i + 2; n <= state.subjects.length + 1; n++) map[n] = n - 1;
-    renumberSubjects(map);
-    state.caret = Math.min(state.caret, state.prompt.length);
-    if (!state.subjects.length) state.subjects.push(newSubject());
-    renderPrompt(); render(); saveUi();
-    say(`Subject ${i + 1} removed` + (had.refs.length ? "; its pictures stay in Add image." : "."));
-  },
-  addToSubject: (id) => {
-    state.library.subject = Number(id);
-    state.library.open = true; state.settingsOpen = false; state.loraPicker = false;
-    if (!uploadItems().some((r) => r.id === state.library.selected)) state.library.selected = uploadItems()[0]?.id || null;
-    render();
-    $("libQuery")?.focus();
-  },
-  insertSubject: (id) => { insertWord(subjectTag(Number(id))); $("prompt").focus(); },
+  removeRef: (id) => { state.attached = state.attached.filter((x) => x !== id); render(); saveUi(); },
+  insertPicture: (i) => { insertWord(`<Picture ${Number(i) + 1}>`); $("prompt").focus(); },
   // A click on an image in the strip (Video) or a filled slot (Klein) puts its name in the prompt at the cursor.
   // A click on an image in the prompt bar (Video) or a filled slot (Klein) opens Add image on that picture.
   // From a slot, picking another picture there puts it in that slot.
@@ -2931,7 +2864,7 @@ const ACT = {
   editThis: (id) => editIn(id, tabOf(clipById(id || state.openId) || {}) === "pruna" ? "pruna" : "klein"),
   editInPruna: (id) => editIn(id, "pruna"),
   menuEditInPruna: () => { const id = closeMenu(); editIn(id, "pruna"); },
-  pickMention: (id) => insertMention(id[0] === "s" && state.tab === "video" ? { subject: Number(id.slice(1)) } : state.refs.find((r) => r.id === id)),
+  pickMention: (id) => insertMention(state.tab === "video" && id[0] === "p" && !state.refs.some((r) => r.id === id) ? { picture: Number(id.slice(1)) } : state.refs.find((r) => r.id === id)),
   openLibrary: () => {
     state.library.open = !state.library.open;
     if (!state.library.open) state.library.slot = null;
@@ -2983,20 +2916,20 @@ const ACT = {
       putInSlot(ref, target != null ? target : -1);
       return;
     }
-    if (inSubjects(id)) { const where = subjectWhere(id); detach(id); say("@" + ref.name + " taken out of " + where + "."); }
+    if (state.attached.includes(id)) { state.attached = state.attached.filter((x) => x !== id); say("@" + ref.name + " taken out of the prompt bar."); }
     else {
-      // Adding closes the window; the picture is in its subject. A new subject's tag goes in the prompt.
-      const i = attach(id);
-      if (i < 0) return;
-      say(`@${ref.name} is in Subject ${i + 1}.` + (state.prompt.includes(subjectTag(i)) ? "" : ` Write ${subjectTag(i)} in the prompt (or type @) to use it.`));
-      state.library.subject = null;
+      // Adding closes the window; the picture is in the prompt bar, ready to drag onto the text.
+      if (state.tab === "video" && state.attached.length >= 9) { say("H3 takes at most 9 pictures."); return; }
+      attach(id);
+      say(state.tab === "video" ? `Added as Picture ${state.attached.length}. Write <Picture ${state.attached.length}> in the prompt (or type @) to use it.`
+        : "@" + ref.name + " added to the prompt. Drag it onto the text, or type @" + ref.name + ", to use it.");
       saveUi(); ACT.closePopups(); return;
     }
     const hadFocus = document.activeElement?.classList.contains("lib-item");
     renderRefs(); renderLibNav(); renderLibList(); renderLibPreview(); saveUi();
     if (hadFocus) document.querySelector(".lib-item.on")?.focus();
   },
-  closePopups: () => { state.settingsOpen = false; state.loraPicker = false; state.library.open = false; state.library.slot = null; state.library.subject = null; render(); },
+  closePopups: () => { state.settingsOpen = false; state.loraPicker = false; state.library.open = false; state.library.slot = null; render(); },
   // The Image tab's Edit switch: one picture to edit, with the edit LoRA's settings (30 steps, guidance 4).
   toggleEdit: () => {
     if (!isImage()) return;
@@ -3144,21 +3077,13 @@ const ACT = {
     state.prompt = c.prompt; state.caret = c.prompt.length; state.mentionClosed = true;
     // Only this clip's reference images: the ones it recorded, else the @names in its prompt.
     if (kindOf(c) === "video") {
-      if (Array.isArray(c.subjects)) {
-        state.subjects = c.subjects.map((x) => ({ refs: (x.images || []).map((p) => p.id).filter((pid) => state.refs.some((r) => r.id === pid)), desc: x.desc || "" }));
-      } else {
-        // An older clip, with @names: each picture becomes a subject, and its @name its <Subject N>.
-        state.subjects = [];
-        const names = [...new Set(mentionsIn(c.prompt))];
-        names.forEach((n) => {
-          const r = state.refs.find((x) => x.name === n) || (c.refs || []).map((x) => state.refs.find((y) => y.id === x.id)).find((y) => y && y.name === n);
-          if (!r) return;
-          state.subjects.push({ refs: [r.id], desc: "" });
-          state.prompt = state.prompt.replace(new RegExp("@" + n + "(?![A-Za-z0-9_])", "g"), subjectTag(state.subjects.length - 1));
-        });
-        state.caret = state.prompt.length;
+      state.attached = [];
+      if (Array.isArray(c.pictures)) c.pictures.forEach((p) => { if (state.refs.some((x) => x.id === p.id)) attach(p.id); });
+      else if (Array.isArray(c.subjects)) c.subjects.forEach((x) => (x.images || []).forEach((p) => { if (state.refs.some((r) => r.id === p.id)) attach(p.id); }));
+      else {
+        (c.refs || []).forEach((r) => { if (state.refs.some((x) => x.id === r.id)) attach(r.id); });
+        mentionsIn(c.prompt).forEach((n) => { const r = state.refs.find((x) => x.name === n); if (r) attach(r.id); });
       }
-      if (!state.subjects.length) state.subjects = [newSubject()];
     }
     if (isFull()) document.exitFullscreen();
     state.view = "gallery";
@@ -3211,7 +3136,6 @@ const ACT = {
 };
 
 const CHANGE = {
-  subjectDesc: (el) => { const x = state.subjects[Number(el.dataset.id)]; if (x) { x.desc = el.value.trim().slice(0, 300); saveUi(); } },
   renameRef: async (el) => {
     const r = state.refs.find((x) => x.id === el.dataset.id);
     const next = el.value.replace(/[^A-Za-z0-9_]/g, "");
@@ -3284,7 +3208,6 @@ const INPUT = {
     $("pill").textContent = summary();
     saveUi();
   },
-  subjectDesc: (el) => { const x = state.subjects[Number(el.dataset.id)]; if (x) { x.desc = el.value.slice(0, 300); saveUi(); } },
   resSlide: (el) => {
     const s = state.settings;
     s.res = tabOpt().megapixels[Number(el.value)];
@@ -3461,7 +3384,6 @@ async function importFiles(files) {
   else if (done.length) say("Imported " + done.length + " files.");
 }
 
-let dropSubject = null;   // the subject a file was dropped on
 async function uploadImages(files) {
   files = files.filter((f) => f.type.startsWith("image/"));
   if (!files.length) return;
@@ -3474,15 +3396,11 @@ async function uploadImages(files) {
     state.refs.push(...added);
     // Only the Video tab has an image strip: elsewhere the pictures just join Add image.
     const video = state.tab === "video";
-    // Video: all the pictures of one upload go in one subject (the one dropped on or opened from, else the next
-    // empty one or a new one). Drag a picture to another subject if it's someone else.
-    let into = -1;
-    if (video) added.forEach((a) => { const i = attach(a.id, into >= 0 ? into : state.library.subject ?? dropSubject); if (into < 0) into = i; });
-    dropSubject = null;
+    if (video) added.forEach((a) => attach(a.id));
     state.library.selected = added[0]?.id || state.library.selected;
     render();
     document.querySelector(".lib-item.on")?.scrollIntoView({ block: "nearest" });
-    say(video ? (into >= 0 ? `${added.length === 1 ? "The picture is" : added.length + " pictures are"} in Subject ${into + 1}.` : "The pictures are in Add image.")
+    say(video ? "Added @" + added.map((a) => a.name).join(", @") + " to the prompt bar. Drag it onto the text, or type @, to use it."
       : added.length === 1 ? "@" + added[0].name + " is in Add image." : added.length + " pictures are in Add image.");
   } catch (error) {
     say("Upload failed: " + error.message);
@@ -3579,7 +3497,7 @@ document.addEventListener("dblclick", (e) => {
   const item = e.target.closest(".lib-item");
   if (!item) return;
   const refId = isGen() ? refForClip(item.dataset.id)?.id : item.dataset.id;
-  if (refId && inSubjects(refId)) return;
+  if (refId && state.attached.includes(refId)) return;
   if (isGen()) state.library.selectedGen = item.dataset.id; else state.library.selected = item.dataset.id;
   ACT.libToggle();
 });
@@ -3611,11 +3529,7 @@ document.addEventListener("drop", (e) => {
   // Videos are imports. Pictures are imports in the Image tab, and @images in the Video tab.
   const imports = files.filter((f) => f.type.startsWith("video/") || isZip(f) || (isImage() && f.type.startsWith("image/")));
   if (imports.length) importFiles(imports);
-  if (!isImage() && state.tab !== "edit") {
-    const group = e.target.closest?.("[data-subject]");
-    dropSubject = group ? Number(group.dataset.subject) : null;
-    uploadImages(files.filter((f) => f.type.startsWith("image/")));
-  }
+  if (!isImage() && state.tab !== "edit") uploadImages(files.filter((f) => f.type.startsWith("image/")));
 });
 
 /* ------------------------------------------------------------------
@@ -3673,7 +3587,6 @@ document.addEventListener("dragend", () => {
   document.querySelectorAll(".slot.dragging").forEach((x) => x.classList.remove("dragging"));
   composer.classList.remove("drop-on");
   markReplace(null);
-  document.querySelectorAll(".subj.drop-into").forEach((x) => x.classList.remove("drop-into"));
 });
 // An image dropped on an image in the strip (or on a missing one) replaces it, in the strip and in the prompt.
 const replaceTarget = (e) => e.target.closest?.(hasSlots() ? "[data-slot]" : "[data-replace-ref], [data-replace-name]");
@@ -3688,16 +3601,12 @@ composer.addEventListener("dragover", (e) => {
   e.dataTransfer.dropEffect = [...e.dataTransfer.types].includes(SLOT_MIME) ? "move" : "copy";
   composer.classList.add("drop-on");
   markReplace(replaceTarget(e));
-  const group = !hasSlots() && e.target.closest?.("[data-subject]");
-  document.querySelectorAll(".subj.drop-into").forEach((x) => { if (x !== group) x.classList.remove("drop-into"); });
-  if (group) group.classList.add("drop-into");
 });
 composer.addEventListener("dragleave", (e) => { if (!composer.contains(e.relatedTarget)) { composer.classList.remove("drop-on"); markReplace(null); } });
 composer.addEventListener("drop", async (e) => {
   if (!isRefDrag(e)) return;
   e.preventDefault();
   composer.classList.remove("drop-on");
-  document.querySelectorAll(".subj.drop-into").forEach((x) => x.classList.remove("drop-into"));
   if (hasSlots()) { dropOnSlots(e); return; }
   const genId = e.dataTransfer.getData(GEN_MIME);
   const onText = e.target === ta;
@@ -3708,30 +3617,33 @@ composer.addEventListener("drop", async (e) => {
   if (genId) { try { r = await refFromClip(genId); } catch (error) { say(error.message); return; } }
   else r = state.refs.find((x) => x.id === e.dataTransfer.getData(REF_MIME));
   if (!r) return;
+  // A picture from the prompt bar: onto the text it writes its <Picture N>; onto another picture it moves there.
+  // One brought in from Add image replaces the picture it's dropped on, or else joins the end.
+  if (dragFromBar) {
+    const from = state.attached.indexOf(r.id);
+    if (onText) { if (from >= 0) insertWord(`<Picture ${from + 1}>`); return; }
+    // Onto another picture: it takes that place (the ones between move along). Tags in the prompt stay as written.
+    const target = e.target.closest?.("[data-replace-ref]");
+    const to = target ? state.attached.indexOf(target.dataset.replaceRef) : -1;
+    if (from >= 0 && to >= 0 && from !== to) {
+      state.attached.splice(from, 1); state.attached.splice(to, 0, r.id);
+      render(); saveUi();
+      say(`Moved to Picture ${to + 1}.` + (/<Picture \d+>/.test(state.prompt) ? " Check the prompt's <Picture N> tags still point at the right pictures." : ""));
+    }
+    return;
+  }
   if (target) {
     replaceRef(oldId, oldName, r);
     // Replaced from Add image: that's done, so it closes.
     if (state.library.open && !dragFromBar) ACT.closePopups();
     return;
   }
-  // A subject's picture dropped on the text writes its <Subject N>; dropped on another subject, it moves there.
-  // One from Add image goes in the subject it was dropped on (else the next empty one, or a new one).
-  const group = e.target.closest?.("[data-subject]"), to = group ? Number(group.dataset.subject) : null;
-  if (dragFromBar && inSubjects(r.id)) {
-    if (onText) { insertWord(subjectTag(subjectOf(r.id))); return; }
-    if (to == null || subjectOf(r.id) === to) return;
-    detach(r.id); state.subjects[to].refs.push(r.id);
-    render(); saveUi(); say(`@${r.name} moved to Subject ${to + 1}.`);
-    return;
-  }
-  const had = subjectOf(r.id);
-  const i = had >= 0 ? had : attach(r.id, to);
-  if (i < 0) return;
-  if (onText && had < 0) insertWord(subjectTag(i));
+  const had = state.attached.includes(r.id);
+  attach(r.id);
   renderRefs();
   if (state.library.open) { renderLibNav(); renderLibList(); renderLibPreview(); }
   saveUi();
-  say(had >= 0 ? `@${r.name} is in Subject ${had + 1} already.` : `@${r.name} is in Subject ${i + 1}.`);
+  say(had ? `That picture is Picture ${state.attached.indexOf(r.id) + 1} already.` : `Added as Picture ${state.attached.indexOf(r.id) + 1}. Write <Picture ${state.attached.indexOf(r.id) + 1}> in the prompt (or type @) to use it.`);
 });
 
 // Klein: a picture dropped on a slot goes in that slot (a slot's picture swaps places with what's there); dropped
@@ -3795,15 +3707,11 @@ function replaceRef(oldId, oldName, r) {
   const old = oldId ? state.refs.find((x) => x.id === oldId) : null;
   const name = old ? old.name : oldName;
   if (old && old.id === r.id) return;
-  if (old && inSubjects(old.id)) {
-    // In the subject, in the old one's place.
-    const sub = state.subjects[subjectOf(old.id)];
-    detach(r.id);
-    sub.refs.splice(sub.refs.indexOf(old.id), 1, r.id);
-    renderRefs(); saveUi();
-    if (state.library.open) { renderLibNav(); renderLibList(); renderLibPreview(); }
-    say(`@${r.name} is in Subject ${state.subjects.indexOf(sub) + 1} now, in place of @${old.name}.`);
-    return;
+  if (old) {
+    const at = state.attached.indexOf(old.id);
+    state.attached = state.attached.filter((x) => x !== r.id);
+    const i = state.attached.indexOf(old.id);
+    if (i >= 0) state.attached.splice(i, 1, r.id); else state.attached.splice(Math.max(0, at), 0, r.id);
   } else attach(r.id);
   const re = new RegExp("@" + name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "(?![A-Za-z0-9_])", "g");
   const count = (state.prompt.match(re) || []).length;
@@ -3950,18 +3858,10 @@ async function load(first = true) {
       state.imageEditSlot = [state.refs.some((r) => r.id === ui.imageEditSource) ? ui.imageEditSource : null];
       state.negative = typeof ui.imageNegative === "string" ? ui.imageNegative : "";
       state.negativeOpen = !!ui.negativeOpen;
-      const known = (id) => state.refs.some((r) => r.id === id);
-      if (Array.isArray(ui.subjects) && ui.subjects.length) {
-        state.subjects = ui.subjects.slice(0, H3_PICTURES).map((x) => ({ refs: (x.refs || []).filter(known), desc: String(x.desc || "") }));
-      } else {
-        // From an older version: each image in the prompt bar becomes a subject, its @name in the prompt its tag.
-        state.subjects = (ui.attached || []).filter(known).map((id) => ({ refs: [id], desc: "" }));
-        state.subjects.forEach((x, i) => {
-          const name = state.refs.find((r) => r.id === x.refs[0]).name;
-          state.drafts.video = (state.drafts.video || "").replace(new RegExp("@" + name + "(?![A-Za-z0-9_])", "g"), subjectTag(i));
-        });
-        if (!state.subjects.length) state.subjects = [newSubject()];
-      }
+      // A prompt bar saved by the subjects version (kept on the saved/video-subjects branch) has its pictures in
+      // ui.subjects: they come back into the strip.
+      const fromSubjects = (ui.subjects || []).flatMap((x) => x.refs || []);
+      state.attached = [...new Set([...(ui.attached || []), ...fromSubjects])].filter((id) => state.refs.some((r) => r.id === id));
       state.perRow = ui.perRow || 3;
       state.prompt = state.drafts[state.tab];
       state.caret = state.prompt.length;

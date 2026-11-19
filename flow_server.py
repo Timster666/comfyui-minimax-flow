@@ -70,7 +70,6 @@ DEFAULT_UI = {
     "imageSettings": {"model": "MOSS-Image SFT (INT8)", "steps": 50, "cfg": 3.0, "res": 1.0, "aspect": "1:1",
                       "seedMode": "random", "seed": 48213, "loras": []},
     "attached": [],
-    "subjects": [],
     "perRow": 3,
     "prompt": "",
     "imagePrompt": "",
@@ -586,10 +585,10 @@ async def generate(request):
     async with _lock:
         data = read_project()
         names = {i["name"] for i in data["images"]}
-        subjects = None
-        if body.get("subjects") is not None:
+        pictures = None
+        if body.get("pictures") is not None:
             try:
-                subjects = h3_graph.clean_subjects(body["subjects"], data["images"], prompt)
+                pictures = h3_graph.clean_pictures(body["pictures"], data["images"], prompt)
             except ValueError as error:
                 raise web.HTTPBadRequest(text=str(error))
         else:
@@ -606,10 +605,10 @@ async def generate(request):
         if scheduler:
             clip["scheduler"] = scheduler
         images = list(data["images"])
-        if subjects is not None:
-            clip["subjects"] = subjects
+        if pictures is not None:
+            clip["pictures"] = pictures
         # The pictures it uses, so a project export finds them even after a rename.
-        clip["refs"] = ([dict(p) for subject in subjects for p in subject["images"]] if subjects is not None
+        clip["refs"] = ([dict(p) for p in pictures] if pictures is not None
                         else [{"id": i["id"], "name": i["name"]} for i in edit_project.refs_of(clip, images)])
 
     try:

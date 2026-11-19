@@ -27,14 +27,13 @@ cloned under the old name keeps working.
 
 The app has five tabs, and it always opens on **Video**.
 
-- **Video** makes clips with MiniMax H3. Reference pictures go in **subjects** in the prompt bar: Subject 1,
-  Subject 2 … each with one or more pictures of the same person or thing (**+** adds one from Add image,
-  **+ Subject** adds a subject, and a picture can be dragged to another subject) and an optional description
-  ("a woman in her 30s with red hair"). The prompt names them as MiniMax does, `<Subject 1>`, `<Subject 2>`:
-  type `@` to pick one, click a subject's name, or drag its picture onto the text. H3 gets each subject defined
-  by its description and all its pictures (`<Subject 1> is … in <Picture 1> and <Picture 2>.`), at most nine
-  pictures in all; empty subjects are left out and the tags numbered to match. Removing a subject takes its tag
-  out of the prompt and moves the later ones up. Older clips with `@names` come back as one subject per picture.
+- **Video** makes clips with MiniMax H3. Reference pictures go in the prompt bar, in order: **Picture 1**,
+  **Picture 2** … (at most nine). The prompt is sent to H3 as written, so with pictures you write it the way
+  MiniMax does, defining the subjects yourself:
+  `<Subject 1> is a woman in <Picture 1> and <Picture 2>. <Subject 1> walks into the café.`
+  Type `@` to pick a picture, click its label, or drag it onto the text to write its `<Picture N>`; drag a
+  picture onto another to change the order. A `<Picture N>` with no picture N is flagged, and isn't sent.
+  Older clips (with `@names`) still render as they did.
 - **Image** makes pictures with MOSS-Image. It's good at words in pictures: put the text you want
   in quotes. A finished image can be sent to the Video tab with **Use in a video**, and the Video
   tab's **Add image** pop-up lists all of them under **Generated images**.

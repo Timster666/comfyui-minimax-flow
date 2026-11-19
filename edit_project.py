@@ -26,7 +26,7 @@ VERSION = 1
 # What a clip keeps when it travels in a project.
 CLIP_FIELDS = ("id", "kind", "prompt", "model", "profile", "steps", "cfg", "res", "aspect", "len", "width", "height",
                "seed", "loras", "starred", "created", "imported", "found", "refs", "sampler", "scheduler", "negative",
-               "subjects")
+               "pictures")
 IMAGE_FIELDS = ("id", "name", "file", "added")
 MENTION = re.compile(r"@([A-Za-z0-9_]+)")
 
@@ -236,17 +236,15 @@ def unpack(zip_path, existing, clips_dir, clip_path, images=(), images_dir=None,
             clip.update({"id": clip_id, "kind": "video", "status": "done", "step": record.get("steps", 0), "file": name})
             clip["prompt"] = rename_mentions(clip.get("prompt"), names)
             pictures = {i["name"].lower(): i for i in list(images) + new_images}
-            if isinstance(clip.get("subjects"), list):
-                # The Video tab's subjects: their pictures by id (an id can change coming in), else by name.
+            if isinstance(clip.get("pictures"), list):
+                # The Video tab's pictures, in order: by id (an id can change coming in), else by name.
                 here = {i["id"]: i for i in list(images) + new_images}
-                for subject in clip["subjects"]:
-                    pics = []
-                    for p in subject.get("images") or []:
-                        image = image_ids.get(p.get("id")) or here.get(p.get("id")) or pictures.get(names.get(str(p.get("name")).lower(), "").lower())
-                        if image:
-                            pics.append({"id": image["id"], "name": image["name"]})
-                    subject["images"] = pics
-                clip["refs"] = [p for subject in clip["subjects"] for p in subject["images"]]
+                kept = []
+                for p in clip["pictures"]:
+                    image = image_ids.get(p.get("id")) or here.get(p.get("id")) or pictures.get(names.get(str(p.get("name")).lower(), "").lower())
+                    if image:
+                        kept.append({"id": image["id"], "name": image["name"]})
+                clip["pictures"] = clip["refs"] = kept
             else:
                 clip["refs"] = [{"id": pictures[n.lower()]["id"], "name": pictures[n.lower()]["name"]}
                                 for n in dict.fromkeys(MENTION.findall(clip["prompt"])) if n.lower() in pictures]
