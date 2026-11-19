@@ -13,6 +13,7 @@ aren't installed says which files it needs.
 """
 
 import asyncio
+import contextvars
 import base64
 import json
 import logging
@@ -548,6 +549,69 @@ async def rename_image(request):
     return web.json_response({"image": image})
 
 
+# ---- "What the model gets": the same request as Generate, stopped just before it is queued ----
+_PREVIEW = contextvars.ContextVar("mmflow_preview", default=False)
+
+
+class _Preview(BaseException):
+    """Raised instead of queueing in a preview (a BaseException, so the render paths' error handling lets it by)."""
+    def __init__(self, graph):
+        super().__init__()
+        self.graph = graph
+
+
+async def queue(graph, extra, client_id=None):
+    if _PREVIEW.get():
+        raise _Preview(graph)
+    return await comfy_link.queue_prompt(graph, extra, client_id)
+
+
+SENT_LABELS = {"MiniMaxH3ReferenceToVideo": "Prompt", "MiniMaxH3TextToVideo": "Prompt", "TextGenerateV2": "To the prompt upsampler",
+               "MiniMaxH3ImageConditioning": "Prompt", "PH3ImageConditioning": "Prompt"}
+PICTURE_LOADERS = {"MMVisionLoadStill": "file", "LoadImage": "image", "MMVisionLoadImage": "file"}
+
+
+def sent_of(graph):
+    """The texts a graph gives its model (prompt, negative, upsampler request) and its pictures, in order."""
+    negatives = set()
+    for node in graph.values():
+        link = node["inputs"].get("negative")
+        if isinstance(link, list):
+            negatives.add(str(link[0]))
+            src = graph.get(str(link[0]), {})
+            if src.get("class_type") == "ConditioningZeroOut":
+                negatives.add(str(src["inputs"]["conditioning"][0]) + "#zero")
+    texts, pictures = [], []
+    for nid in sorted(graph, key=lambda k: (len(k), k)):
+        node = graph[nid]
+        cls = node["class_type"]
+        for key in ("prompt", "text"):
+            value = node["inputs"].get(key)
+            if isinstance(value, str) and cls not in ("PreviewAny", "SaveImage", "SaveVideo"):
+                label = "Negative prompt" if nid in negatives else SENT_LABELS.get(cls, "Prompt")
+                texts.append({"label": label, "text": value})
+        if cls in PICTURE_LOADERS and isinstance(node["inputs"].get(PICTURE_LOADERS[cls]), str):
+            pictures.append(os.path.basename(node["inputs"][PICTURE_LOADERS[cls]]))
+    return texts, pictures
+
+
+async def preview(request):
+    """POST: the body Generate would send. Answers what the model would get, without rendering anything."""
+    token = _PREVIEW.set(True)
+    try:
+        await generate(request)
+    except _Preview as stop:
+        texts, pictures = sent_of(stop.graph)
+        body = await request.json()
+        async with _lock:
+            names = {i["file"]: i["name"] for i in read_project()["images"]}
+        pictures = ["%s (%s)" % (names[f], f) if f in names else f for f in pictures]
+        return web.json_response({"texts": texts, "pictures": pictures, "model": (body.get("settings") or {}).get("model")})
+    finally:
+        _PREVIEW.reset(token)
+    raise web.HTTPBadRequest(text="Nothing would be sent.")
+
+
 async def generate(request):
     body = await request.json()
     prompt = str(body.get("prompt", "")).strip()
@@ -613,7 +677,7 @@ async def generate(request):
 
     try:
         graph = h3_graph.build_graph(clip, images, name=clip_info.file_stem(clip))
-        clip["prompt_id"] = await comfy_link.queue_prompt(graph, clip_info.extra_data(clip), body.get("client_id"))
+        clip["prompt_id"] = await queue(graph, clip_info.extra_data(clip), body.get("client_id"))
     except h3_graph.Missing as error:
         raise web.HTTPBadRequest(text=str(error))
     except Exception as error:
@@ -682,8 +746,7 @@ async def generate_image(prompt, s, negative=None, edit=None):
     try:
         graph = moss_bridge.build_graph(clip, name=clip_info.file_stem(clip),
                                         source="%s/images/%s" % (ROOT, source["file"]) if source else None)
-        clip["prompt_id"] = await comfy_link.queue_prompt(graph,
-                                                          clip_info.extra_data(clip, moss_bridge.EXTRA_DATA))
+        clip["prompt_id"] = await queue(graph, clip_info.extra_data(clip, moss_bridge.EXTRA_DATA))
     except Exception as error:
         LOG.exception("MiniMax H3 Vision couldn't queue an image")
         raise web.HTTPBadRequest(text="ComfyUI refused the image: %s" % error)
@@ -797,7 +860,7 @@ async def generate_klein(prompt, s, slots, negative=None, swap=False, mask=None)
     refs = [(n, "%s/images/%s" % (ROOT, image["file"])) for n, image in pictures]
     try:
         graph = klein_bridge.build_graph(clip, refs, name=clip_info.file_stem(clip))
-        clip["prompt_id"] = await comfy_link.queue_prompt(graph, clip_info.extra_data(clip, klein_bridge.EXTRA_DATA))
+        clip["prompt_id"] = await queue(graph, clip_info.extra_data(clip, klein_bridge.EXTRA_DATA))
     except klein_bridge.Missing as error:
         raise web.HTTPBadRequest(text=str(error))
     except Exception as error:
@@ -901,7 +964,7 @@ async def generate_pruna(prompt, s, body):
                              "bg": str(sheet_in.get("bg") or "white"), "roles": [str(r) for r in roles], "ratio": ratio}
         try:
             graph = ph3_bridge.build_graph(clip, refs, name=clip_info.file_stem(clip))
-            clip["prompt_id"] = await comfy_link.queue_prompt(graph, clip_info.extra_data(clip, ph3_bridge.EXTRA_DATA))
+            clip["prompt_id"] = await queue(graph, clip_info.extra_data(clip, ph3_bridge.EXTRA_DATA))
         except ph3_bridge.Missing as error:
             raise web.HTTPBadRequest(text=str(error))
         except Exception as error:
@@ -1488,6 +1551,7 @@ ROUTES = (
     ("POST", "/mmflow/api/images", upload_images),
     ("POST", "/mmflow/api/masks", upload_mask),
     ("GET", "/mmflow/api/models", get_models),
+    ("POST", "/mmflow/api/preview", preview),
     ("GET", "/mmflow/api/prompts", prompts),
     ("PUT", "/mmflow/api/prompts", prompts),
     ("POST", "/mmflow/api/prompts/sync", prompts),

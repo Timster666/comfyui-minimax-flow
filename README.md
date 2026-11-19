@@ -34,6 +34,10 @@ The app has five tabs, and it always opens on **Video**.
   Type `@` to pick a picture, click its label, or drag it onto the text to write its `<Picture N>`; drag a
   picture onto another to change the order. A `<Picture N>` with no picture N is flagged, and isn't sent.
   Older clips (with `@names`) still render as they did.
+
+The **eye** in the prompt bar (every tab) shows exactly what the model would get, if you rendered now: the
+prompt text after Vision's changes, the negative prompt or the upsampler's request where there is one, and the
+pictures in the order they're sent. Point at it to see it, click it to keep it open; **Copy** copies the text.
 - **Image** makes pictures with MOSS-Image. It's good at words in pictures: put the text you want
   in quotes. A finished image can be sent to the Video tab with **Use in a video**, and the Video
   tab's **Add image** pop-up lists all of them under **Generated images**.
