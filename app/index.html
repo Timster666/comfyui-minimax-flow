@@ -615,6 +615,14 @@ body.dragging-ref .composer { border-color: var(--line-strong); }
 .pb-menu button:hover:not([disabled]), .pb-menu button:focus-visible { background: var(--raised-2); outline: none; }
 .pb-menu button[disabled] { color: var(--muted); cursor: default; }
 @media (max-width: 1000px) { .pb-cols { grid-template-columns: 200px 1fr; } .pb-compose { grid-column: 1 / -1; border-left: 0 !important; border-top: 1px solid var(--line); min-height: 260px; } }
+.rm-body { display: flex; flex-direction: column; gap: 14px; overflow-y: auto; }
+.rm-field { display: flex; flex-direction: column; gap: 6px; }
+.rm-pics { display: flex; flex-wrap: wrap; gap: 8px; }
+.rm-pic { position: relative; display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 12px; color: var(--text-soft); cursor: pointer; }
+.rm-pic img { width: 72px; height: 72px; object-fit: cover; border-radius: 10px; border: 2px solid transparent; }
+.rm-pic input { position: absolute; top: 4px; left: 4px; }
+.rm-pic input:checked ~ img { border-color: var(--accent); }
+.rm-mode { font-size: 13.5px; color: var(--text-soft); display: flex; align-items: center; gap: 6px; }
 .lm.drop { outline: 2px dashed var(--accent); outline-offset: -6px; }
 .lm.drop .lm-list { opacity: .4; }
 .lm-newtag { font-style: normal; font-size: 11px; color: var(--accent-text); background: var(--accent-soft, rgba(120,140,255,.15)); border-radius: 6px; padding: 1px 6px; margin-left: 6px; }
@@ -926,6 +934,26 @@ body.dragging-ref .composer { border-color: var(--line-strong); }
       </section>
     </div>
     <div class="pb-menu" id="pbMoveMenu" role="menu" hidden></div>
+  </div>
+</div>
+<div class="lm-scrim" id="refmodModal" hidden>
+  <div class="lm rm" role="dialog" aria-modal="true" aria-labelledby="rmTitle">
+    <div class="lm-head">
+      <div><h2 id="rmTitle">Make a RefMod</h2><div class="lm-count">A saved reference, made from pictures in a minute. No training.</div></div>
+      <button class="lm-close" data-act="rmClose" aria-label="Close">×</button>
+    </div>
+    <div class="rm-body">
+      <label class="rm-field"><span class="label">Name</span><input class="lm-link" id="rmName" maxlength="48" placeholder="ana" autocomplete="off" spellcheck="false"></label>
+      <div class="rm-field"><span class="label">From these pictures (the prompt bar's)</span><div class="rm-pics" id="rmPics"></div></div>
+      <label class="rm-field"><span class="label">What it holds</span>
+        <select class="select" id="rmKind"><option value="identity">A person (identity)</option><option value="clothing">Clothing</option><option value="style">A style</option><option value="background">A place (background)</option><option value="generic">Anything</option></select></label>
+      <div class="rm-field"><span class="label">How much it keeps</span>
+        <label class="rm-mode"><input type="radio" name="rmMode" value="compressed" checked> <b>Compressed</b> · quick to render with</label>
+        <label class="rm-mode"><input type="radio" name="rmMode" value="full"> <b>Full</b> · keeps more detail, makes renders several times slower</label></div>
+      <label class="rm-field"><span class="label">Description (optional)</span><input class="lm-link" id="rmDesc" maxlength="300" placeholder="a woman in her 30s with red hair"></label>
+    </div>
+    <div class="lm-foot"><span class="lm-hint">Made in ComfyUI's queue with H3's video VAE, then listed under RefMods in the Video settings.</span>
+      <button class="btn" data-act="rmClose">Cancel</button><button class="btn primary" id="rmGo" data-act="rmGo">Make RefMod</button></div>
   </div>
 </div>
 <div class="lm-scrim" id="driveModal" hidden>

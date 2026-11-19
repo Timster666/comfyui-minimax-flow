@@ -346,6 +346,10 @@ def build_graph(clip, images, files=None, name=None):
         graph[node] = {"class_type": "MMVisionLora", "inputs": {"model": model, "lora_name": file, "strength": strength}}
         model = [node, 0]
     graph["5"]["inputs"]["model"] = model
+    if clip.get("refmods"):
+        # RefMods (ComfyUI-MiniMaxH3Mod): added to what the guider conditions on.
+        from . import refmod_bridge
+        refmod_bridge.add_to(graph, clip["refmods"])
     return graph
 
 

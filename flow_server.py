@@ -27,7 +27,7 @@ import uuid
 
 from aiohttp import web
 
-from . import clip_info, comfy_link, edit_media, edit_project, gdrive, prompt_lib, h3_graph, klein_bridge, lora_in, model_store, moss_bridge, ph3_bridge
+from . import clip_info, comfy_link, edit_media, edit_project, gdrive, prompt_lib, refmod_bridge, h3_graph, klein_bridge, lora_in, model_store, moss_bridge, ph3_bridge
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 APP_DIR = os.path.join(HERE, "app")
@@ -396,6 +396,47 @@ async def prompts(request):
     return web.json_response(lib.view())
 
 
+# ---- RefMods (with the ComfyUI-MiniMaxH3Mod pack) ----
+def refmod_made(job):
+    from server import PromptServer
+    PromptServer.instance.send_sync("mmflow.refmods", {"job": {k: job[k] for k in ("id", "name", "state", "error")}}, None)
+
+
+async def refmods(request):
+    """GET: whether the pack is there, the RefMods, and those being made. POST {name, pictures, mode, concept, desc,
+    replace}: make one from pictures in Add image."""
+    maker = refmod_bridge.MAKER
+    maker.on_done = refmod_made
+    have = refmod_bridge.files()
+    if request.method == "GET":
+        return web.json_response({"installed": have is not None, "files": have or [], "jobs": maker.status(),
+                                  "modes": list(refmod_bridge.MODES), "concepts": refmod_bridge.CONCEPTS})
+    if have is None:
+        raise web.HTTPBadRequest(text="Making a RefMod needs the ComfyUI-MiniMaxH3Mod node pack. On RunPod: set ENABLE_REFMOD=true.")
+    body = await request.json()
+    try:
+        name = refmod_bridge.safe_name(body.get("name"))
+        if name in have and not body.get("replace"):
+            raise web.HTTPConflict(text="There's a RefMod called %s already." % name)
+        async with _lock:
+            by_id = {i["id"]: i for i in read_project()["images"]}
+        pictures = ["%s/images/%s" % (ROOT, by_id[i]["file"]) for i in body.get("pictures") or [] if i in by_id]
+        found, missing = h3_graph.encoders(h3_graph.available())
+        if not found.get("vae"):
+            raise ValueError("Making a RefMod needs MiniMax H3's video VAE (minimax_h3_video_vae_fp16.safetensors in models/vae).")
+        graph = refmod_bridge.make_graph(name, pictures, found["vae"], body.get("mode") or "compressed",
+                                         body.get("concept") or "identity", body.get("desc") or "")
+        job = await maker.make(name, graph)
+    except ValueError as error:
+        raise web.HTTPBadRequest(text=str(error))
+    except web.HTTPException:
+        raise
+    except Exception as error:
+        LOG.exception("MiniMax H3 Vision couldn't make a RefMod")
+        raise web.HTTPBadRequest(text="ComfyUI refused it: %s" % error)
+    return web.json_response({"job": job, "jobs": maker.status()})
+
+
 async def models_token(request):
     """POST {token, remember}: check a Hugging Face token and use it for downloads; DELETE: forget it."""
     if request.method == "DELETE":
@@ -581,7 +622,7 @@ def sent_of(graph):
             src = graph.get(str(link[0]), {})
             if src.get("class_type") == "ConditioningZeroOut":
                 negatives.add(str(src["inputs"]["conditioning"][0]) + "#zero")
-    texts, pictures = [], []
+    texts, pictures, mods = [], [], []
     for nid in sorted(graph, key=lambda k: (len(k), k)):
         node = graph[nid]
         cls = node["class_type"]
@@ -592,7 +633,10 @@ def sent_of(graph):
                 texts.append({"label": label, "text": value})
         if cls in PICTURE_LOADERS and isinstance(node["inputs"].get(PICTURE_LOADERS[cls]), str):
             pictures.append(os.path.basename(node["inputs"][PICTURE_LOADERS[cls]]))
-    return texts, pictures
+        if cls == refmod_bridge.LOADER:
+            mods += ["%s (strength %g)" % (node["inputs"]["mod_%d" % n], node["inputs"]["strength_%d" % n])
+                     for n in range(1, refmod_bridge.SLOTS + 1) if node["inputs"].get("mod_%d" % n) not in (None, "(none)")]
+    return texts, pictures, mods
 
 
 async def preview(request):
@@ -601,12 +645,12 @@ async def preview(request):
     try:
         await generate(request)
     except _Preview as stop:
-        texts, pictures = sent_of(stop.graph)
+        texts, pictures, mods = sent_of(stop.graph)
         body = await request.json()
         async with _lock:
             names = {i["file"]: i["name"] for i in read_project()["images"]}
         pictures = ["%s (%s)" % (names[f], f) if f in names else f for f in pictures]
-        return web.json_response({"texts": texts, "pictures": pictures, "model": (body.get("settings") or {}).get("model")})
+        return web.json_response({"texts": texts, "pictures": pictures, "refmods": mods, "model": (body.get("settings") or {}).get("model")})
     finally:
         _PREVIEW.reset(token)
     raise web.HTTPBadRequest(text="Nothing would be sent.")
@@ -659,6 +703,10 @@ async def generate(request):
             unknown = [n for n in MENTION_RE.findall(prompt) if n not in names]
             if unknown:
                 raise web.HTTPBadRequest(text="There is no image called @%s." % unknown[0])
+        try:
+            refmods = refmod_bridge.clean(s.get("refmods"))
+        except ValueError as error:
+            raise web.HTTPBadRequest(text=str(error))
         w, h = video_dims(aspect, res)
         clip = {"id": "c" + uuid.uuid4().hex[:10], "prompt": prompt, "model": model["name"], "profile": model["id"],
                 "steps": steps, "res": res, "aspect": aspect, "len": length, "width": w, "height": h, "seed": seed,
@@ -671,6 +719,8 @@ async def generate(request):
         images = list(data["images"])
         if pictures is not None:
             clip["pictures"] = pictures
+        if refmods:
+            clip["refmods"] = refmods
         # The pictures it uses, so a project export finds them even after a rename.
         clip["refs"] = ([dict(p) for p in pictures] if pictures is not None
                         else [{"id": i["id"], "name": i["name"]} for i in edit_project.refs_of(clip, images)])
@@ -1552,6 +1602,8 @@ ROUTES = (
     ("POST", "/mmflow/api/masks", upload_mask),
     ("GET", "/mmflow/api/models", get_models),
     ("POST", "/mmflow/api/preview", preview),
+    ("GET", "/mmflow/api/refmods", refmods),
+    ("POST", "/mmflow/api/refmods", refmods),
     ("GET", "/mmflow/api/prompts", prompts),
     ("PUT", "/mmflow/api/prompts", prompts),
     ("POST", "/mmflow/api/prompts/sync", prompts),
