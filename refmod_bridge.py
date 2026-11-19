@@ -140,15 +140,22 @@ class Maker:
             entry = comfy_link.history(job["prompt_id"])
             if entry is None:
                 continue
-            why = comfy_link.failure(entry)
-            if why:
-                job.update(state="failed", error=why)
-            elif job["name"] in (files() or []):
-                job.update(state="done")
-            elif (entry.get("status") or {}).get("completed"):
-                job.update(state="failed", error="ComfyUI finished, but the RefMod file isn't there.")
-            else:
+            status = entry.get("status") or {}
+            kinds = [kind for kind, _ in status.get("messages") or []]
+            if status.get("status_str") == "error" or "execution_error" in kinds or "execution_interrupted" in kinds:
+                job.update(state="failed", error=comfy_link.failure(entry))
+                break
+            if not status.get("completed"):
                 continue
+            # Done: the file can take a moment to be listed.
+            for _ in range(10):
+                if job["name"] in (files() or []):
+                    break
+                await asyncio.sleep(1)
+            if job["name"] in (files() or []):
+                job.update(state="done")
+            else:
+                job.update(state="failed", error="ComfyUI finished, but the RefMod %s isn't in the list." % job["name"])
             break
         else:
             job.update(state="failed", error="It took too long.")
