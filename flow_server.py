@@ -622,7 +622,7 @@ def sent_of(graph):
             src = graph.get(str(link[0]), {})
             if src.get("class_type") == "ConditioningZeroOut":
                 negatives.add(str(src["inputs"]["conditioning"][0]) + "#zero")
-    texts, pictures, mods = [], [], []
+    texts, pictures, mods, unets = [], [], [], []
     for nid in sorted(graph, key=lambda k: (len(k), k)):
         node = graph[nid]
         cls = node["class_type"]
@@ -633,10 +633,12 @@ def sent_of(graph):
                 texts.append({"label": label, "text": value})
         if cls in PICTURE_LOADERS and isinstance(node["inputs"].get(PICTURE_LOADERS[cls]), str):
             pictures.append(os.path.basename(node["inputs"][PICTURE_LOADERS[cls]]))
+        if isinstance(node["inputs"].get("unet_name"), str):
+            unets.append(os.path.basename(node["inputs"]["unet_name"]))
         if cls == refmod_bridge.LOADER:
             mods += ["%s (strength %g)" % (node["inputs"]["mod_%d" % n], node["inputs"]["strength_%d" % n])
                      for n in range(1, refmod_bridge.SLOTS + 1) if node["inputs"].get("mod_%d" % n) not in (None, "(none)")]
-    return texts, pictures, mods
+    return texts, pictures, mods, unets
 
 
 async def preview(request):
@@ -645,12 +647,13 @@ async def preview(request):
     try:
         await generate(request)
     except _Preview as stop:
-        texts, pictures, mods = sent_of(stop.graph)
+        texts, pictures, mods, unets = sent_of(stop.graph)
         body = await request.json()
         async with _lock:
             names = {i["file"]: i["name"] for i in read_project()["images"]}
         pictures = ["%s (%s)" % (names[f], f) if f in names else f for f in pictures]
-        return web.json_response({"texts": texts, "pictures": pictures, "refmods": mods, "model": (body.get("settings") or {}).get("model")})
+        return web.json_response({"texts": texts, "pictures": pictures, "refmods": mods, "files": unets,
+                                  "model": (body.get("settings") or {}).get("model")})
     finally:
         _PREVIEW.reset(token)
     raise web.HTTPBadRequest(text="Nothing would be sent.")

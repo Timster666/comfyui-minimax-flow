@@ -291,8 +291,9 @@ def build_graph(clip, images, files=None, name=None):
                 mentioned.append(image["id"])
         cast = [image for image in images if image["id"] in mentioned][:H3_PICTURES]
 
-    # A family's fl2va model takes a prompt alone. Anything with pictures goes to its ref2va model.
-    unet = unet_ref if cast or not unet_text else unet_text
+    # A family's fl2va model takes a prompt alone. Anything with pictures, or with RefMods (references too, which
+    # only the ref2va model reads), goes to its ref2va model.
+    unet = unet_ref if cast or clip.get("refmods") or not unet_text else unet_text
     text_only = unet == unet_text and not cast
     if cast and verbatim:
         prompt = clip["prompt"].strip()

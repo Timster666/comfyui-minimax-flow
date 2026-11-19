@@ -2250,7 +2250,7 @@ function sentHTML(r, error) {
   const parts = r.texts.map((t) => `<div class="sent-part"><span class="sent-label">${esc(t.label)}</span><pre class="sent-text">${esc(t.text) || "<i>(empty)</i>"}</pre></div>`).join("");
   const mods = (r.refmods || []).length ? `<div class="sent-part"><span class="sent-label">RefMods</span><ul class="sent-pics">${r.refmods.map((m) => `<li>${esc(m)}</li>`).join("")}</ul></div>` : "";
   const pics = r.pictures.length ? `<div class="sent-part"><span class="sent-label">Pictures, in order</span><ul class="sent-pics">${r.pictures.map((p, i) => `<li><b>Picture ${i + 1}</b> ${esc(p)}</li>`).join("")}</ul></div>` : "";
-  return `<div class="sent-head"><b>What ${esc(r.model || "the model")} gets</b><button class="link" data-act="copySent">Copy</button></div>${parts}${pics}${mods}
+  return `<div class="sent-head"><b>What ${esc(r.model || "the model")} gets</b><button class="link" data-act="copySent">Copy</button></div>${parts}${pics}${mods}${(r.files || []).length ? `<div class="sent-part"><span class="sent-label">Model file</span><ul class="sent-pics">${r.files.map((f) => `<li>${esc(f)}</li>`).join("")}</ul></div>` : ""}
     <p class="sent-note">${SENT.pinned ? "Click the eye again to close." : "Click the eye to keep this open."}</p>`;
 }
 
