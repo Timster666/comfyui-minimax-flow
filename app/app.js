@@ -2087,59 +2087,101 @@ function connect() {
   ws.addEventListener("close", () => setTimeout(() => { connect(); load(false); }, 2000));
 }
 
-async function generate() {
-  if (!state.ready) { say("MiniMax H3 Vision hasn't loaded from the server yet."); return; }
+// What Generate sends for the tab as it is now: {body}, or {error} (said instead). The "What H3 gets" preview
+// asks the server with the same body, so it shows exactly what a render would send.
+function generateBody() {
   const s = state.settings;
   const prompt = state.prompt.trim();
-  if (isPruna()) { generatePruna(prompt); return; }
+  if (isPruna()) {
+    const sheet = sheetOn(), list = slots();
+    if (sheet && !list[0]) return { error: "Add the character picture first." };
+    if (!sheet && !prompt) return { error: "Write a prompt first." };
+    const empty = emptyNamed(prompt);
+    if (empty.length) return { error: `The prompt names ${empty.map((n) => "picture " + n).join(" and ")}, but ${empty.length > 1 ? "those slots are" : "that slot is"} empty. Fill it, or change the prompt.` };
+    return { body: { kind: "pruna", mode: state.prunaMode, prompt, settings: state.prunaSettings, slots: list,
+      sheet: sheet ? { text: sheetText(), ratio: sheetLayout().ratio, ...state.prunaSheet } : undefined } };
+  }
   if (swapOn()) {
     const [body, face] = state.kleinSwapSlots;
-    if (!OPT.klein.swap) { say("Face swap needs the BFS head-swap LoRA for Klein 9B in models/loras."); return; }
-    if (!body || !face) { say(body ? "Add the face picture too." : "Add the body picture first, then the face."); return; }
-    state.settingsOpen = false; render();
-    try {
-      const { clip } = await api("POST", "generate", { kind: "klein", mode: "swap", prompt, settings: s, slots: state.kleinSwapSlots,
-        mask: headOnly() ? state.kleinSwapMask.mask : undefined });
-      upsertClip(clip);
-    } catch (error) { say(error.message); }
-    return;
+    if (!OPT.klein.swap) return { error: "Face swap needs the BFS head-swap LoRA for Klein 9B in models/loras." };
+    if (!body || !face) return { error: body ? "Add the face picture too." : "Add the body picture first, then the face." };
+    return { body: { kind: "klein", mode: "swap", prompt, settings: s, slots: state.kleinSwapSlots,
+      mask: headOnly() ? state.kleinSwapMask.mask : undefined } };
   }
-  if (!prompt) { say("Write a prompt first."); return; }
+  if (!prompt) return { error: "Write a prompt first." };
   const names = new Set(state.refs.map((r) => r.name));
-  const unknown = imageTab() ? null : mentionsIn(prompt).find((n) => !names.has(n));
-  if (unknown) { say("There is no image called @" + unknown + "."); return; }
-  if (editOn() && !state.imageEditSlot[0]) { say("Add the picture to edit first (or switch Edit off)."); return; }
+  const unknown = imageTab() || state.tab === "video" ? null : mentionsIn(prompt).find((n) => !names.has(n));
+  if (unknown) return { error: "There is no image called @" + unknown + "." };
+  if (editOn() && !state.imageEditSlot[0]) return { error: "Add the picture to edit first (or switch Edit off)." };
   const empty = isKlein() ? emptyNamed(prompt) : [];
-  if (empty.length) { say(`The prompt names ${empty.map((n) => "image " + n).join(" and ")}, but ${empty.length > 1 ? "those slots are" : "that slot is"} empty. Fill it, or change the prompt.`); return; }
+  if (empty.length) return { error: `The prompt names ${empty.map((n) => "image " + n).join(" and ")}, but ${empty.length > 1 ? "those slots are" : "that slot is"} empty. Fill it, or change the prompt.` };
+  return { body: { prompt, settings: s, kind: state.tab, negative: isImage() ? state.negative : undefined,
+    slots: isKlein() ? state.kleinSlots : undefined, edit: editOn() ? state.imageEditSlot[0] : undefined,
+    pictures: state.tab === "video" ? state.attached.filter((id) => state.refs.some((r) => r.id === id)) : undefined } };
+}
+
+async function generate() {
+  if (!state.ready) { say("MiniMax H3 Vision hasn't loaded from the server yet."); return; }
+  const g = generateBody();
+  if (g.error) { say(g.error); return; }
   state.settingsOpen = false;
-  state.filter = "all";
+  if (!isPruna() && !swapOn()) state.filter = "all";
   render();
   try {
-    const { clip } = await api("POST", "generate", { prompt, settings: s, kind: state.tab, negative: isImage() ? state.negative : undefined,
-      slots: isKlein() ? state.kleinSlots : undefined, edit: editOn() ? state.imageEditSlot[0] : undefined,
-      pictures: state.tab === "video" ? state.attached.filter((id) => state.refs.some((r) => r.id === id)) : undefined });
+    const { clip } = await api("POST", "generate", g.body);
     upsertClip(clip);
   } catch (error) {
     say(error.message);
   }
 }
 
-// A Pruna picture: Image (a prompt, and picture 1-9) or a character sheet (the character, its helpers and views).
-async function generatePruna(prompt) {
-  const sheet = sheetOn(), list = slots();
-  if (sheet && !list[0]) { say("Add the character picture first."); return; }
-  if (!sheet && !prompt) { say("Write a prompt first."); return; }
-  const empty = emptyNamed(prompt);
-  if (empty.length) { say(`The prompt names ${empty.map((n) => "picture " + n).join(" and ")}, but ${empty.length > 1 ? "those slots are" : "that slot is"} empty. Fill it, or change the prompt.`); return; }
-  state.settingsOpen = false;
-  render();
+// ---- What the model gets: hover the eye in the prompt bar ----
+{
+  const wrap = () => document.querySelector(".sent-wrap");
+  document.addEventListener("mouseover", (e) => {
+    if (!wrap()?.contains(e.target)) return;
+    clearTimeout(SENT.timer);
+    SENT.timer = setTimeout(() => showSent(), 250);
+  });
+  document.addEventListener("mouseout", (e) => {
+    if (!wrap()?.contains(e.target) || wrap().contains(e.relatedTarget)) return;
+    clearTimeout(SENT.timer);
+    SENT.timer = setTimeout(() => hideSent(), 300);
+  });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("sentBox").hidden) hideSent(true); });
+}
+const SENT = { timer: null, key: "", pinned: false, busy: false };
+function sentKey() { try { return JSON.stringify(generateBody()); } catch { return ""; } }
+async function showSent(pin) {
+  const box = $("sentBox");
+  if (pin !== undefined) SENT.pinned = pin;
+  box.hidden = false;
+  $("sentBtn").setAttribute("aria-expanded", "true");
+  const key = sentKey();
+  if (key === SENT.key && !box.classList.contains("stale")) return;
+  SENT.key = key;
+  const g = generateBody();
+  if (g.error) { box.innerHTML = sentHTML(null, g.error); return; }
+  box.classList.add("stale");
   try {
-    const { clip } = await api("POST", "generate", { kind: "pruna", mode: state.prunaMode, prompt, settings: state.prunaSettings, slots: list,
-      sheet: sheet ? { text: sheetText(), ratio: sheetLayout().ratio, ...state.prunaSheet } : undefined });
-    upsertClip(clip);
-  } catch (error) {
-    say(error.message);
-  }
+    const r = await api("POST", "preview", g.body);
+    if (SENT.key !== key) return;
+    box.innerHTML = sentHTML(r);
+  } catch (error) { box.innerHTML = sentHTML(null, error.message); }
+  box.classList.remove("stale");
+}
+function hideSent(force) {
+  if (SENT.pinned && !force) return;
+  SENT.pinned = false;
+  $("sentBox").hidden = true;
+  $("sentBtn").setAttribute("aria-expanded", "false");
+}
+function sentHTML(r, error) {
+  if (!r) return `<div class="sent-head"><b>What the model gets</b></div><p class="sent-note">${esc(error)}</p>`;
+  const parts = r.texts.map((t) => `<div class="sent-part"><span class="sent-label">${esc(t.label)}</span><pre class="sent-text">${esc(t.text) || "<i>(empty)</i>"}</pre></div>`).join("");
+  const pics = r.pictures.length ? `<div class="sent-part"><span class="sent-label">Pictures, in order</span><ul class="sent-pics">${r.pictures.map((p, i) => `<li><b>Picture ${i + 1}</b> ${esc(p)}</li>`).join("")}</ul></div>` : "";
+  return `<div class="sent-head"><b>What ${esc(r.model || "the model")} gets</b><button class="link" data-act="copySent">Copy</button></div>${parts}${pics}
+    <p class="sent-note">${SENT.pinned ? "Click the eye again to close." : "Click the eye to keep this open."}</p>`;
 }
 
 /* ------------------------------------------------------------------
@@ -2781,6 +2823,8 @@ const ACT = {
   whyMissing: () => { say(missingWhy()); openModels(state.tab); },
   openModels: () => { showAppMenu(false); openModels(); },
   openBuilder: () => { ACT.closePopups?.(); openBuilder(); },
+  toggleSent: () => { if (SENT.pinned) hideSent(true); else { SENT.key = ""; showSent(true); } },
+  copySent: () => { const t = [...document.querySelectorAll("#sentBox .sent-text")].map((x) => x.textContent).join("\n\n"); copyText(t, () => say("Copied what the model gets.")); },
   tokenSave: async () => {
     const token = $("hfToken").value.trim();
     if (!token) { say("Paste your Hugging Face token first."); $("hfToken").focus(); return; }

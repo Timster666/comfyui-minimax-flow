@@ -526,6 +526,19 @@ body.dragging-ref .composer { border-color: var(--line-strong); }
 .dm-empty { color: var(--muted); font-size: 14px; padding: 24px 10px; text-align: center; line-height: 1.5; }
 .dm-empty.bad { color: #f08a8a; }
 .builder-pill { display: inline-flex; align-items: center; gap: 7px; }
+.sent-wrap { position: relative; display: inline-flex; }
+.sent-btn { display: inline-grid; place-items: center; padding: 0 12px; }
+.sent-btn[aria-expanded="true"] { color: var(--accent-text); }
+.sent-box { position: absolute; bottom: calc(100% + 10px); right: -120px; width: min(620px, 80vw); max-height: 60vh; overflow-y: auto; z-index: 30;
+  background: var(--raised); border: 1px solid var(--raised-2); border-radius: 14px; padding: 14px 16px; box-shadow: 0 16px 40px rgba(0,0,0,.55); text-align: left; }
+.sent-box.stale { opacity: .6; }
+.sent-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; font-size: 14px; }
+.sent-part + .sent-part { margin-top: 12px; }
+.sent-label { display: block; font-size: 11.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; margin-bottom: 4px; }
+.sent-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--text); background: #131417; border-radius: 9px; padding: 10px 12px; }
+.sent-pics b { font-weight: 600; color: var(--text); margin-right: 6px; }
+.sent-pics { list-style: none; margin: 0; padding-left: 2px; font-size: 13px; color: var(--text-soft); line-height: 1.6; }
+.sent-note { margin: 10px 0 0; font-size: 12px; color: var(--muted); }
 .pb-scrim { position: fixed; inset: 0; z-index: 40; background: rgba(0,0,0,.6); display: flex; align-items: stretch; justify-content: center; padding: 3vh 2.5vw; }
 .pb { position: relative; flex: 1; max-width: 1600px; background: var(--surface); border: 1px solid var(--raised-2); border-radius: 18px; display: flex; flex-direction: column; box-shadow: 0 24px 60px rgba(0,0,0,.55); min-height: 0; }
 .pb-head { display: flex; align-items: center; gap: 14px; padding: 16px 20px; border-bottom: 1px solid var(--line); }
@@ -863,6 +876,11 @@ body.dragging-ref .composer { border-color: var(--line-strong); }
         <span class="hint" id="hint">Type @ to use an image</span>
         <div class="bar-right">
           <div class="settings" id="settings" hidden></div>
+          <span class="sent-wrap">
+            <button class="pill sent-btn" id="sentBtn" data-act="toggleSent" aria-expanded="false" aria-controls="sentBox" aria-label="What the model gets" title="What the model gets">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg></button>
+            <div class="sent-box" id="sentBox" role="dialog" aria-label="What the model gets" hidden></div>
+          </span>
           <button class="pill builder-pill" id="builderBtn" data-act="openBuilder" title="Put a prompt together from your saved prompts">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><path d="M17.5 14v7M14 17.5h7"/></svg>Builder</button>
           <button class="pill" id="pill" data-act="toggleSettings" aria-expanded="false"></button>
