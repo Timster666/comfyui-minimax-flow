@@ -139,10 +139,14 @@ class DriveCopy:
         return gdrive.problem() is None
 
     def view(self):
-        return self.state if self.on() else {"state": "off", "error": None, "at": None, "fetched": 0}
+        if not self.on():
+            return {"state": "off", "error": None, "at": None, "fetched": 0}
+        return self.state if self.state["state"] != "off" else {**self.state, "state": "idle"}
 
     def start(self):
         if self.on() and (not self.task or self.task.done()):
+            # Syncing from now, so the page that asked keeps looking until it's done.
+            self.state = {**self.state, "state": "syncing", "error": None}
             self.task = asyncio.ensure_future(self.sync())
         return self.view()
 
@@ -153,8 +157,10 @@ class DriveCopy:
         self.state = {**self.state, "state": "syncing", "error": None}
         try:
             only = ["--include", "*.safetensors", "--ignore-existing"]
-            await gdrive.DRIVE.run("copy", gdrive.remote("refmods"), folder, *only)
+            # The refmods folder on Drive is made the first time; copying from it before it exists fails.
+            await gdrive.DRIVE.run("mkdir", gdrive.remote("refmods"))
             await gdrive.DRIVE.run("copy", folder, gdrive.remote("refmods"), *only)
+            await gdrive.DRIVE.run("copy", gdrive.remote("refmods"), folder, *only)
             after = {f for f in os.listdir(folder) if f.endswith(".safetensors")}
             fetched = len(after - before)
             import json
