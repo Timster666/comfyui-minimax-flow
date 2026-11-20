@@ -622,6 +622,9 @@ body.dragging-ref .composer { border-color: var(--line-strong); }
 .rm-pic img { width: 72px; height: 72px; object-fit: cover; border-radius: 10px; border: 2px solid transparent; }
 .rm-pic input { position: absolute; top: 4px; left: 4px; }
 .rm-pic input:checked ~ img { border-color: var(--accent); }
+.fc-pic { background: none; border: 0; padding: 0; }
+.fc-pic.on img { border-color: var(--accent); }
+.fc-pic span { max-width: 72px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rm-mode { font-size: 13.5px; color: var(--text-soft); display: flex; align-items: center; gap: 6px; }
 .lm.drop { outline: 2px dashed var(--accent); outline-offset: -6px; }
 .lm.drop .lm-list { opacity: .4; }
@@ -954,6 +957,24 @@ body.dragging-ref .composer { border-color: var(--line-strong); }
     </div>
     <div class="lm-foot"><span class="lm-hint">Made in ComfyUI's queue with H3's video VAE, then listed under RefMods in the Video settings.</span>
       <button class="btn" data-act="rmClose">Cancel</button><button class="btn primary" id="rmGo" data-act="rmGo">Make RefMod</button></div>
+  </div>
+</div>
+<div class="lm-scrim" id="facesModal" hidden>
+  <div class="lm rm" role="dialog" aria-modal="true" aria-labelledby="fcTitle">
+    <div class="lm-head">
+      <div><h2 id="fcTitle">Refine faces</h2><div class="lm-count">Small faces re-rendered up close with H3, and put back. Best on wide shots.</div></div>
+      <button class="lm-close" data-act="facesClose" aria-label="Close">×</button>
+    </div>
+    <div class="rm-body">
+      <label class="rm-field"><span class="label">Model</span><select class="select" id="fcModel"></select><span class="hint" id="fcModelHint"></span></label>
+      <div class="rm-field"><span class="label">How much it changes the face</span>
+        <label class="rm-mode"><input type="radio" name="fcStrength" value="light"> <b>Light</b> · sharper, nearly the same face</label>
+        <label class="rm-mode"><input type="radio" name="fcStrength" value="normal" checked> <b>Normal</b> · the pack's own setting</label>
+        <label class="rm-mode"><input type="radio" name="fcStrength" value="strong"> <b>Strong</b> · rebuilds badly drawn faces; the head can drift</label></div>
+      <div class="rm-field"><span class="label">Face picture (optional)</span><div class="rm-pics" id="fcPics"></div><span class="hint" id="fcFaceHint"></span></div>
+    </div>
+    <div class="lm-foot"><span class="lm-hint">Keeps the clip's prompt, pictures, LoRAs, RefMods and sound. The result is a new clip; the original stays.</span>
+      <button class="btn" data-act="facesClose">Cancel</button><button class="btn primary" data-act="facesGo">Refine faces</button></div>
   </div>
 </div>
 <div class="lm-scrim" id="driveModal" hidden>

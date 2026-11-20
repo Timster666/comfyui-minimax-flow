@@ -27,7 +27,7 @@ import uuid
 
 from aiohttp import web
 
-from . import clip_info, comfy_link, edit_media, edit_project, gdrive, prompt_lib, refmod_bridge, h3_graph, klein_bridge, lora_in, model_store, moss_bridge, ph3_bridge
+from . import clip_info, comfy_link, edit_media, edit_project, face_refine, gdrive, prompt_lib, refmod_bridge, h3_graph, klein_bridge, lora_in, model_store, moss_bridge, ph3_bridge
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 APP_DIR = os.path.join(HERE, "app")
@@ -1304,6 +1304,65 @@ def video_file(entry):
     return None
 
 
+async def faces(request):
+    """GET /faces: whether Refine faces can run here, and the models it can use.
+    POST /clips/{id}/faces {model, strength, face, steps}: refine the faces of a finished video into a new clip."""
+    found, _ = video_models()
+    usable = face_refine.models(found)
+    if request.method == "GET":
+        return web.json_response({"why": face_refine.why_not(), "models": usable, "strengths": list(face_refine.STRENGTHS)})
+    why = face_refine.why_not()
+    if why:
+        raise web.HTTPBadRequest(text=why)
+    body = await request.json()
+    model = next((m for m in usable if m["name"] == body.get("model")), None)
+    if not model:
+        raise web.HTTPBadRequest(text="Pick a model to refine with (HyperFlow can't).")
+    strength = body.get("strength") if body.get("strength") in face_refine.STRENGTHS else "normal"
+    steps = int(body.get("steps") or model["steps"])
+    if not model.get("minSteps", 1) <= steps <= model["maxSteps"]:
+        raise web.HTTPBadRequest(text="%s takes %d to %d steps." % (model["name"], model.get("minSteps", 1), model["maxSteps"]))
+    async with _lock:
+        data = read_project()
+        source = next((c for c in data["clips"] if c["id"] == request.match_info["id"]), None)
+        if not source or source.get("kind", "video") != "video" or source.get("status") != "done" or not source.get("file"):
+            raise web.HTTPBadRequest(text="Only a finished video can have its faces refined.")
+        images = list(data["images"])
+        face = next((i for i in images if i["id"] == body.get("face")), None) if body.get("face") else None
+        if body.get("face") and not face:
+            raise web.HTTPBadRequest(text="That face picture isn't in Add image any more.")
+    path = clip_path(source)
+    if not os.path.isfile(path):
+        raise web.HTTPBadRequest(text="The video file of that clip is gone.")
+    clip = {k: v for k, v in source.items() if k not in ("prompt_id", "error", "upsampled", "sampler", "scheduler")}
+    if model["id"] == source.get("profile"):
+        clip.update({k: source[k] for k in ("sampler", "scheduler") if source.get(k)})
+    clip.update({"id": "c" + uuid.uuid4().hex[:10], "model": model["name"], "profile": model["id"], "steps": steps,
+                 "status": "queued", "step": 0, "file": None, "subfolder": ROOT + "/clips", "starred": False,
+                 "created": time.time(), "faces": {"from": source["id"], "strength": strength,
+                                                   "face": face["id"] if face else None}})
+    if face and not any(r.get("id") == face["id"] for r in clip.get("refs") or []):
+        clip["refs"] = list(clip.get("refs") or []) + [{"id": face["id"], "name": face["name"]}]
+    try:
+        graph = face_refine.build(clip, images, "%s/%s" % (source.get("subfolder") or ROOT + "/clips", source["file"]),
+                                  face_refine.has_audio(path), face="%s/images/%s" % (ROOT, face["file"]) if face else None,
+                                  strength=strength, name=clip_info.file_stem(clip) + "_faces")
+        clip["prompt_id"] = await queue(graph, clip_info.extra_data(clip), body.get("client_id"))
+    except (h3_graph.Missing, ValueError) as error:
+        raise web.HTTPBadRequest(text=str(error))
+    except Exception as error:
+        LOG.exception("MiniMax H3 Vision couldn't queue a face refine")
+        raise web.HTTPBadRequest(text="ComfyUI refused the refine: %s" % error)
+    async with _lock:
+        data = read_project()
+        at = next((n for n, c in enumerate(data["clips"]) if c["id"] == source["id"]), 0)
+        data["clips"].insert(at, clip)
+        write_project(data)
+    ensure_watcher()
+    broadcast(clip)
+    return web.json_response({"clip": clip})
+
+
 def numbered(folder, stem, ext):
     """A free file name the way ComfyUI numbers its outputs: stem_00001_.ext, stem_00002_.ext, ..."""
     n = 1
@@ -1629,6 +1688,8 @@ ROUTES = (
     ("POST", "/mmflow/api/images/from-clip", image_from_clip),
     ("PATCH", "/mmflow/api/images/{id}", rename_image),
     ("POST", "/mmflow/api/generate", generate),
+    ("GET", "/mmflow/api/faces", faces),
+    ("POST", "/mmflow/api/clips/{id}/faces", faces),
     ("POST", "/mmflow/api/import", import_clip),
     ("PATCH", "/mmflow/api/clips/{id}", update_clip),
     ("DELETE", "/mmflow/api/clips/{id}", delete_clip),

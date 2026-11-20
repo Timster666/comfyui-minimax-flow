@@ -4,6 +4,7 @@ They come from the H3 editor's nodes (see NOTICE), under names of their own (MMV
 and the H3 editor can be installed side by side. Each video graph uses them like this:
 
 - MMVisionLoadStill: an @image, read from the output folder, where the app keeps uploads.
+- MMVisionLoadVideo: a clip, read from the output folder, for Refine faces.
 - MMVisionHyperFlowLoader and MMVisionHyperFlowSigmas: HyperFlow H3 Flash, its model and its 4, 6 or 8-step schedule.
 - MMVisionLora: an H3 LoRA, renumbered for HyperFlow and added at run time on INT8 weights.
 - MMVisionLivePreview: the moving preview of the clip at every step.
@@ -47,6 +48,24 @@ class LoadStill(io.ComfyNode):
         with Image.open(output_file(file)) as image:
             pixels = np.array(ImageOps.exif_transpose(image).convert("RGB")).astype(np.float32) / 255.0
         return io.NodeOutput(torch.from_numpy(pixels)[None])
+
+
+class LoadVideo(io.ComfyNode):
+    @classmethod
+    def define_schema(cls):
+        return io.Schema(
+            node_id="MMVisionLoadVideo",
+            display_name="Vision Load Video",
+            category=CATEGORY,
+            description="Read a video from the output folder, where MiniMax H3 Vision keeps its clips.",
+            inputs=[io.String.Input("file", tooltip="Path inside the output folder.")],
+            outputs=[io.Video.Output(display_name="video")],
+        )
+
+    @classmethod
+    def execute(cls, file) -> io.NodeOutput:
+        from comfy_api.latest import InputImpl
+        return io.NodeOutput(InputImpl.VideoFromFile(output_file(file)))
 
 
 class Lora(io.ComfyNode):
@@ -274,10 +293,10 @@ class PasteCrop(io.ComfyNode):
         return io.NodeOutput(out)
 
 
-NODE_CLASS_MAPPINGS = {"MMVisionLoadStill": LoadStill, "MMVisionLora": Lora, "MMVisionHyperFlowLoader": HyperFlowLoader,
+NODE_CLASS_MAPPINGS = {"MMVisionLoadStill": LoadStill, "MMVisionLoadVideo": LoadVideo, "MMVisionLora": Lora, "MMVisionHyperFlowLoader": HyperFlowLoader,
                        "MMVisionHyperFlowSigmas": HyperFlowSigmas, "MMVisionLivePreview": LivePreview,
                        "MMVisionLoadMask": LoadMask, "MMVisionCropToMask": CropToMask, "MMVisionPasteCrop": PasteCrop}
-NODE_DISPLAY_NAME_MAPPINGS = {"MMVisionLoadStill": "Vision Load Still", "MMVisionLora": "Vision H3 LoRA",
+NODE_DISPLAY_NAME_MAPPINGS = {"MMVisionLoadStill": "Vision Load Still", "MMVisionLoadVideo": "Vision Load Video", "MMVisionLora": "Vision H3 LoRA",
                               "MMVisionHyperFlowLoader": "Vision HyperFlow Loader",
                               "MMVisionHyperFlowSigmas": "Vision HyperFlow Sigmas", "MMVisionLivePreview": "Vision Live Preview",
                               "MMVisionLoadMask": "Vision Load Mask", "MMVisionCropToMask": "Vision Crop To Mask",
