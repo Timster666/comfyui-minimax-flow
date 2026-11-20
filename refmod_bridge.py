@@ -157,7 +157,11 @@ class DriveCopy:
             await gdrive.DRIVE.run("copy", folder, gdrive.remote("refmods"), *only)
             after = {f for f in os.listdir(folder) if f.endswith(".safetensors")}
             fetched = len(after - before)
-            self.state = {"state": "synced", "error": None, "at": time.time(), "fetched": fetched}
+            import json
+            on_drive = [f for f in json.loads(await gdrive.DRIVE.run("lsjson", gdrive.remote("refmods"), "--files-only") or "[]")
+                        if f["Name"].endswith(".safetensors")]
+            self.state = {"state": "synced", "error": None, "at": time.time(), "fetched": fetched,
+                          "here": len(after), "drive": len(on_drive), "folder": folder}
             if fetched and self.on_change:
                 self.on_change()
         except Exception as error:

@@ -1487,9 +1487,9 @@ function refmodDriveLine() {
   const d = RM.drive || {};
   if (d.state === "off") return "";
   const text = d.state === "syncing" ? "Copying RefMods to and from Google Drive…"
-    : d.state === "error" ? "Couldn't copy RefMods to or from Google Drive."
-    : "Kept on Google Drive too (refmods folder)" + (d.fetched ? ` · ${d.fetched} fetched` : "");
-  return `<span class="hint ${d.state === "error" ? "bad-hint" : ""}" title="${esc(d.error || "")}">${text}${d.state === "syncing" ? "" : ` · <button class="link" data-act="refmodSync">Sync now</button>`}</span>`;
+    : d.state === "error" ? "Couldn't copy RefMods to or from Google Drive: " + (d.error || "unknown error")
+    : `Google Drive › refmods: ${d.drive ?? "?"} file${d.drive === 1 ? "" : "s"} · on this pod: ${d.here ?? "?"}` + (d.fetched ? ` · ${d.fetched} fetched` : "");
+  return `<span class="hint ${d.state === "error" ? "bad-hint" : ""}" title="${esc(d.folder ? "This pod's RefMods folder: " + d.folder : "")}">${esc(text)}${d.state === "syncing" ? "" : ` · <button class="link" data-act="refmodSync">Sync now</button>`}</span>`;
 }
 function openRefmodMaker() {
   const pics = state.attached.map((id) => state.refs.find((r) => r.id === id)).filter(Boolean);
