@@ -1452,9 +1452,13 @@ function renderSettings() {
 
 // ---- RefMods (Video, with the ComfyUI-MiniMaxH3Mod pack) ----
 // Saved references made from pictures (no training); a render carries up to eight, each with a strength.
-const RM = { installed: false, files: [], jobs: [], loaded: false };
-async function loadRefmods() {
-  try { Object.assign(RM, await api("GET", "refmods"), { loaded: true }); } catch { return; }
+const RM = { installed: false, files: [], jobs: [], loaded: false, drive: { state: "off" } };
+let rmDriveTimer = null;
+async function loadRefmods(sync) {
+  try { Object.assign(RM, await api("GET", "refmods" + (sync ? "?sync=1" : "")), { loaded: true }); } catch { return; }
+  // While Google Drive is being copied to or from, look again in a moment.
+  clearTimeout(rmDriveTimer);
+  if (RM.drive.state === "syncing") rmDriveTimer = setTimeout(() => loadRefmods(), 3000);
   const s = state.videoSettings;
   if (Array.isArray(s.refmods)) s.refmods = s.refmods.filter((m) => RM.files.includes(m.file));
   if (state.settingsOpen && state.tab === "video") render();
@@ -1476,7 +1480,16 @@ function refmodsField(s) {
       ${chosen.length < 8 && left.length ? `<select class="select" data-change="addRefmod" aria-label="Add a RefMod"><option value="">+ Add a RefMod…</option>${left.map((f) => `<option value="${esc(f)}">${esc(f)}</option>`).join("")}</select>` : ""}
       ${making.map((j) => `<span class="hint">Making ${esc(j.name)}…</span>`).join("")}
       <span class="hint">${RM.files.length ? "Describe who is in the shot in the prompt: a RefMod has no tag." : "None yet: make one from pictures in the prompt bar."}</span>
+      ${refmodDriveLine()}
     </div>`;
+}
+function refmodDriveLine() {
+  const d = RM.drive || {};
+  if (d.state === "off") return "";
+  const text = d.state === "syncing" ? "Copying RefMods to and from Google Drive…"
+    : d.state === "error" ? "Couldn't copy RefMods to or from Google Drive."
+    : "Kept on Google Drive too (refmods folder)" + (d.fetched ? ` · ${d.fetched} fetched` : "");
+  return `<span class="hint ${d.state === "error" ? "bad-hint" : ""}" title="${esc(d.error || "")}">${text}${d.state === "syncing" ? "" : ` · <button class="link" data-act="refmodSync">Sync now</button>`}</span>`;
 }
 function openRefmodMaker() {
   const pics = state.attached.map((id) => state.refs.find((r) => r.id === id)).filter(Boolean);
@@ -2145,6 +2158,7 @@ function connect() {
           saveUi(); if (state.tab === "video") render();
           say(`The RefMod ${j.name} is ready, and added to the Video settings.`);
         } else if (j.state === "failed") say(`Couldn't make the RefMod ${j.name}: ${j.error}`);
+        else if (j.state === "fetched") { if (state.tab === "video" && state.settingsOpen) render(); say("RefMods from Google Drive are here."); }
       });
     }
     if (msg.type === "mmflow.models") { load(false); if (MODELS.open) pollModels(false); }
@@ -2894,6 +2908,7 @@ const ACT = {
   openModels: () => { showAppMenu(false); openModels(); },
   openBuilder: () => { ACT.closePopups?.(); openBuilder(); },
   makeRefmod: () => openRefmodMaker(),
+  refmodSync: () => { RM.drive = { ...RM.drive, state: "syncing" }; render(); loadRefmods(true); },
   rmGo: () => makeRefmod(),
   rmClose: () => { $("refmodModal").hidden = true; },
   removeRefmod: (file) => { const s = state.videoSettings; s.refmods = (s.refmods || []).filter((m) => m.file !== file); render(); saveUi(); },

@@ -41,7 +41,10 @@ H3's video VAE in a minute, without training. In the Video settings, **RefMods**
 to eight, each with a strength), **+ Add a RefMod** picks one, and **+ Make one** makes one from the prompt bar's
 pictures: a name, what it holds (a person, clothing, a style, a place), Compressed (quick to render with) or Full
 (more detail, renders several times slower), and an optional description. When it's made it's added to the
-settings. A RefMod has no tag: describe who is in the shot in the prompt. Without the pack, Vision renders as before.
+settings. A RefMod has no tag: describe who is in the shot in the prompt. Without the pack, Vision renders as before. With Google
+Drive set up, RefMods are kept in a `refmods` folder in the Drive folder too: the ones a pod lacks are fetched the
+first time the Video settings look at RefMods after ComfyUI starts, a new one is uploaded when it's made, and
+**Sync now** copies both ways. Nothing is deleted on either side.
 
 The **eye** in the prompt bar (every tab) shows exactly what the model would get, if you rendered now: the
 prompt text after Vision's changes, the negative prompt or the upsampler's request where there is one, and the
