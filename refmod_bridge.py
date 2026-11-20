@@ -10,11 +10,12 @@ Everything here is optional: without the pack, Vision offers no RefMods and rend
 
 import asyncio
 import logging
+import os
 import re
 import time
 import uuid
 
-from . import comfy_link
+from . import comfy_link, gdrive
 
 LOG = logging.getLogger("minimax_flow")
 LOADER, APPLY, EXTRACT = "MiniMaxH3RefModsLoader", "MiniMaxH3RefModApply", "MiniMaxH3RefModExtract"
@@ -113,6 +114,61 @@ def make_graph(name, pictures, vae, mode="compressed", concept="identity", descr
     return graph
 
 
+def refmods_dir():
+    """Where the pack saves and loads RefMods (models/refmods)."""
+    import folder_paths
+    try:
+        roots = folder_paths.get_folder_paths("refmods")
+    except Exception:
+        roots = []
+    return roots[0] if roots else os.path.join(folder_paths.models_dir, "refmods")
+
+
+class DriveCopy:
+    """RefMods kept in the Google Drive folder too, in a refmods folder there: the ones on Drive that this pod lacks are
+    fetched, and the ones made here are uploaded. Nothing is deleted on either side. Runs on the first look at the
+    RefMods after ComfyUI starts, after each RefMod is made, and when asked."""
+
+    def __init__(self):
+        self.state = {"state": "off", "error": None, "at": None, "fetched": 0}
+        self.task = None
+        self.done_once = False
+        self.on_change = None
+
+    def on(self):
+        return gdrive.problem() is None
+
+    def view(self):
+        return self.state if self.on() else {"state": "off", "error": None, "at": None, "fetched": 0}
+
+    def start(self):
+        if self.on() and (not self.task or self.task.done()):
+            self.task = asyncio.ensure_future(self.sync())
+        return self.view()
+
+    async def sync(self):
+        folder = refmods_dir()
+        os.makedirs(folder, exist_ok=True)
+        before = {f for f in os.listdir(folder) if f.endswith(".safetensors")}
+        self.state = {**self.state, "state": "syncing", "error": None}
+        try:
+            only = ["--include", "*.safetensors", "--ignore-existing"]
+            await gdrive.DRIVE.run("copy", gdrive.remote("refmods"), folder, *only)
+            await gdrive.DRIVE.run("copy", folder, gdrive.remote("refmods"), *only)
+            after = {f for f in os.listdir(folder) if f.endswith(".safetensors")}
+            fetched = len(after - before)
+            self.state = {"state": "synced", "error": None, "at": time.time(), "fetched": fetched}
+            if fetched and self.on_change:
+                self.on_change()
+        except Exception as error:
+            LOG.warning("MiniMax H3 Vision couldn't copy RefMods to or from Google Drive: %s", error)
+            self.state = {"state": "error", "error": str(error) or type(error).__name__, "at": None, "fetched": 0}
+        self.done_once = True
+
+
+DRIVE_COPY = DriveCopy()
+
+
 class Maker:
     """RefMods being made: queued in ComfyUI like a render, watched until the file is there."""
 
@@ -160,6 +216,8 @@ class Maker:
         else:
             job.update(state="failed", error="It took too long.")
         job["ended"] = time.time()
+        if job["state"] == "done":
+            DRIVE_COPY.start()   # onto Google Drive too
         if self.on_done:
             self.on_done(job)
 

@@ -407,10 +407,16 @@ async def refmods(request):
     replace}: make one from pictures in Add image."""
     maker = refmod_bridge.MAKER
     maker.on_done = refmod_made
+    copy = refmod_bridge.DRIVE_COPY
+    copy.on_change = lambda: refmod_made({"id": "", "name": "", "state": "fetched", "error": None})
     have = refmod_bridge.files()
     if request.method == "GET":
+        # The first look after ComfyUI starts fetches the RefMods on Google Drive; ?sync=1 copies both ways now.
+        if have is not None and (request.query.get("sync") == "1" or not copy.done_once):
+            copy.start()
         return web.json_response({"installed": have is not None, "files": have or [], "jobs": maker.status(),
-                                  "modes": list(refmod_bridge.MODES), "concepts": refmod_bridge.CONCEPTS})
+                                  "modes": list(refmod_bridge.MODES), "concepts": refmod_bridge.CONCEPTS,
+                                  "drive": copy.view()})
     if have is None:
         raise web.HTTPBadRequest(text="Making a RefMod needs the ComfyUI-MiniMaxH3Mod node pack. On RunPod: set ENABLE_REFMOD=true.")
     body = await request.json()
