@@ -46,6 +46,14 @@ Drive set up, RefMods are kept in a `refmods` folder in the Drive folder too: th
 first time the Video settings look at RefMods after ComfyUI starts, a new one is uploaded when it's made, and
 **Sync now** copies both ways. Nothing is deleted on either side.
 
+**Refine faces** (optional, with Carasibana's [ComfyUI-H3-FaceRefine](https://github.com/Carasibana/ComfyUI-H3-FaceRefine),
+the `MiniMaxH3NativeAudioLock` node and the `face_yolov8m.pt` detector in `models/ultralytics/bbox`; on RunPod
+`ENABLE_FACEREFINE=true`): a finished video's ⋯ menu › **Refine faces…** tracks the face on every frame, re-renders it
+up close with H3 at a low denoise (Light, Normal or Strong) using the clip's prompt, pictures, LoRAs and RefMods, with
+its own sound locked in for the lips, and stitches it back. An optional face picture from Add image joins the
+references and picks which face to follow; without one, the largest face is refined. The result is a new clip with
+the original sound. HyperFlow can't refine (its schedule is fixed), so those clips are refined with another model.
+
 The **eye** in the prompt bar (every tab) shows exactly what the model would get, if you rendered now: the
 prompt text after Vision's changes, the negative prompt or the upsampler's request where there is one, and the
 pictures in the order they're sent. Point at it to see it, click it to keep it open; **Copy** copies the text.

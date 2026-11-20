@@ -218,6 +218,7 @@ const ICON = {
   upload: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 16V4M7 9l5-5 5 5M5 20h14"/></svg>',
   download: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 4v12M7 11l5 5 5-5M5 20h14"/></svg>',
   trash: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>',
+  face: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9 10h.01M15 10h.01M8.5 15a5 5 0 0 0 7 0"/></svg>',
   reuse: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 12a8 8 0 0 1 14-5.3L20 9M20 4v5h-5M20 12a8 8 0 0 1-14 5.3L4 15M4 20v-5h5"/></svg>',
   video: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3"/></svg>',
   image: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-9 9"/></svg>',
@@ -491,7 +492,8 @@ function videoTile(c) {
           <button class="cancel" data-act="cancel" data-id="${c.id}">Cancel</button></span>` : ""}
         ${failed ? `<span class="busy failed"><span>Render failed</span><span class="fail-why">${esc(c.error || "")}</span>
           <button class="cancel" data-act="deleteClip" data-id="${c.id}">Remove</button></span>` : ""}
-        <span class="len" data-len="${c.id}">${c.len} s</span>
+        <span class="len" data-len="${c.id}">${c.len} s</span>${c.faces ? `
+        <span class="badge" title="Faces refined from another clip">Faces refined</span>` : ""}
         ${c.file ? `<span class="hover-line" aria-hidden="true"><span data-hoverbar="${c.id}"></span></span>` : ""}
         <button class="pick ${state.picked.has(c.id) ? "on" : ""}" data-act="pick" data-id="${c.id}" role="checkbox" aria-checked="${state.picked.has(c.id)}" aria-label="Select for Delete" title="Select (⌘-click or Shift-click the tiles for more)">${ICON.check}</button>
       </div>
@@ -1521,6 +1523,48 @@ async function makeRefmod(replace = false) {
   }
 }
 
+// Refine faces (ComfyUI-H3-FaceRefine): a finished video's faces re-rendered up close and put back, as a new clip.
+const FACES = { why: null, models: [], clip: null, face: null };
+async function loadFaces() {
+  try { Object.assign(FACES, await api("GET", "faces")); } catch {}
+}
+async function openFaces(c) {
+  await loadFaces();
+  if (FACES.why) { say(FACES.why); return; }
+  if (!FACES.models.length) { say("Refine faces needs a MiniMax H3 model other than HyperFlow."); return; }
+  FACES.clip = c.id;
+  // The clip's own pictures first: one of them is usually the close-up of the face.
+  const own = (c.pictures || c.refs || []).map((p) => p.id);
+  FACES.face = null;
+  const model = FACES.models.find((m) => m.name === c.model) || FACES.models[0];
+  $("fcModel").innerHTML = FACES.models.map((m) => `<option value="${esc(m.name)}" ${m === model ? "selected" : ""}>${esc(m.name)} · ${m.steps} steps</option>`).join("");
+  $("fcModelHint").textContent = c.model === model.name ? "The model the clip was made with."
+    : c.profile === "hyperflow" ? `${c.model} can't refine (its fixed schedule can't re-render part of the way), so another model does the faces.`
+    : `${c.model} isn't installed, so another model does the faces.`;
+  FACES.order = [...own, ...state.refs.map((r) => r.id).filter((id) => !own.includes(id))];
+  drawFacePics();
+  document.querySelector("input[name=fcStrength][value=normal]").checked = true;
+  $("facesModal").hidden = false;
+}
+function drawFacePics() {
+  const pics = FACES.order.map((id) => state.refs.find((r) => r.id === id)).filter(Boolean);
+  $("fcPics").innerHTML = pics.length ? pics.map((r) => `<button class="rm-pic fc-pic ${FACES.face === r.id ? "on" : ""}" data-act="facesPick" data-id="${r.id}" aria-pressed="${FACES.face === r.id}">
+      <img src="${r.img}" alt=""><span>${esc(r.name)}</span></button>`).join("")
+    : `<p class="hint">No pictures in Add image. Without one, the largest face is refined.</p>`;
+  $("fcFaceHint").textContent = FACES.face ? "This face is refined, looking like the picture: a sharp close-up works best."
+    : "None picked: the largest face is refined, from the clip's own pictures and prompt.";
+}
+async function refineFaces() {
+  const body = { model: $("fcModel").value, strength: document.querySelector("input[name=fcStrength]:checked").value,
+    face: FACES.face };
+  try {
+    const r = await api("POST", "clips/" + FACES.clip + "/faces", body);
+    $("facesModal").hidden = true;
+    upsertClip(r.clip);
+    say("Refining the faces. The result comes in as a new clip next to the original.");
+  } catch (error) { say(error.message); }
+}
+
 // The Klein tab's settings: Model, Size (Match image 1 or an aspect ratio), Resolution, Steps, Guidance (Base
 // only: Distilled renders without it), Seed, LoRAs (the loras/Flux Klein folder).
 // Face swap's own settings: the BFS LoRA, and with Only the head its sampler, the mask's edge and Refine face.
@@ -2347,7 +2391,8 @@ function openMenu(id, x, y) {
     <button role="menuitem" data-act="menuDelete" class="danger">${ICON.trash}${isBusy(c) ? "Cancel and delete" : "Delete"}</button>
     <span class="ctx-line"></span>${kindOf(c) === "video" ? (EDIT.has(c.id)
       ? `<button role="menuitem" aria-disabled="true" class="off" title="This video is on the edit's timeline already.">${ICON.check}Already in the edit</button>`
-      : `<button role="menuitem" data-act="menuAddToEdit" ${c.status === "done" && c.file ? "" : 'aria-disabled="true" class="off"'}>${ICON.edit}Add to edit</button>`) : ""}
+      : `<button role="menuitem" data-act="menuAddToEdit" ${c.status === "done" && c.file ? "" : 'aria-disabled="true" class="off"'}>${ICON.edit}Add to edit</button>`) : ""}${kindOf(c) === "video" ? `
+    <button role="menuitem" data-act="menuFaces" ${c.status === "done" && c.file ? "" : 'aria-disabled="true" class="off"'} title="${esc(FACES.why || "Re-render small faces up close and put them back, as a new clip")}">${ICON.face}Refine faces…</button>` : ""}
     <button role="menuitem" data-act="menuReuse">${ICON.reuse}Use this prompt and settings</button>
     <button role="menuitem" data-act="menuCopyPrompt" ${c.prompt ? "" : 'aria-disabled="true" class="off"'}>${ICON.copy}Copy prompt</button>${kindOf(c) === "image" ? `
     <button role="menuitem" data-act="menuUseInVideo" ${c.status === "done" ? "" : 'aria-disabled="true" class="off"'}>${ICON.video}Use in a video</button>
@@ -2941,6 +2986,10 @@ const ACT = {
     catch (error) { say(error.message); }
   },
   driveCancel: (id) => api("POST", `gdrive/${id}/cancel`).then((r) => driveJobs(r.jobs)).catch((e) => say(e.message)),
+  menuFaces: () => { const id = closeMenu(); const c = clipById(id); if (c && c.status === "done" && c.file) openFaces(c); },
+  facesGo: () => refineFaces(),
+  facesClose: () => { $("facesModal").hidden = true; },
+  facesPick: (id) => { FACES.face = FACES.face === id ? null : id; drawFacePics(); },
   menuDriveZip: () => { const id = closeMenu(); const c = clipById(id); if (c && c.status === "done" && c.file) driveSave({ clip: id }); },
   closeModels: () => closeModels(),
   modelsFilter: (id) => { MODELS.filter = id; renderModels(false); $("modelsBody").scrollTop = 0; },
@@ -3952,6 +4001,7 @@ async function load(first = true) {
     if (first) {
       driveStatus();
       loadRefmods();
+      loadFaces();
       const ui = data.ui || {};
       Object.assign(state.videoSettings, ui.settings || {});
       Object.assign(state.imageSettings, ui.imageSettings || {});
