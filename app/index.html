@@ -622,6 +622,7 @@ body.dragging-ref .composer { border-color: var(--line-strong); }
 .rm-pic img { width: 72px; height: 72px; object-fit: cover; border-radius: 10px; border: 2px solid transparent; }
 .rm-pic input { position: absolute; top: 4px; left: 4px; }
 .rm-pic input:checked ~ img { border-color: var(--accent); }
+.sw-details { resize: vertical; min-height: 64px; padding: 8px 12px; font: inherit; line-height: 1.4; }
 .fc-pic { background: none; border: 0; padding: 0; }
 .fc-pic.on img { border-color: var(--accent); }
 .fc-pic span { max-width: 72px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -957,6 +958,22 @@ body.dragging-ref .composer { border-color: var(--line-strong); }
     </div>
     <div class="lm-foot"><span class="lm-hint">Made in ComfyUI's queue with H3's video VAE, then listed under RefMods in the Video settings.</span>
       <button class="btn" data-act="rmClose">Cancel</button><button class="btn primary" id="rmGo" data-act="rmGo">Make RefMod</button></div>
+  </div>
+</div>
+<div class="lm-scrim" id="swapModal" hidden>
+  <div class="lm rm" role="dialog" aria-modal="true" aria-labelledby="swTitle">
+    <div class="lm-head">
+      <div><h2 id="swTitle">Swap character</h2><div class="lm-count">Alissonerdx's swap LoRAs on MiniMax H3: this video's motion, lips, camera and sound, with the person from a picture.</div></div>
+      <button class="lm-close" data-act="swapClose" aria-label="Close">×</button>
+    </div>
+    <div class="rm-body">
+      <div class="rm-field"><span class="label">Swap</span><div class="seg" id="swModes"></div><span class="hint" id="swModeHint"></span></div>
+      <div class="rm-field"><span class="label">Picture</span><div class="rm-pics" id="swPics"></div><span class="hint" id="swPicHint"></span></div>
+      <label class="rm-field"><span class="label" id="swDetailsLabel">The character in words</span><textarea class="lm-link sw-details" id="swDetails" rows="3" spellcheck="false"></textarea><span class="hint" id="swDetailsHint"></span></label>
+      <div class="rm-field"><span class="label">Resolution</span><div class="seg" id="swRes"></div><span class="hint">In the video's own shape. Uses the first 15 seconds.</span></div>
+    </div>
+    <div class="lm-foot"><span class="lm-hint">8 steps on MiniMax H3's ref2va model with the DMD turbo LoRA. The result is a new clip; the video stays.</span>
+      <button class="btn" data-act="swapClose">Cancel</button><button class="btn primary" id="swGo" data-act="swapGo">Swap</button></div>
   </div>
 </div>
 <div class="lm-scrim" id="facesModal" hidden>

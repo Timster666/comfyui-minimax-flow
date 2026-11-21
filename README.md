@@ -51,6 +51,15 @@ the MMH3 Realism Slider LoRA on every video, as the H3 editor ran it on finals: 
 0.75, which set the composition, and joins for the detail, for natural, un-airbrushed skin. A clip keeps its
 strength, so Refine faces and **Use this prompt and settings** use it too.
 
+**Swap character** (with Alissonerdx's [Character Swap v1.1 and Head Swap v1.0](https://huggingface.co/Alissonerdx/Minimax-H3-ComfyUI)
+LoRAs, drbaph's DMD 8-step turbo LoRA and MiniMax H3's own ref2va model; BiRefNet optional; on RunPod `ENABLE_SWAP=true`):
+a finished or imported video's ⋯ menu › **Swap character…** puts the person from a picture into the video, keeping its
+motion, lips, camera and sound (first 15 s, at 0.4–1.0 MP in the video's shape). **Character** replaces the whole
+person, **Head only** (experimental) just the head. The prompt is the author's template; its one gap, the character
+(or the face) in words, is typed in the dialog or, left empty, written from the picture by MOSS-Image's text model
+while it renders. It follows the published native-node workflow: the video as an `MiniMaxH3AddGuide` guide at frame 0,
+the picture as a reference on grey, 8 steps, Euler (Beta for heads), CFG 1. The templates are Henge's (MIT).
+
 **Refine faces** (optional, with Carasibana's [ComfyUI-H3-FaceRefine](https://github.com/Carasibana/ComfyUI-H3-FaceRefine),
 the `MiniMaxH3NativeAudioLock` node and the `face_yolov8m.pt` detector in `models/ultralytics/bbox`; on RunPod
 `ENABLE_FACEREFINE=true`): a finished video's ⋯ menu › **Refine faces…** tracks the face on every frame, re-renders it
