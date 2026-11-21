@@ -254,7 +254,7 @@ def build(clip, images, source, mode, details="", megapixels=0.6, files=None, na
     MOSS-Image's text model describes the picture. model: the model family to swap on; the author's is the base
     model with the DMD turbo LoRA (as is any other non-turbo family), and a turbo family runs on its own. mark: {x, y, opacity}, a point on the first frame: only the person
     there is replaced (Character only), painted red on the guide and named in the prompt.
-    Motion: clip carries up to 9 pictures and the person's own prompt (details is not used).
+    Motion: clip carries up to 9 pictures, the person's own prompt and LoRAs (details is not used).
     """
     files = h3_graph.available() if files is None else files
     spec = MODES[mode]
@@ -268,7 +268,8 @@ def build(clip, images, source, mode, details="", megapixels=0.6, files=None, na
     clip = dict(clip, profile=model, refmods=None, realism=None,
                 steps=profile["steps"] if own else STEPS, sampler=profile["sampler"] if own else SAMPLER,
                 scheduler=(profile.get("scheduler") or spec["scheduler"]) if own else spec["scheduler"],
-                loras=([] if own else [{"name": TURBO, "strength": 1.0}]) + [{"name": spec["lora"], "strength": 1.0}],
+                loras=([] if own else [{"name": TURBO, "strength": 1.0}]) + [{"name": spec["lora"], "strength": 1.0}]
+                + (list(clip.get("loras") or []) if motion else []),
                 prompt=motion_prompt(clip["prompt"]) if motion
                 else prompt_of(mode, details, bool(mark)) if details.strip() else template_of(mode, bool(mark)))
     graph = h3_graph.build_graph(clip, images, files=files, name=name)

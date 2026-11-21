@@ -67,6 +67,7 @@ EXPORT_EVENT = "mmvision_export"
 _exports = {}   # export id -> {"cancel": bool}
 
 DEFAULT_UI = {
+    "motion": None,   # the Video tab's Motion from: the id of the video that gives the motion, or None
     "settings": {"model": "HyperFlow H3 Flash", "steps": 6, "res": 0.6, "aspect": "16:9", "len": 5,
                  "seedMode": "random", "seed": 48213, "loras": [], "realism": {"on": True, "strength": 1.2}},
     "imageSettings": {"model": "MOSS-Image SFT (INT8)", "steps": 50, "cfg": 3.0, "res": 1.0, "aspect": "1:1",
@@ -739,9 +740,37 @@ async def generate(request):
         # The pictures it uses, so a project export finds them even after a rename.
         clip["refs"] = ([dict(p) for p in pictures] if pictures is not None
                         else [{"id": i["id"], "name": i["name"]} for i in edit_project.refs_of(clip, images)])
+        motion = None
+        if body.get("motion"):
+            # Motion from a video: Motion Transfer v1.0, the video giving the motion, timing, camera and sound.
+            motion = next((c for c in data["clips"] if c["id"] == body["motion"]), None)
+            if not motion or motion.get("kind", "video") != "video" or motion.get("status") != "done" or not motion.get("file"):
+                raise web.HTTPBadRequest(text="The video to take the motion from isn't there any more.")
+            if not pictures:
+                raise web.HTTPBadRequest(text="Motion needs at least one picture: <Picture 1> is usually who performs it.")
+            if not any(m["id"] == model["id"] for m in swap.models(models)):
+                raise web.HTTPBadRequest(text="Motion can't run on HyperFlow, whose schedule is its own: pick another model.")
+            why = swap.status()["modes"]["motion"]
+            if why:
+                raise web.HTTPBadRequest(text=why)
+            path = clip_path(motion)
+            if not os.path.isfile(path):
+                raise web.HTTPBadRequest(text="The video file to take the motion from is gone.")
+            w, h, frames = swap.guide_shape(path, res)
+            if frames < 5:
+                raise web.HTTPBadRequest(text="That video is too short for H3.")
+            clip.update({"width": w, "height": h, "len": round(frames / 24, 2), "aspect": motion.get("aspect") or aspect,
+                         "prompt": swap.motion_prompt(prompt), "motion": {"from": motion["id"]}})
+            clip.pop("refmods", None)
+            clip.pop("realism", None)
 
     try:
-        graph = h3_graph.build_graph(clip, images, name=clip_info.file_stem(clip))
+        if motion:
+            graph = swap.build(clip, images, "%s/%s" % (motion.get("subfolder") or ROOT + "/clips", motion["file"]), "motion",
+                               megapixels=res, name=clip_info.file_stem(clip) + "_motion", model=model["id"])
+            clip["steps"] = graph["12"]["inputs"]["steps"]
+        else:
+            graph = h3_graph.build_graph(clip, images, name=clip_info.file_stem(clip))
         clip["prompt_id"] = await queue(graph, clip_info.extra_data(clip), body.get("client_id"))
     except h3_graph.Missing as error:
         raise web.HTTPBadRequest(text=str(error))
@@ -1448,7 +1477,7 @@ async def swaps(request):
         raise web.HTTPBadRequest(text="Swap can't run on HyperFlow, whose schedule is its own: pick another model." if usable
                                  else "Swap needs a MiniMax H3 model other than HyperFlow: MiniMax H3 + H3 Turbo is the author's.")
     mode = body.get("mode")
-    if mode not in swap.MODES:
+    if mode not in swap.MODES or mode == "motion":
         raise web.HTTPBadRequest(text="Pick Character or Head.")
     why = swap.status()["modes"][mode]
     if why:
@@ -1465,14 +1494,9 @@ async def swaps(request):
             raise web.HTTPBadRequest(text="Only a finished video can be the guide of a swap.")
         images = list(data["images"])
         by_id = {i["id"]: i for i in images}
-        if mode == "motion":
-            cast = [by_id[i] for i in dict.fromkeys(body.get("pictures") or []) if i in by_id][:h3_graph.H3_PICTURES]
-            if not cast:
-                raise web.HTTPBadRequest(text="Pick at least one picture: Picture 1 is usually who performs the motion.")
-        else:
-            cast = [by_id[body["picture"]]] if body.get("picture") in by_id else []
-            if not cast:
-                raise web.HTTPBadRequest(text="Pick the picture of the %s." % ("character" if mode == "character" else "head"))
+        cast = [by_id[body["picture"]]] if body.get("picture") in by_id else []
+        if not cast:
+            raise web.HTTPBadRequest(text="Pick the picture of the %s." % ("character" if mode == "character" else "head"))
         picture = cast[0]
     path = clip_path(source)
     if not os.path.isfile(path):
@@ -1487,18 +1511,7 @@ async def swaps(request):
             "status": "queued", "step": 0, "file": None, "subfolder": ROOT + "/clips", "starred": False, "created": time.time(),
             "swap": {"from": source["id"], "mode": mode, "picture": picture["id"], "details": details or None, "described": not details,
                      "mark": mark}}
-    if mode == "motion":
-        text = str(body.get("prompt") or "").strip()
-        if not text:
-            raise web.HTTPBadRequest(text="Write the prompt: say what each picture is.")
-        try:
-            h3_graph.clean_pictures([i["id"] for i in cast], images, text)
-        except ValueError as error:
-            raise web.HTTPBadRequest(text=str(error))
-        clip["prompt"] = swap.motion_prompt(text[:8000])
-        clip["swap"].update(details=None, described=False)
-    else:
-        clip["prompt"] = swap.prompt_of(mode, details, bool(mark)) if details else swap.template_of(mode, bool(mark))
+    clip["prompt"] = swap.prompt_of(mode, details, bool(mark)) if details else swap.template_of(mode, bool(mark))
     try:
         graph = swap.build(clip, images, "%s/%s" % (source.get("subfolder") or ROOT + "/clips", source["file"]), mode,
                            details=details, megapixels=res, name=clip_info.file_stem(clip) + "_swap", mark=mark, model=model["id"])
