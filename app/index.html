@@ -978,6 +978,7 @@ body.dragging-ref .composer { border-color: var(--line-strong); }
     </div>
     <div class="rm-body">
       <div class="rm-field"><span class="label">Swap</span><div class="seg" id="swModes"></div><span class="hint" id="swModeHint"></span></div>
+      <label class="rm-field"><span class="label">Model</span><select class="select" id="swModel" data-change="swapModel"></select><span class="hint" id="swModelHint"></span></label>
       <div class="rm-field" id="swWhoField"><span class="label">Who to replace</span><div class="seg" id="swWho"></div><span class="hint" id="swWhoHint"></span>
         <div class="sw-pick" id="swPick" hidden>
           <div class="sw-frame" id="swFrameBox"><video id="swFrame" muted playsinline preload="auto"></video><span class="sw-dot" id="swDot" hidden></span></div>
@@ -989,7 +990,7 @@ body.dragging-ref .composer { border-color: var(--line-strong); }
       <label class="rm-field"><span class="label" id="swDetailsLabel">The character in words</span><textarea class="lm-link sw-details" id="swDetails" rows="3" spellcheck="false"></textarea><span class="hint" id="swDetailsHint"></span></label>
       <div class="rm-field"><span class="label">Resolution</span><div class="seg" id="swRes"></div><span class="hint">In the video's own shape. Uses the first 15 seconds.</span></div>
     </div>
-    <div class="lm-foot"><span class="lm-hint">8 steps on MiniMax H3's ref2va model with the DMD turbo LoRA. The result is a new clip; the video stays.</span>
+    <div class="lm-foot"><span class="lm-hint">The result is a new clip; the video stays.</span>
       <button class="btn" data-act="swapClose">Cancel</button><button class="btn primary" id="swGo" data-act="swapGo">Swap</button></div>
   </div>
 </div>

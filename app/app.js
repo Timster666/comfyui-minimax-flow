@@ -1577,11 +1577,18 @@ async function openSwap(c) {
   if (!state.refs.some((r) => r.id === SWAP.picture)) SWAP.picture = null;
   $("swFrame").src = clipUrl(c);
   $("swDetails").value = "";
+  const models = SWAP.status.models;
+  if (!models.some((m) => m.id === SWAP.model)) SWAP.model = models[0]?.id || null;
+  $("swModel").innerHTML = models.map((m) => `<option value="${m.id}" ${m.id === SWAP.model ? "selected" : ""}>${esc(m.name)}${m.id === SWAP.status.base ? " · the author's" : " · untested"}</option>`).join("");
   drawSwap();
   $("swapModal").hidden = false;
 }
 function drawSwap() {
-  const st = SWAP.status, head = SWAP.mode === "head", why = st.modes[SWAP.mode];
+  const st = SWAP.status, head = SWAP.mode === "head";
+  const why = st.modes[SWAP.mode] || (st.models.length ? null : "Swap needs a MiniMax H3 model other than HyperFlow: MiniMax H3 + H3 Turbo is the author's.");
+  const m = st.models.find((x) => x.id === SWAP.model);
+  $("swModelHint").textContent = !m ? "" : m.id === st.base ? "The author's: MiniMax H3's own model, which the swap LoRAs were trained on, with the DMD 8-step turbo LoRA as in his workflow."
+    : `Untested: the swap LoRAs were trained on MiniMax H3's own model. ${m.turbo ? `${m.name} runs its own way (${m.steps} steps), without the DMD turbo LoRA.` : `${m.name} gets the DMD turbo LoRA and 8 steps, like the author's.`}`;
   $("swModes").innerHTML = [["character", "Character", "the whole person: face, hair, body and clothes"], ["head", "Head only", "experimental: the head, on the video's own body"]]
     .map(([id, name, what]) => `<button class="${SWAP.mode === id ? "on" : ""}" data-act="swapMode" data-id="${id}" title="${what}">${name}</button>`).join("");
   $("swModeHint").textContent = why || (head ? "Replaces only the head; the body, clothes and motion stay the video's. Experimental."
@@ -1652,7 +1659,7 @@ $("swFrameBox").addEventListener("click", (e) => {
   drawSwap();
 });
 async function runSwap() {
-  const body = { mode: SWAP.mode, picture: SWAP.picture, res: SWAP.res, details: $("swDetails").value.trim(), mark: swapMark() };
+  const body = { model: SWAP.model, mode: SWAP.mode, picture: SWAP.picture, res: SWAP.res, details: $("swDetails").value.trim(), mark: swapMark() };
   try {
     const r = await api("POST", "clips/" + SWAP.clip + "/swap", body);
     $("swapModal").hidden = true;
@@ -3514,6 +3521,7 @@ const CHANGE = {
   },
   res: (el) => { state.settings[sheetOn() ? "sheetRes" : swapOn() ? "swapRes" : "res"] = Number(el.value); render(); },
   swapLora: (el) => { state.kleinSettings.swapLora = el.value; render(); },
+  swapModel: (el) => { SWAP.model = el.value; drawSwap(); },
   sheetRole: (el) => { state.prunaSheet.roles[Number(el.dataset.id)] = el.value; render(); saveUi(); },
   sampler: (el) => { state.settings.sampler = el.value; render(); },
   scheduler: (el) => { state.settings.scheduler = el.value; render(); },

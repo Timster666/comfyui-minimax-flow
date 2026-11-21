@@ -62,7 +62,10 @@ the picture as a reference on grey, 8 steps, Euler (Beta for heads), CFG 1. The 
 people in the shot, **Who to replace › Pick on the first frame** (Character, with SAM 3.1 in `models/checkpoints`)
 lets you click the one to replace: SAM 3 follows them through the clip and paints them red (solid, or see-through so
 the face shows), the prompt says to replace only the red-marked person, and **Check the mark** shows the painted
-video first. That is how Henge picks a person; it works best in one continuous shot.
+video first. That is how Henge picks a person; it works best in one continuous shot. **Model** is the author's (MiniMax H3's own
+model) by default; any other installed H3 model but HyperFlow can be tried (untested): a turbo build (H3 Turbo,
+10Eros, PRISM, DaSiWa turbo) runs with its own steps and sampler without the DMD LoRA, a full one (Singularity,
+DaSiWa) gets the DMD LoRA and 8 steps.
 
 **Refine faces** (optional, with Carasibana's [ComfyUI-H3-FaceRefine](https://github.com/Carasibana/ComfyUI-H3-FaceRefine),
 the `MiniMaxH3NativeAudioLock` node and the `face_yolov8m.pt` detector in `models/ultralytics/bbox`; on RunPod

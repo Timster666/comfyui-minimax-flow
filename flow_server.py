@@ -1437,9 +1437,15 @@ async def faces(request):
 async def swaps(request):
     """GET /swap: which swaps can run here. POST /clips/{id}/swap {mode, picture, details, res}: swap the picture's
     character (or head) into a finished or imported video, as a new clip."""
+    found, _ = video_models()
+    usable = swap.models(found)
     if request.method == "GET":
-        return web.json_response(swap.status())
+        return web.json_response(dict(swap.status(), models=[dict(m, turbo=swap.turbo(m["id"])) for m in usable], base=swap.BASE))
     body = await request.json()
+    model = next((m for m in usable if m["id"] == (body.get("model") or swap.BASE)), None)
+    if not model:
+        raise web.HTTPBadRequest(text="Swap can't run on HyperFlow, whose schedule is its own: pick another model." if usable
+                                 else "Swap needs a MiniMax H3 model other than HyperFlow: MiniMax H3 + H3 Turbo is the author's.")
     mode = body.get("mode")
     if mode not in swap.MODES:
         raise web.HTTPBadRequest(text="Pick Character or Head.")
@@ -1466,8 +1472,8 @@ async def swaps(request):
     width, height, length = swap.guide_shape(path, res)
     if length < 5:
         raise web.HTTPBadRequest(text="That video is too short for H3.")
-    clip = {"id": "c" + uuid.uuid4().hex[:10], "kind": "video", "model": swap.MODES[mode]["name"], "profile": "h3",
-            "steps": swap.STEPS, "res": res, "aspect": source.get("aspect"), "width": width, "height": height,
+    clip = {"id": "c" + uuid.uuid4().hex[:10], "kind": "video", "model": swap.MODES[mode]["name"] + " · " + model["name"],
+            "profile": model["id"], "steps": swap.STEPS, "res": res, "aspect": source.get("aspect"), "width": width, "height": height,
             "len": round(length / 24, 2), "seed": random.randint(0, 2**31 - 1), "loras": [],
             "pictures": [{"id": picture["id"], "name": picture["name"]}], "refs": [{"id": picture["id"], "name": picture["name"]}],
             "status": "queued", "step": 0, "file": None, "subfolder": ROOT + "/clips", "starred": False, "created": time.time(),
@@ -1476,7 +1482,8 @@ async def swaps(request):
     clip["prompt"] = swap.prompt_of(mode, details, bool(mark)) if details else swap.template_of(mode, bool(mark))
     try:
         graph = swap.build(clip, images, "%s/%s" % (source.get("subfolder") or ROOT + "/clips", source["file"]), mode,
-                           details=details, megapixels=res, name=clip_info.file_stem(clip) + "_swap", mark=mark)
+                           details=details, megapixels=res, name=clip_info.file_stem(clip) + "_swap", mark=mark, model=model["id"])
+        clip["steps"] = graph["12"]["inputs"]["steps"]
         clip["prompt_id"] = await queue(graph, clip_info.extra_data(clip), None)
     except (h3_graph.Missing, ValueError) as error:
         raise web.HTTPBadRequest(text=str(error))
