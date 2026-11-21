@@ -218,6 +218,7 @@ const ICON = {
   upload: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 16V4M7 9l5-5 5 5M5 20h14"/></svg>',
   download: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 4v12M7 11l5 5 5-5M5 20h14"/></svg>',
   trash: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>',
+  swap: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 4 3 8l4 4"/><path d="M3 8h13a5 5 0 0 1 0 10h-2"/><path d="m17 20 4-4-4-4"/></svg>',
   face: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9 10h.01M15 10h.01M8.5 15a5 5 0 0 0 7 0"/></svg>',
   reuse: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 12a8 8 0 0 1 14-5.3L20 9M20 4v5h-5M20 12a8 8 0 0 1-14 5.3L4 15M4 20v-5h5"/></svg>',
   video: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3"/></svg>',
@@ -1566,6 +1567,45 @@ async function refineFaces() {
   } catch (error) { say(error.message); }
 }
 
+// Swap (Alissonerdx's Character Swap v1.1 and Head Swap v1.0): a video as the guide, a picture as the new character.
+const SWAP = { clip: null, mode: "character", picture: null, res: 0.6, status: null };
+async function openSwap(c) {
+  try { SWAP.status = await api("GET", "swap"); } catch (error) { say(error.message); return; }
+  SWAP.clip = c.id;
+  if (!state.refs.some((r) => r.id === SWAP.picture)) SWAP.picture = null;
+  $("swDetails").value = "";
+  drawSwap();
+  $("swapModal").hidden = false;
+}
+function drawSwap() {
+  const st = SWAP.status, head = SWAP.mode === "head", why = st.modes[SWAP.mode];
+  $("swModes").innerHTML = [["character", "Character", "the whole person: face, hair, body and clothes"], ["head", "Head only", "experimental: the head, on the video's own body"]]
+    .map(([id, name, what]) => `<button class="${SWAP.mode === id ? "on" : ""}" data-act="swapMode" data-id="${id}" title="${what}">${name}</button>`).join("");
+  $("swModeHint").textContent = why || (head ? "Replaces only the head; the body, clothes and motion stay the video's. Experimental."
+    : "The person in the picture takes the place of the video's main person, with the same motion, lips and camera.");
+  const pics = state.refs;
+  $("swPics").innerHTML = pics.length ? pics.map((r) => `<button class="rm-pic fc-pic ${SWAP.picture === r.id ? "on" : ""}" data-act="swapPick" data-id="${r.id}" aria-pressed="${SWAP.picture === r.id}">
+      <img src="${r.img}" alt=""><span>${esc(r.name)}</span></button>`).join("")
+    : `<p class="hint">Add the picture with Add image first.</p>`;
+  $("swPicHint").textContent = (head ? "A clear picture of the face and hair." : "The whole person, head to toe if you can.") +
+    (st.background ? " Its background is replaced by grey, as in the author's workflow." : "");
+  $("swDetailsLabel").textContent = head ? "The face in words" : "The character in words";
+  $("swDetails").placeholder = (head ? "Male, oval face shape, light brown skin, dark eyes, black tousled hair" : "Female, tall, slim, long red hair, green eyes, black leather jacket, blue jeans, white sneakers");
+  $("swDetailsHint").textContent = st.describe ? "Optional. Empty: written from the picture while it renders, and saved with the clip."
+    : "Needed: describing the picture needs MOSS-Image's text encoder, which isn't installed.";
+  $("swRes").innerHTML = st.megapixels.map((mp) => `<button class="${SWAP.res === mp ? "on" : ""}" data-act="swapRes" data-id="${mp}">${mp.toFixed(1)} MP</button>`).join("");
+  $("swGo").disabled = !!why || !SWAP.picture;
+}
+async function runSwap() {
+  const body = { mode: SWAP.mode, picture: SWAP.picture, res: SWAP.res, details: $("swDetails").value.trim() };
+  try {
+    const r = await api("POST", "clips/" + SWAP.clip + "/swap", body);
+    $("swapModal").hidden = true;
+    upsertClip(r.clip);
+    say("Swapping. The result comes in as a new clip next to the video.");
+  } catch (error) { say(error.message); }
+}
+
 // The Klein tab's settings: Model, Size (Match image 1 or an aspect ratio), Resolution, Steps, Guidance (Base
 // only: Distilled renders without it), Seed, LoRAs (the loras/Flux Klein folder).
 // Face swap's own settings: the BFS LoRA, and with Only the head its sampler, the mask's edge and Refine face.
@@ -2411,6 +2451,7 @@ function openMenu(id, x, y) {
     <span class="ctx-line"></span>${kindOf(c) === "video" ? (EDIT.has(c.id)
       ? `<button role="menuitem" aria-disabled="true" class="off" title="This video is on the edit's timeline already.">${ICON.check}Already in the edit</button>`
       : `<button role="menuitem" data-act="menuAddToEdit" ${c.status === "done" && c.file ? "" : 'aria-disabled="true" class="off"'}>${ICON.edit}Add to edit</button>`) : ""}${kindOf(c) === "video" ? `
+    <button role="menuitem" data-act="menuSwap" ${c.status === "done" && c.file ? "" : 'aria-disabled="true" class="off"'} title="Put the person from a picture into this video, with its motion and sound">${ICON.swap}Swap character…</button>
     <button role="menuitem" data-act="menuFaces" ${c.status === "done" && c.file ? "" : 'aria-disabled="true" class="off"'} title="${esc(FACES.why || "Re-render small faces up close and put them back, as a new clip")}">${ICON.face}Refine faces…</button>` : ""}
     <button role="menuitem" data-act="menuReuse">${ICON.reuse}Use this prompt and settings</button>
     <button role="menuitem" data-act="menuCopyPrompt" ${c.prompt ? "" : 'aria-disabled="true" class="off"'}>${ICON.copy}Copy prompt</button>${kindOf(c) === "image" ? `
@@ -3006,6 +3047,12 @@ const ACT = {
   },
   driveCancel: (id) => api("POST", `gdrive/${id}/cancel`).then((r) => driveJobs(r.jobs)).catch((e) => say(e.message)),
   toggleRealism: () => { const r = realismOf(state.settings); r.on = !r.on; saveUi(); render(); },
+  menuSwap: () => { const id = closeMenu(); const c = clipById(id); if (c && c.status === "done" && c.file) openSwap(c); },
+  swapMode: (id) => { SWAP.mode = id; drawSwap(); },
+  swapRes: (id) => { SWAP.res = Number(id); drawSwap(); },
+  swapPick: (id) => { SWAP.picture = id; drawSwap(); },
+  swapGo: () => runSwap(),
+  swapClose: () => { $("swapModal").hidden = true; },
   menuFaces: () => { const id = closeMenu(); const c = clipById(id); if (c && c.status === "done" && c.file) openFaces(c); },
   facesGo: () => refineFaces(),
   facesClose: () => { $("facesModal").hidden = true; },

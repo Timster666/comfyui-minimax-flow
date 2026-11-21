@@ -27,7 +27,7 @@ import uuid
 
 from aiohttp import web
 
-from . import clip_info, comfy_link, edit_media, edit_project, face_refine, gdrive, prompt_lib, refmod_bridge, h3_graph, klein_bridge, lora_in, model_store, moss_bridge, ph3_bridge
+from . import clip_info, comfy_link, edit_media, edit_project, face_refine, gdrive, swap, prompt_lib, refmod_bridge, h3_graph, klein_bridge, lora_in, model_store, moss_bridge, ph3_bridge
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 APP_DIR = os.path.join(HERE, "app")
@@ -1290,6 +1290,8 @@ async def watch_real():
                         extra = {}
                         if clip.get("family") == "ph3" and clip.get("enhance"):
                             extra["upsampled"] = ph3_bridge.upsampled_text(entry)
+                        if (clip.get("swap") or {}).get("described"):
+                            extra["prompt"] = swap.written_prompt(entry) or clip["prompt"]
                         await set_clip(clip["id"], status="done", step=clip["steps"], file=file["filename"],
                                        subfolder=file.get("subfolder") or ROOT + ("/stills" if clip.get("kind") == "image" else "/clips"), **extra)
                     else:
@@ -1358,6 +1360,63 @@ async def faces(request):
     except Exception as error:
         LOG.exception("MiniMax H3 Vision couldn't queue a face refine")
         raise web.HTTPBadRequest(text="ComfyUI refused the refine: %s" % error)
+    async with _lock:
+        data = read_project()
+        at = next((n for n, c in enumerate(data["clips"]) if c["id"] == source["id"]), 0)
+        data["clips"].insert(at, clip)
+        write_project(data)
+    ensure_watcher()
+    broadcast(clip)
+    return web.json_response({"clip": clip})
+
+
+async def swaps(request):
+    """GET /swap: which swaps can run here. POST /clips/{id}/swap {mode, picture, details, res}: swap the picture's
+    character (or head) into a finished or imported video, as a new clip."""
+    if request.method == "GET":
+        return web.json_response(swap.status())
+    body = await request.json()
+    mode = body.get("mode")
+    if mode not in swap.MODES:
+        raise web.HTTPBadRequest(text="Pick Character or Head.")
+    why = swap.status()["modes"][mode]
+    if why:
+        raise web.HTTPBadRequest(text=why)
+    res = float(body.get("res") or 0.6)
+    if res not in swap.MEGAPIXELS:
+        raise web.HTTPBadRequest(text="Pick a resolution from the list.")
+    details = str(body.get("details") or "").strip()[:2000]
+    async with _lock:
+        data = read_project()
+        source = next((c for c in data["clips"] if c["id"] == request.match_info["id"]), None)
+        if not source or source.get("kind", "video") != "video" or source.get("status") != "done" or not source.get("file"):
+            raise web.HTTPBadRequest(text="Only a finished video can be the guide of a swap.")
+        images = list(data["images"])
+        picture = next((i for i in images if i["id"] == body.get("picture")), None)
+        if not picture:
+            raise web.HTTPBadRequest(text="Pick the picture of the %s." % ("character" if mode == "character" else "head"))
+    path = clip_path(source)
+    if not os.path.isfile(path):
+        raise web.HTTPBadRequest(text="The video file of that clip is gone.")
+    width, height, length = swap.guide_shape(path, res)
+    if length < 5:
+        raise web.HTTPBadRequest(text="That video is too short for H3.")
+    clip = {"id": "c" + uuid.uuid4().hex[:10], "kind": "video", "model": swap.MODES[mode]["name"], "profile": "h3",
+            "steps": swap.STEPS, "res": res, "aspect": source.get("aspect"), "width": width, "height": height,
+            "len": round(length / 24, 2), "seed": random.randint(0, 2**31 - 1), "loras": [],
+            "pictures": [{"id": picture["id"], "name": picture["name"]}], "refs": [{"id": picture["id"], "name": picture["name"]}],
+            "status": "queued", "step": 0, "file": None, "subfolder": ROOT + "/clips", "starred": False, "created": time.time(),
+            "swap": {"from": source["id"], "mode": mode, "picture": picture["id"], "details": details or None, "described": not details}}
+    clip["prompt"] = swap.prompt_of(mode, details) if details else swap.MODES[mode]["template"]
+    try:
+        graph = swap.build(clip, images, "%s/%s" % (source.get("subfolder") or ROOT + "/clips", source["file"]), mode,
+                           details=details, megapixels=res, name=clip_info.file_stem(clip) + "_swap")
+        clip["prompt_id"] = await queue(graph, clip_info.extra_data(clip), None)
+    except (h3_graph.Missing, ValueError) as error:
+        raise web.HTTPBadRequest(text=str(error))
+    except Exception as error:
+        LOG.exception("MiniMax H3 Vision couldn't queue a swap")
+        raise web.HTTPBadRequest(text="ComfyUI refused the swap: %s" % error)
     async with _lock:
         data = read_project()
         at = next((n for n, c in enumerate(data["clips"]) if c["id"] == source["id"]), 0)
@@ -1695,6 +1754,8 @@ ROUTES = (
     ("POST", "/mmflow/api/generate", generate),
     ("GET", "/mmflow/api/faces", faces),
     ("POST", "/mmflow/api/clips/{id}/faces", faces),
+    ("GET", "/mmflow/api/swap", swaps),
+    ("POST", "/mmflow/api/clips/{id}/swap", swaps),
     ("POST", "/mmflow/api/import", import_clip),
     ("PATCH", "/mmflow/api/clips/{id}", update_clip),
     ("DELETE", "/mmflow/api/clips/{id}", delete_clip),

@@ -5,6 +5,7 @@ and the H3 editor can be installed side by side. Each video graph uses them like
 
 - MMVisionLoadStill: an @image, read from the output folder, where the app keeps uploads.
 - MMVisionLoadVideo: a clip, read from the output folder, for Refine faces.
+- MMVisionLoadGuide: a clip as a swap's guide: 24 fps, H3 size, 17k+5 frames, with its sound.
 - MMVisionHyperFlowLoader and MMVisionHyperFlowSigmas: HyperFlow H3 Flash, its model and its 4, 6 or 8-step schedule.
 - MMVisionLora: an H3 LoRA, renumbered for HyperFlow and added at run time on INT8 weights.
 - MMVisionLivePreview: the moving preview of the clip at every step.
@@ -66,6 +67,48 @@ class LoadVideo(io.ComfyNode):
     def execute(cls, file) -> io.NodeOutput:
         from comfy_api.latest import InputImpl
         return io.NodeOutput(InputImpl.VideoFromFile(output_file(file)))
+
+
+class LoadGuide(io.ComfyNode):
+    """A clip as the guide of a swap: at H3's 24 fps, scaled to the megapixels asked for (sides a multiple of 32, the
+    clip's own shape), cut to the longest 17k+5 frame count that fits, with its sound cut to match."""
+
+    @classmethod
+    def define_schema(cls):
+        return io.Schema(
+            node_id="MMVisionLoadGuide",
+            display_name="Vision Load Guide Video",
+            category=CATEGORY,
+            description="Read a video from the output folder as a MiniMax H3 guide: 24 fps, H3 size, 17k+5 frames.",
+            inputs=[io.String.Input("file", tooltip="Path inside the output folder."),
+                    io.Float.Input("megapixels", default=0.6, min=0.1, max=2.0, step=0.01),
+                    io.Int.Input("max_frames", default=361, min=5, max=3600)],
+            outputs=[io.Image.Output(display_name="images"), io.Audio.Output(display_name="audio"),
+                     io.Int.Output(display_name="width"), io.Int.Output(display_name="height"),
+                     io.Int.Output(display_name="length")],
+        )
+
+    @classmethod
+    def execute(cls, file, megapixels, max_frames) -> io.NodeOutput:
+        from comfy_api.latest import InputImpl
+        import comfy.utils
+        parts = InputImpl.VideoFromFile(output_file(file)).get_components()
+        rate = float(parts.frame_rate) or 24.0
+        count = int(parts.images.shape[0] * 24 / rate)
+        length = min(count, max_frames)
+        length -= (length - 5) % 17
+        if length < 5:
+            raise ValueError("The video is too short for H3: it needs at least 5 frames at 24 fps.")
+        pick = [min(parts.images.shape[0] - 1, int(n * rate / 24)) for n in range(length)]
+        frames = parts.images[pick]
+        src_h, src_w = frames.shape[1], frames.shape[2]
+        scale = (megapixels * 1e6 / (src_w * src_h)) ** 0.5
+        width, height = max(32, round(src_w * scale / 32) * 32), max(32, round(src_h * scale / 32) * 32)
+        frames = comfy.utils.common_upscale(frames.movedim(-1, 1), width, height, "lanczos", "center").movedim(1, -1)
+        audio = parts.audio
+        if audio is not None:
+            audio = {"waveform": audio["waveform"][..., :int(length / 24 * audio["sample_rate"])], "sample_rate": audio["sample_rate"]}
+        return io.NodeOutput(frames, audio, width, height, length)
 
 
 class Lora(io.ComfyNode):
@@ -293,10 +336,10 @@ class PasteCrop(io.ComfyNode):
         return io.NodeOutput(out)
 
 
-NODE_CLASS_MAPPINGS = {"MMVisionLoadStill": LoadStill, "MMVisionLoadVideo": LoadVideo, "MMVisionLora": Lora, "MMVisionHyperFlowLoader": HyperFlowLoader,
+NODE_CLASS_MAPPINGS = {"MMVisionLoadStill": LoadStill, "MMVisionLoadVideo": LoadVideo, "MMVisionLoadGuide": LoadGuide, "MMVisionLora": Lora, "MMVisionHyperFlowLoader": HyperFlowLoader,
                        "MMVisionHyperFlowSigmas": HyperFlowSigmas, "MMVisionLivePreview": LivePreview,
                        "MMVisionLoadMask": LoadMask, "MMVisionCropToMask": CropToMask, "MMVisionPasteCrop": PasteCrop}
-NODE_DISPLAY_NAME_MAPPINGS = {"MMVisionLoadStill": "Vision Load Still", "MMVisionLoadVideo": "Vision Load Video", "MMVisionLora": "Vision H3 LoRA",
+NODE_DISPLAY_NAME_MAPPINGS = {"MMVisionLoadStill": "Vision Load Still", "MMVisionLoadVideo": "Vision Load Video", "MMVisionLoadGuide": "Vision Load Guide Video", "MMVisionLora": "Vision H3 LoRA",
                               "MMVisionHyperFlowLoader": "Vision HyperFlow Loader",
                               "MMVisionHyperFlowSigmas": "Vision HyperFlow Sigmas", "MMVisionLivePreview": "Vision Live Preview",
                               "MMVisionLoadMask": "Vision Load Mask", "MMVisionCropToMask": "Vision Crop To Mask",
