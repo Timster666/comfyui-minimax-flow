@@ -138,6 +138,22 @@ def sam():
     return h3_graph.pick_file([SAM], folder_paths.get_filename_list("checkpoints"))
 
 
+BASE = "h3"   # the author's: MiniMax H3's own ref2va model, with the DMD turbo LoRA
+
+
+def turbo(profile_id):
+    """Whether a model family samples in few steps by itself (a turbo build, or with its own turbo LoRA): a swap
+    then runs it its own way, without the DMD turbo LoRA."""
+    profile = h3_graph.PROFILES[profile_id]
+    return bool(profile.get("lora")) or profile["steps"] <= STEPS
+
+
+def models(video_models):
+    """The installed models a swap can run on: not HyperFlow, whose schedule is its own. The author's first."""
+    usable = [m for m in video_models if m.get("scheduler") != h3_graph.HYPERFLOW_SCHEDULE and m["id"] in h3_graph.PROFILES]
+    return sorted(usable, key=lambda m: m["id"] != BASE)
+
+
 def describer(files=None):
     """MOSS-Image's Qwen3.5 9B, which writes the description from the picture, if it's installed."""
     files = h3_graph.available() if files is None else files
@@ -147,12 +163,10 @@ def describer(files=None):
 def status(files=None):
     """What the Swap dialog needs: per mode, why it can't run (or None), and whether a picture can be described."""
     files = h3_graph.available() if files is None else files
-    base = h3_graph.PROFILES["h3"]
-    _, _, _, gaps = h3_graph.family_files(base, files)
     _, missing = h3_graph.encoders(files)
     modes = {}
     for key, mode in MODES.items():
-        lack = missing + gaps + [f for f in (TURBO, mode["lora"]) if not h3_graph.pick_file([f], files)]
+        lack = missing + [f for f in (TURBO, mode["lora"]) if not h3_graph.pick_file([f], files)]
         modes[key] = ("%s needs %s (gear menu › Models › Swap)." % (mode["name"], h3_graph.and_list(lack))) if lack else None
     return {"modes": modes, "describe": bool(describer(files)), "megapixels": MEGAPIXELS, "maxSeconds": MAX_FRAMES // 24,
             "background": bool(birefnet()), "mark": bool(sam())}
@@ -206,12 +220,13 @@ def guide_shape(path, megapixels):
     return max(32, round(src_w * scale / 32) * 32), max(32, round(src_h * scale / 32) * 32), length
 
 
-def build(clip, images, source, mode, details="", megapixels=0.6, files=None, name=None, mark=None):
+def build(clip, images, source, mode, details="", megapixels=0.6, files=None, name=None, mark=None, model=BASE):
     """The graph that swaps the picture's character (or head) into a video.
 
     clip: the new clip: the picture as <Picture 1>, the seed, and the prompt (made here from the template).
     source: the video, as a path inside the output folder. details: the character (or face) in words; empty means
-    MOSS-Image's text model describes the picture. mark: {x, y, opacity}, a point on the first frame: only the person
+    MOSS-Image's text model describes the picture. model: the model family to swap on; the author's is the base
+    model with the DMD turbo LoRA (as is any other non-turbo family), and a turbo family runs on its own. mark: {x, y, opacity}, a point on the first frame: only the person
     there is replaced (Character only), painted red on the guide and named in the prompt.
     """
     files = h3_graph.available() if files is None else files
@@ -220,8 +235,12 @@ def build(clip, images, source, mode, details="", megapixels=0.6, files=None, na
     if not details.strip() and not text:
         raise h3_graph.Missing("Describe the %s in words: describing the picture needs MOSS-Image's text encoder "
                                "(qwen3.5_9b_w4a8_gptq.safetensors)." % ("character" if mode == "character" else "face"))
-    clip = dict(clip, profile="h3", steps=STEPS, sampler=SAMPLER, scheduler=spec["scheduler"], refmods=None, realism=None,
-                loras=[{"name": TURBO, "strength": 1.0}, {"name": spec["lora"], "strength": 1.0}],
+    profile = h3_graph.PROFILES[model]
+    own = turbo(model)
+    clip = dict(clip, profile=model, refmods=None, realism=None,
+                steps=profile["steps"] if own else STEPS, sampler=profile["sampler"] if own else SAMPLER,
+                scheduler=(profile.get("scheduler") or spec["scheduler"]) if own else spec["scheduler"],
+                loras=([] if own else [{"name": TURBO, "strength": 1.0}]) + [{"name": spec["lora"], "strength": 1.0}],
                 prompt=prompt_of(mode, details, bool(mark)) if details.strip() else template_of(mode, bool(mark)))
     graph = h3_graph.build_graph(clip, images, files=files, name=name)
     picture = "50"
