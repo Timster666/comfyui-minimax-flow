@@ -102,6 +102,17 @@ PROFILES = {
     },
 }
 
+# The MMH3 Realism Slider LoRA (Civitai 3041489), as the H3 editor ran it on finals: natural, un-airbrushed skin.
+# It sits out the steps above start_sigma, which set the composition, and joins for the detail. V1 if V2 isn't there.
+REALISM_FILES = ["MMH3-Realism-V2.safetensors", "MMH3-RealismSlider-V1.safetensors"]
+REALISM = {"strength": 1.2, "start_sigma": 0.75, "range": [0.0, 3.0]}
+REALISM_NODE = "95"
+
+
+def realism_lora(files=None):
+    return pick_file(REALISM_FILES, available() if files is None else files)
+
+
 # A scheduler the editor makes itself: the beta schedule with these two numbers, built with ComfyUI's own node.
 BETA57 = "beta57"
 BETA57_SHAPE = (0.5, 0.7)
@@ -342,7 +353,13 @@ def build_graph(clip, images, files=None, name=None):
         # A LoRA the family always samples with, such as a turbo LoRA.
         graph["94"] = {"class_type": "MMVisionLora", "inputs": {"model": model, "lora_name": family_lora, "strength": profile["lora"][1]}}
         model = ["94", 0]
-    for n, (file, strength) in enumerate(clip_loras(clip, files)):
+    rows = clip_loras(clip, files)
+    realism = realism_lora(files) if clip.get("realism") else None
+    if realism and not any(os.path.basename(file) in REALISM_FILES for file, _ in rows):
+        graph[REALISM_NODE] = {"class_type": "MMVisionLora", "inputs": {
+            "model": model, "lora_name": realism, "strength": float(clip["realism"]), "start_sigma": REALISM["start_sigma"]}}
+        model = [REALISM_NODE, 0]
+    for n, (file, strength) in enumerate(rows):
         node = str(LORA_NODE + n)
         graph[node] = {"class_type": "MMVisionLora", "inputs": {"model": model, "lora_name": file, "strength": strength}}
         model = [node, 0]
