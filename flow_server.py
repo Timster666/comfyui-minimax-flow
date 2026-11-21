@@ -13,6 +13,7 @@ aren't installed says which files it needs.
 """
 
 import asyncio
+import fractions
 import contextvars
 import base64
 import json
@@ -1118,15 +1119,31 @@ async def import_clip(request):
     except Exception:
         LOG.exception("MiniMax H3 Vision couldn't read an imported file")
         found = None
-    if not found or not found.get("prompt"):
+    plain = None
+    if (not found or not found.get("prompt")) and kind == "video":
+        # Any other video comes in as it is, without a prompt: to watch, edit, or swap a character into.
+        try:
+            plain, temp, ext = await asyncio.to_thread(plain_video, temp)
+        except Exception as error:
+            LOG.exception("MiniMax H3 Vision couldn't read an imported video")
+            if os.path.exists(temp):
+                os.remove(temp)
+            raise web.HTTPBadRequest(text="%s couldn't be read as a video (%s)." % (part.filename, error))
+        found = {"prompt": "", "width": plain["width"], "height": plain["height"], "len": plain["seconds"],
+                 "model": "Imported video", "from": "video file"}
+    elif not found or not found.get("prompt"):
         os.remove(temp)
-        raise web.HTTPBadRequest(text="%s has no prompt or settings inside it. Only files saved by ComfyUI with its "
-                                      "metadata (from MiniMax H3 Vision, the H3 editor or a MOSS-Image workflow) have them."
-                                      % part.filename)
+        raise web.HTTPBadRequest(text="%s has no prompt or settings inside it. Only images saved by ComfyUI with its "
+                                      "metadata (from MiniMax H3 Vision or a MOSS-Image workflow) have them. To use a "
+                                      "picture in a video, add it with Add image." % part.filename)
     if (found.get("kind") or kind) != kind:
         found["kind"] = kind
     clip = clip_from_settings(found, kind)
-    file = numbered(root_dir(folder), clip_info.file_stem(clip), ext)
+    stem = clip_info.file_stem(clip)
+    if plain:
+        clip.update({"len": plain["seconds"], "steps": 0})
+        stem = "import_" + (clip_info.slug(os.path.splitext(part.filename)[0]) or "video")
+    file = numbered(root_dir(folder), stem, ext)
     os.replace(temp, root_dir(folder, file))
     clip.update({"id": ("c" if kind == "video" else "k" if clip.get("family") == "klein" else "p" if clip.get("family") == "ph3" else "s") + uuid.uuid4().hex[:10],
                  "status": "done", "step": clip["steps"],
@@ -1138,6 +1155,53 @@ async def import_clip(request):
         write_project(data)
     broadcast(clip)
     return web.json_response({"clip": clip})
+
+
+PLAYABLE = {("mp4", "h264"), ("mp4", "av1"), ("mov", "h264"), ("webm", "vp8"), ("webm", "vp9"), ("webm", "av1")}
+
+
+def plain_video(path):
+    """A video file without Vision's settings: its size and length, re-encoded as H.264 .mp4 when a browser
+    couldn't play it as it is. Returns (facts, path, extension)."""
+    import av
+    ext = os.path.splitext(path)[1].lower()
+    with av.open(path) as container:
+        stream = container.streams.video[0]
+        width, height = stream.codec_context.width, stream.codec_context.height
+        seconds = float(stream.duration * stream.time_base) if stream.duration else float(container.duration or 0) / 1e6
+        codec = stream.codec_context.name
+    if (ext.lstrip(".").replace("m4v", "mp4"), codec) not in PLAYABLE:
+        out = os.path.splitext(path)[0] + "_h264.mp4"
+        to_h264(path, out)
+        os.remove(path)
+        path, ext = out, ".mp4"
+    return {"width": width, "height": height, "seconds": round(seconds, 2)}, path, ext
+
+
+def to_h264(source, out):
+    """Re-encode a video as H.264 (CRF 18) with AAC sound in an .mp4, so a browser plays it."""
+    import av
+    with av.open(source) as src, av.open(out, "w") as dst:
+        video = src.streams.video[0]
+        audio = src.streams.audio[0] if src.streams.audio else None
+        rate = video.average_rate or video.guessed_rate or 24
+        v_out = dst.add_stream("libx264", rate=rate, options={"crf": "18", "preset": "veryfast"})
+        v_out.width, v_out.height = video.codec_context.width // 2 * 2, video.codec_context.height // 2 * 2
+        v_out.pix_fmt = "yuv420p"
+        a_out = dst.add_stream("aac", rate=audio.codec_context.sample_rate or 48000) if audio else None
+        step, count = 1 / fractions.Fraction(rate), 0
+        for packet in src.demux([s for s in (video, audio) if s]):
+            for frame in packet.decode():
+                if packet.stream is video:
+                    frame = frame.reformat(width=v_out.width, height=v_out.height, format="yuv420p")
+                    frame.pts, frame.time_base, count = count, step, count + 1
+                    dst.mux(v_out.encode(frame))
+                else:
+                    frame.pts = None
+                    dst.mux(a_out.encode(frame))
+        dst.mux(v_out.encode())
+        if a_out:
+            dst.mux(a_out.encode())
 
 
 def clip_from_settings(found, kind):
