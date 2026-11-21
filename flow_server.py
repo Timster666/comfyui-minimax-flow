@@ -1450,6 +1450,7 @@ async def swaps(request):
     if res not in swap.MEGAPIXELS:
         raise web.HTTPBadRequest(text="Pick a resolution from the list.")
     details = str(body.get("details") or "").strip()[:2000]
+    mark = clean_mark(body.get("mark")) if mode == "character" else None
     async with _lock:
         data = read_project()
         source = next((c for c in data["clips"] if c["id"] == request.match_info["id"]), None)
@@ -1470,11 +1471,12 @@ async def swaps(request):
             "len": round(length / 24, 2), "seed": random.randint(0, 2**31 - 1), "loras": [],
             "pictures": [{"id": picture["id"], "name": picture["name"]}], "refs": [{"id": picture["id"], "name": picture["name"]}],
             "status": "queued", "step": 0, "file": None, "subfolder": ROOT + "/clips", "starred": False, "created": time.time(),
-            "swap": {"from": source["id"], "mode": mode, "picture": picture["id"], "details": details or None, "described": not details}}
-    clip["prompt"] = swap.prompt_of(mode, details) if details else swap.MODES[mode]["template"]
+            "swap": {"from": source["id"], "mode": mode, "picture": picture["id"], "details": details or None, "described": not details,
+                     "mark": mark}}
+    clip["prompt"] = swap.prompt_of(mode, details, bool(mark)) if details else swap.template_of(mode, bool(mark))
     try:
         graph = swap.build(clip, images, "%s/%s" % (source.get("subfolder") or ROOT + "/clips", source["file"]), mode,
-                           details=details, megapixels=res, name=clip_info.file_stem(clip) + "_swap")
+                           details=details, megapixels=res, name=clip_info.file_stem(clip) + "_swap", mark=mark)
         clip["prompt_id"] = await queue(graph, clip_info.extra_data(clip), None)
     except (h3_graph.Missing, ValueError) as error:
         raise web.HTTPBadRequest(text=str(error))
@@ -1489,6 +1491,51 @@ async def swaps(request):
     ensure_watcher()
     broadcast(clip)
     return web.json_response({"clip": clip})
+
+
+def clean_mark(mark):
+    """A point on a video's first frame (0 to 1 across and down), and how solid its colour is; None for no mark."""
+    if not isinstance(mark, dict):
+        return None
+    try:
+        x, y = float(mark["x"]), float(mark["y"])
+        opacity = float(mark.get("opacity", 1.0))
+    except (KeyError, TypeError, ValueError):
+        raise web.HTTPBadRequest(text="Click the person on the first frame.")
+    if not (0 <= x <= 1 and 0 <= y <= 1):
+        raise web.HTTPBadRequest(text="Click the person on the first frame.")
+    return {"x": round(x, 4), "y": round(y, 4), "opacity": 0.5 if opacity < 1 else 1.0}
+
+
+async def swap_mark(request):
+    """POST /clips/{id}/swap-mark {mark, res}: the video with the person at the point painted red, to check before a
+    swap. GET /swap-mark/{prompt_id}: {state: working|done|failed, file, subfolder, error}."""
+    if request.method == "GET":
+        pid = request.match_info["pid"]
+        running, waiting = comfy_link.queue_state()
+        if pid in running or pid in waiting:
+            return web.json_response({"state": "working"})
+        entry = comfy_link.history(pid)
+        file = video_file(entry)
+        if file:
+            return web.json_response({"state": "done", "file": file["filename"], "subfolder": file.get("subfolder") or ""})
+        return web.json_response({"state": "failed", "error": comfy_link.failure(entry)})
+    body = await request.json()
+    mark = clean_mark(body.get("mark"))
+    if not mark:
+        raise web.HTTPBadRequest(text="Click the person on the first frame.")
+    res = float(body.get("res") or 0.6)
+    async with _lock:
+        source = next((c for c in read_project()["clips"] if c["id"] == request.match_info["id"]), None)
+    if not source or not source.get("file"):
+        raise web.HTTPBadRequest(text="That video isn't there any more.")
+    try:
+        graph = swap.mark_graph("%s/%s" % (source.get("subfolder") or ROOT + "/clips", source["file"]), mark, res,
+                                "%s/marks/%s" % (ROOT, source["id"]))
+        pid = await comfy_link.queue_prompt(graph, {}, None)
+    except (h3_graph.Missing, comfy_link.Refused) as error:
+        raise web.HTTPBadRequest(text=str(error))
+    return web.json_response({"prompt_id": pid})
 
 
 def numbered(folder, stem, ext):
@@ -1820,6 +1867,8 @@ ROUTES = (
     ("POST", "/mmflow/api/clips/{id}/faces", faces),
     ("GET", "/mmflow/api/swap", swaps),
     ("POST", "/mmflow/api/clips/{id}/swap", swaps),
+    ("POST", "/mmflow/api/clips/{id}/swap-mark", swap_mark),
+    ("GET", "/mmflow/api/swap-mark/{pid}", swap_mark),
     ("POST", "/mmflow/api/import", import_clip),
     ("PATCH", "/mmflow/api/clips/{id}", update_clip),
     ("DELETE", "/mmflow/api/clips/{id}", delete_clip),

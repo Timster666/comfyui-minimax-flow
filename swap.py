@@ -14,6 +14,8 @@ import folder_paths
 from . import h3_graph, moss_bridge, ph3_bridge
 
 TURBO = "minimax_h3_dmd_ref2va_8step_turbo_pruned.safetensors"
+SAM = "sam3.1_multiplex_fp16.safetensors"   # Comfy-Org/SAM3.1, in models/checkpoints: marks the person to replace
+MARK_COLOR, MARK_NAME = "#DC463C", "red"     # Henge's red
 BIREFNET = "birefnet.safetensors"
 STEPS, SAMPLER = 8, "euler"
 MEGAPIXELS = [0.4, 0.6, 0.8, 1.0]
@@ -24,6 +26,7 @@ GAP = "{details}"
 
 # Graph nodes added to h3_graph's.
 GUIDE, ADD_GUIDE, DESCRIBER, DESCRIBE, FILL = "60", "61", "62", "63", "64"
+SAM_LOADER, MARK_NODE = "71", "72"
 MASK_MODEL, MASK, SIZE, BACKDROP, CUTOUT, SMALL = "65", "66", "67", "68", "69", "70"
 
 CHARACTER_INSTRUCTION = (
@@ -106,6 +109,14 @@ Preserve the original audiovisual timing and visible action structure of <Video 
 non_diegetic_music:
 N/A"""
 
+# A marked person: Henge's single-subject wording after the Character Swap template (edit_modes.shot_swap_plan).
+TRACK_IDENTITY = ("Each identity follows its marked person, regardless of screen position, distance from the camera, "
+                  "crossings or occlusion. Preserve the guide person's orientation: a back view stays a back view; transfer only "
+                  "the reference features visible from that angle. The reference supplies appearance, while the guide supplies "
+                  "pose and facing direction. Keep absent people out of the shot.")
+MARKED = (" Replace only the %s-marked person; keep every other person unchanged. Remove all temporary color markers and text "
+          "tags. %s Do not add people, insets or duplicate characters." % (MARK_NAME, TRACK_IDENTITY))
+
 MODES = {
     "character": {"name": "Character Swap v1.1", "lora": "minimax_h3_character_swap_v1.1_ref2va_fro.safetensors",
                   "template": CHARACTER_TEMPLATE, "instruction": CHARACTER_INSTRUCTION, "scheduler": "simple"},
@@ -120,6 +131,11 @@ def birefnet():
         return h3_graph.pick_file([BIREFNET], folder_paths.get_filename_list("background_removal"))
     except KeyError:
         return None
+
+
+def sam():
+    """SAM 3.1, as ComfyUI lists it in models/checkpoints, if it's installed."""
+    return h3_graph.pick_file([SAM], folder_paths.get_filename_list("checkpoints"))
 
 
 def describer(files=None):
@@ -139,11 +155,37 @@ def status(files=None):
         lack = missing + gaps + [f for f in (TURBO, mode["lora"]) if not h3_graph.pick_file([f], files)]
         modes[key] = ("%s needs %s (gear menu › Models › Swap)." % (mode["name"], h3_graph.and_list(lack))) if lack else None
     return {"modes": modes, "describe": bool(describer(files)), "megapixels": MEGAPIXELS, "maxSeconds": MAX_FRAMES // 24,
-            "background": bool(birefnet())}
+            "background": bool(birefnet()), "mark": bool(sam())}
 
 
-def prompt_of(mode, details):
-    return MODES[mode]["template"].replace(GAP, " ".join(details.split()).strip().strip('"').rstrip("."))
+def template_of(mode, marked=False):
+    return MODES[mode]["template"] + (MARKED if marked else "")
+
+
+def prompt_of(mode, details, marked=False):
+    return template_of(mode, marked).replace(GAP, " ".join(details.split()).strip().strip('"').rstrip("."))
+
+
+def mark_nodes(graph, mark):
+    """SAM 3.1 and the node that paints the marked person on the guide's frames."""
+    name = sam()
+    if not name:
+        raise h3_graph.Missing("Picking the person needs SAM 3.1 (sam3.1_multiplex_fp16.safetensors) in models/checkpoints "
+                               "(gear menu › Models › Swap).")
+    graph[SAM_LOADER] = {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": name}}
+    graph[MARK_NODE] = {"class_type": "MMVisionMarkPerson", "inputs": {
+        "images": [GUIDE, 0], "sam_model": [SAM_LOADER, 0], "x": float(mark["x"]), "y": float(mark["y"]),
+        "color": MARK_COLOR, "opacity": float(mark.get("opacity", 1.0))}}
+    return [MARK_NODE, 0]
+
+
+def mark_graph(source, mark, megapixels, prefix):
+    """The guide with the person marked, as a video to check before swapping."""
+    graph = {GUIDE: {"class_type": "MMVisionLoadGuide", "inputs": {"file": source, "megapixels": float(megapixels), "max_frames": MAX_FRAMES}}}
+    marked = mark_nodes(graph, mark)
+    graph["18"] = {"class_type": "CreateVideo", "inputs": {"images": marked, "fps": 24.0}}
+    graph["19"] = {"class_type": "SaveVideo", "inputs": {"video": ["18", 0], "filename_prefix": prefix, "format": "auto", "codec": "auto"}}
+    return graph
 
 
 def written_prompt(entry):
@@ -164,12 +206,13 @@ def guide_shape(path, megapixels):
     return max(32, round(src_w * scale / 32) * 32), max(32, round(src_h * scale / 32) * 32), length
 
 
-def build(clip, images, source, mode, details="", megapixels=0.6, files=None, name=None):
+def build(clip, images, source, mode, details="", megapixels=0.6, files=None, name=None, mark=None):
     """The graph that swaps the picture's character (or head) into a video.
 
     clip: the new clip: the picture as <Picture 1>, the seed, and the prompt (made here from the template).
     source: the video, as a path inside the output folder. details: the character (or face) in words; empty means
-    MOSS-Image's text model describes the picture.
+    MOSS-Image's text model describes the picture. mark: {x, y, opacity}, a point on the first frame: only the person
+    there is replaced (Character only), painted red on the guide and named in the prompt.
     """
     files = h3_graph.available() if files is None else files
     spec = MODES[mode]
@@ -179,7 +222,7 @@ def build(clip, images, source, mode, details="", megapixels=0.6, files=None, na
                                "(qwen3.5_9b_w4a8_gptq.safetensors)." % ("character" if mode == "character" else "face"))
     clip = dict(clip, profile="h3", steps=STEPS, sampler=SAMPLER, scheduler=spec["scheduler"], refmods=None, realism=None,
                 loras=[{"name": TURBO, "strength": 1.0}, {"name": spec["lora"], "strength": 1.0}],
-                prompt=prompt_of(mode, details) if details.strip() else spec["template"])
+                prompt=prompt_of(mode, details, bool(mark)) if details.strip() else template_of(mode, bool(mark)))
     graph = h3_graph.build_graph(clip, images, files=files, name=name)
     picture = "50"
     graph[GUIDE] = {"class_type": "MMVisionLoadGuide", "inputs": {"file": source, "megapixels": float(megapixels), "max_frames": MAX_FRAMES}}
@@ -206,12 +249,13 @@ def build(clip, images, source, mode, details="", megapixels=0.6, files=None, na
         graph[DESCRIBE] = {"class_type": "TextGenerateV2", "inputs": {
             "clip": [DESCRIBER, 0], "prompt": spec["instruction"], "images.image1": [picture, 0], "max_length": 1024,
             "sampling_mode": "off", "thinking": False, "use_default_template": True, "mtp": "off"}}
-        graph[FILL] = {"class_type": "StringReplace", "inputs": {"string": spec["template"], "find": GAP, "replace": [DESCRIBE, 0]}}
+        graph[FILL] = {"class_type": "StringReplace", "inputs": {"string": template_of(mode, bool(mark)), "find": GAP, "replace": [DESCRIBE, 0]}}
         graph[ph3_bridge.UPSAMPLED_NODE] = {"class_type": "PreviewAny", "inputs": {"source": [FILL, 0]}}
         cond["prompt"] = [FILL, 0]
 
+    guide = mark_nodes(graph, mark) if mark else [GUIDE, 0]
     graph[ADD_GUIDE] = {"class_type": "MiniMaxH3AddGuide", "inputs": {
-        "positive": ["10", 0], "latent": ["10", 1], "vae": ["3", 0], "audio_vae": ["4", 0], "image": [GUIDE, 0],
+        "positive": ["10", 0], "latent": ["10", 1], "vae": ["3", 0], "audio_vae": ["4", 0], "image": guide,
         "audio": [GUIDE, 1], "frame_idx": 0}}
     graph["13"]["inputs"]["conditioning"] = [ADD_GUIDE, 0]
     graph.pop("17", None)   # the video's own sound is kept
