@@ -117,11 +117,31 @@ TRACK_IDENTITY = ("Each identity follows its marked person, regardless of screen
 MARKED = (" Replace only the %s-marked person; keep every other person unchanged. Remove all temporary color markers and text "
           "tags. %s Do not add people, insets or duplicate characters." % (MARK_NAME, TRACK_IDENTITY))
 
+# Motion Transfer v1.0: the manual prompt of the author's native workflow (minimax_h3_motion_transfer_workflow_native_nodes_v1.0.json),
+# to edit: say which picture is who, or what (an outfit, an object, a place, a style).
+MOTION_TEMPLATE = """motion_transfer:
+subject_definitions:
+<Subject 1> is the subject in <Picture 1>; preserve its visible identity, face, hair or fur, body proportions and outfit. Picture roles are defined by this prompt, not by slot number. Additional connected pictures may specify other subjects, outfits, objects, environments or style; edit these sections to assign each actual attached picture explicitly.
+summary:
+[video generation + reference] Transfer the source performance to <Subject 1>, preserving the action order, timing and camera of the guide.
+retention_analysis:
+<Subject 1>: preserve the reference identity and appearance throughout the clip. Keep the guide setting unless a connected reference is explicitly assigned to replace it.
+detailed_description:
+[Shot 1] <Subject 1> follows the guide's motion, poses, gestures, head movement and expression in order and at matching times. Keep identity stable during occlusion, turns and back views. Do not turn a back view into a front view. Several reference images may describe one subject; image count does not imply performer count. Do not copy an identity reference's still pose or backdrop as the motion or setting.
+overall_soundscape:
+Keep the source soundtrack when connected; do not invent dialogue.
+non_diegetic_music:
+No additional music requested."""
+MOTION_TRIGGER = "motion_transfer:"
+MOTION_REF_MEGAPIXELS = 1.0   # the workflow's: each picture capped at 1 MP, sent at H3's largest reference size
+
 MODES = {
     "character": {"name": "Character Swap v1.1", "lora": "minimax_h3_character_swap_v1.1_ref2va_fro.safetensors",
                   "template": CHARACTER_TEMPLATE, "instruction": CHARACTER_INSTRUCTION, "scheduler": "simple"},
     "head": {"name": "Head Swap v1.0", "lora": "minimax_h3_head_swap_v1.0_r32.safetensors",
              "template": HEAD_TEMPLATE, "instruction": FACE_INSTRUCTION, "scheduler": "beta"},
+    "motion": {"name": "Motion Transfer v1.0", "lora": "minimax_h3_motion_transfer_v1.0_ref2va.safetensors",
+               "template": MOTION_TEMPLATE, "instruction": None, "scheduler": "simple"},
 }
 
 
@@ -168,7 +188,7 @@ def status(files=None):
     for key, mode in MODES.items():
         lack = missing + [f for f in (TURBO, mode["lora"]) if not h3_graph.pick_file([f], files)]
         modes[key] = ("%s needs %s (gear menu › Models › Swap)." % (mode["name"], h3_graph.and_list(lack))) if lack else None
-    return {"modes": modes, "describe": bool(describer(files)), "megapixels": MEGAPIXELS, "maxSeconds": MAX_FRAMES // 24,
+    return {"modes": modes, "motionTemplate": MOTION_TEMPLATE, "describe": bool(describer(files)), "megapixels": MEGAPIXELS, "maxSeconds": MAX_FRAMES // 24,
             "background": bool(birefnet()), "mark": bool(sam())}
 
 
@@ -220,6 +240,12 @@ def guide_shape(path, megapixels):
     return max(32, round(src_w * scale / 32) * 32), max(32, round(src_h * scale / 32) * 32), length
 
 
+def motion_prompt(prompt):
+    """A Motion Transfer prompt as sent: the person's own, with the trigger it was trained on in front."""
+    prompt = prompt.strip()
+    return prompt if prompt.startswith(MOTION_TRIGGER) else MOTION_TRIGGER + "\n" + prompt
+
+
 def build(clip, images, source, mode, details="", megapixels=0.6, files=None, name=None, mark=None, model=BASE):
     """The graph that swaps the picture's character (or head) into a video.
 
@@ -228,11 +254,13 @@ def build(clip, images, source, mode, details="", megapixels=0.6, files=None, na
     MOSS-Image's text model describes the picture. model: the model family to swap on; the author's is the base
     model with the DMD turbo LoRA (as is any other non-turbo family), and a turbo family runs on its own. mark: {x, y, opacity}, a point on the first frame: only the person
     there is replaced (Character only), painted red on the guide and named in the prompt.
+    Motion: clip carries up to 9 pictures and the person's own prompt (details is not used).
     """
     files = h3_graph.available() if files is None else files
     spec = MODES[mode]
-    text = describer(files) if not details.strip() else None
-    if not details.strip() and not text:
+    motion = mode == "motion"
+    text = describer(files) if not motion and not details.strip() else None
+    if not motion and not details.strip() and not text:
         raise h3_graph.Missing("Describe the %s in words: describing the picture needs MOSS-Image's text encoder "
                                "(qwen3.5_9b_w4a8_gptq.safetensors)." % ("character" if mode == "character" else "face"))
     profile = h3_graph.PROFILES[model]
@@ -241,27 +269,37 @@ def build(clip, images, source, mode, details="", megapixels=0.6, files=None, na
                 steps=profile["steps"] if own else STEPS, sampler=profile["sampler"] if own else SAMPLER,
                 scheduler=(profile.get("scheduler") or spec["scheduler"]) if own else spec["scheduler"],
                 loras=([] if own else [{"name": TURBO, "strength": 1.0}]) + [{"name": spec["lora"], "strength": 1.0}],
-                prompt=prompt_of(mode, details, bool(mark)) if details.strip() else template_of(mode, bool(mark)))
+                prompt=motion_prompt(clip["prompt"]) if motion
+                else prompt_of(mode, details, bool(mark)) if details.strip() else template_of(mode, bool(mark)))
     graph = h3_graph.build_graph(clip, images, files=files, name=name)
     picture = "50"
     graph[GUIDE] = {"class_type": "MMVisionLoadGuide", "inputs": {"file": source, "megapixels": float(megapixels), "max_frames": MAX_FRAMES}}
     cond = graph["10"]["inputs"]
     cond.update({"width": [GUIDE, 2], "height": [GUIDE, 3], "length": [GUIDE, 4]})
 
-    reference = [picture, 0]
-    remover = birefnet()
-    if remover:
-        # The workflow's reference: the character cut out onto grey, so nothing of the picture's background comes along.
-        graph[MASK_MODEL] = {"class_type": "LoadBackgroundRemovalModel", "inputs": {"bg_removal_name": remover}}
-        graph[MASK] = {"class_type": "RemoveBackground", "inputs": {"bg_removal_model": [MASK_MODEL, 0], "image": reference}}
-        graph[SIZE] = {"class_type": "GetImageSize", "inputs": {"image": reference}}
-        graph[BACKDROP] = {"class_type": "EmptyImage", "inputs": {"width": [SIZE, 0], "height": [SIZE, 1], "batch_size": 1, "color": GREY}}
-        graph[CUTOUT] = {"class_type": "ImageCompositeMasked", "inputs": {
-            "destination": [BACKDROP, 0], "source": reference, "x": 0, "y": 0, "resize_source": False, "mask": [MASK, 0]}}
-        reference = [CUTOUT, 0]
-    graph[SMALL] = {"class_type": "ImageScaleToTotalPixels", "inputs": {
-        "image": reference, "upscale_method": "lanczos", "megapixels": REF_MEGAPIXELS, "resolution_steps": 32}}
-    cond["ref_images.ref_image_0"] = [SMALL, 0]
+    if motion:
+        # Every picture as the author's workflow sends them: up to 1 MP each, at H3's largest reference size.
+        cond["ref_image_size"] = "max"
+        for key in [k for k in cond if k.startswith("ref_images.")]:
+            small = "8%s" % key.rsplit("_", 1)[1]
+            graph[small] = {"class_type": "ImageScaleToTotalPixels", "inputs": {
+                "image": cond[key], "upscale_method": "lanczos", "megapixels": MOTION_REF_MEGAPIXELS, "resolution_steps": 32}}
+            cond[key] = [small, 0]
+    else:
+        reference = [picture, 0]
+        remover = birefnet()
+        if remover:
+            # The workflow's reference: the character cut out onto grey, so nothing of the picture's background comes along.
+            graph[MASK_MODEL] = {"class_type": "LoadBackgroundRemovalModel", "inputs": {"bg_removal_name": remover}}
+            graph[MASK] = {"class_type": "RemoveBackground", "inputs": {"bg_removal_model": [MASK_MODEL, 0], "image": reference}}
+            graph[SIZE] = {"class_type": "GetImageSize", "inputs": {"image": reference}}
+            graph[BACKDROP] = {"class_type": "EmptyImage", "inputs": {"width": [SIZE, 0], "height": [SIZE, 1], "batch_size": 1, "color": GREY}}
+            graph[CUTOUT] = {"class_type": "ImageCompositeMasked", "inputs": {
+                "destination": [BACKDROP, 0], "source": reference, "x": 0, "y": 0, "resize_source": False, "mask": [MASK, 0]}}
+            reference = [CUTOUT, 0]
+        graph[SMALL] = {"class_type": "ImageScaleToTotalPixels", "inputs": {
+            "image": reference, "upscale_method": "lanczos", "megapixels": REF_MEGAPIXELS, "resolution_steps": 32}}
+        cond["ref_images.ref_image_0"] = [SMALL, 0]
 
     if text:
         graph[DESCRIBER] = {"class_type": "CLIPLoader", "inputs": {"clip_name": text, "type": "minimax", "device": "default"}}
