@@ -1901,8 +1901,12 @@ function renderClip() {
   syncFullscreenButton();
 }
 
+// A video imported as it is, without a prompt or settings: nothing to reuse, and no takes.
+const plainVideo = (c) => c.found === "video file";
+
 function renderTakes(c) {
-  const takes = state.clips.filter((x) => x.prompt === c.prompt && tabOf(x) === tabOf(c));
+  document.querySelector(".takes-label")?.toggleAttribute("hidden", plainVideo(c));
+  const takes = plainVideo(c) ? [] : state.clips.filter((x) => x.prompt === c.prompt && tabOf(x) === tabOf(c));
   $("takes").innerHTML = takes.map((x) => `<button class="take ${x.id === c.id ? "on" : ""}" data-act="open" data-id="${x.id}">
       <i style="background:${toneOf(x.id)}">${kindOf(x) === "image" ? (x.status === "done" ? `<img src="${clipUrl(x)}" alt="">` : "") : x.file ? `<video src="${clipUrl(x)}" muted preload="metadata"></video>` : ""}</i>${mpText(x.res)} · Seed ${x.seed}<span data-takeprog="${x.id}">${takeProgress(x)}</span>
     </button>`).join("");
@@ -1910,6 +1914,22 @@ function renderTakes(c) {
 
 function renderClipSide(c) {
   if (kindOf(c) === "image") { renderImageSide(c); return; }
+  if (plainVideo(c)) {
+    $("clipSide").innerHTML = `
+    <dl class="facts">
+      <dt>Size</dt><dd>${c.width}×${c.height} · ${c.aspect}</dd>
+      <dt>Length</dt><dd>${c.len} s</dd>
+    </dl>
+    <p class="hint imported">Imported from ${esc(c.imported)}, as it is: it has no prompt or settings. Swap a character into it, or put it in the edit.</p>
+    <div class="actions">
+      <button class="btn primary" data-act="swapThis" ${c.file ? "" : "disabled"}>${ICON.swap}Swap character…</button>
+      <div class="actions-grid">
+        <button class="btn" data-act="download" ${c.file ? "" : "disabled"}>Download</button>
+        <button class="btn danger" data-act="deleteClip">Delete</button>
+      </div>
+    </div>`;
+    return;
+  }
   $("clipSide").innerHTML = `
     <div class="field">
       <span class="label">Prompt</span>
@@ -2453,7 +2473,8 @@ function openMenu(id, x, y) {
       : `<button role="menuitem" data-act="menuAddToEdit" ${c.status === "done" && c.file ? "" : 'aria-disabled="true" class="off"'}>${ICON.edit}Add to edit</button>`) : ""}${kindOf(c) === "video" ? `
     <button role="menuitem" data-act="menuSwap" ${c.status === "done" && c.file ? "" : 'aria-disabled="true" class="off"'} title="Put the person from a picture into this video, with its motion and sound">${ICON.swap}Swap character…</button>
     <button role="menuitem" data-act="menuFaces" ${c.status === "done" && c.file ? "" : 'aria-disabled="true" class="off"'} title="${esc(FACES.why || "Re-render small faces up close and put them back, as a new clip")}">${ICON.face}Refine faces…</button>` : ""}
-    <button role="menuitem" data-act="menuReuse">${ICON.reuse}Use this prompt and settings</button>
+${plainVideo(c) ? "" : `
+    <button role="menuitem" data-act="menuReuse">${ICON.reuse}Use this prompt and settings</button>`}
     <button role="menuitem" data-act="menuCopyPrompt" ${c.prompt ? "" : 'aria-disabled="true" class="off"'}>${ICON.copy}Copy prompt</button>${kindOf(c) === "image" ? `
     <button role="menuitem" data-act="menuUseInVideo" ${c.status === "done" ? "" : 'aria-disabled="true" class="off"'}>${ICON.video}Use in a video</button>
     <button role="menuitem" data-act="menuEditThis" ${c.status === "done" ? "" : 'aria-disabled="true" class="off"'}>${tabOf(c) === "pruna" ? ICON.pruna + "Edit this (picture 1)" : ICON.klein + (tabOf(c) === "klein" ? "Edit this (image 1)" : "Edit in Klein (image 1)")}</button>${tabOf(c) === "pruna" ? "" : `
@@ -3047,6 +3068,7 @@ const ACT = {
   },
   driveCancel: (id) => api("POST", `gdrive/${id}/cancel`).then((r) => driveJobs(r.jobs)).catch((e) => say(e.message)),
   toggleRealism: () => { const r = realismOf(state.settings); r.on = !r.on; saveUi(); render(); },
+  swapThis: () => { const c = clipById(state.openId); if (c && c.status === "done" && c.file) openSwap(c); },
   menuSwap: () => { const id = closeMenu(); const c = clipById(id); if (c && c.status === "done" && c.file) openSwap(c); },
   swapMode: (id) => { SWAP.mode = id; drawSwap(); },
   swapRes: (id) => { SWAP.res = Number(id); drawSwap(); },
@@ -3650,7 +3672,7 @@ async function importFiles(files) {
       if (done.length === 1) openClip(done[0].id); else render();
     }
   }
-  if (failed.length) say(failed.length === 1 ? failed[0] : `${failed.length} files had no prompt or settings inside them. ${failed[0]}`);
+  if (failed.length) say(failed.length === 1 ? failed[0] : `${failed.length} files couldn't be imported. ${failed[0]}`);
   else if (done.length === 1) say(done[0].found === "graph" ? "Imported. The settings were worked out from the file's ComfyUI workflow." : "Imported with its prompt and settings.");
   else if (done.length) say("Imported " + done.length + " files.");
 }

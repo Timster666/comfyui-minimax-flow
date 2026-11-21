@@ -16,7 +16,7 @@ VERSION = 1
 FIELDS = ("kind", "prompt", "model", "profile", "steps", "cfg", "res", "aspect", "len", "width", "height", "seed", "loras",
           "sampler", "scheduler", "negative", "family", "size", "slots", "edit", "mode", "sheet", "enhance", "sent", "swap",
           "pictures", "refmods", "faces", "realism", "swap")
-VIDEO_TYPES = {".mp4", ".mov", ".webm", ".mkv"}
+VIDEO_TYPES = {".mp4", ".mov", ".webm", ".mkv", ".m4v", ".avi", ".mpg", ".mpeg", ".wmv", ".flv", ".3gp"}
 IMAGE_TYPES = {".png", ".jpg", ".jpeg", ".webp"}
 
 
