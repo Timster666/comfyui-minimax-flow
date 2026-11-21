@@ -65,10 +65,17 @@ the face shows), the prompt says to replace only the red-marked person, and **Ch
 video first. That is how Henge picks a person; it works best in one continuous shot. **Model** is the author's (MiniMax H3's own
 model) by default; any other installed H3 model but HyperFlow can be tried (untested): a turbo build (H3 Turbo,
 10Eros, PRISM, DaSiWa turbo) runs with its own steps and sampler without the DMD LoRA, a full one (Singularity,
-DaSiWa) gets the DMD LoRA and 8 steps. **Motion** (Motion Transfer v1.0, same author) takes the video's motion,
-timing and camera only: up to 9 pictures, picked in order as `<Picture 1>`…, give the people, outfits, objects,
-place or style, and the prompt (the author's six-part `motion_transfer:` template, prefilled to edit) says which
-picture is what. Pictures go in at up to 1 MP each at H3's largest reference size, as in his native workflow.
+DaSiWa) gets the DMD LoRA and 8 steps.
+
+**Motion from** (Video tab, with Alissonerdx's Motion Transfer v1.0 LoRA; on RunPod `ENABLE_SWAP=true`): next to
+Add image, **Motion from…** then a click on a video in the gallery (or a video's ⋯ menu › **Use its motion**) makes
+the next render take that video's motion, timing, camera and sound (first 15 s, in its shape). The prompt bar's
+pictures and prompt say who and what performs it: up to 9 pictures, each a person, another view of them, an outfit,
+an object, a place or a style, and the prompt says which is which. **Use the author's prompt** puts his six-part
+`motion_transfer:` template in the prompt to edit. As in his native workflow: the video as a guide at frame 0,
+pictures at up to 1 MP each at H3's largest reference size, DMD 8-step turbo, Euler, CFG 1 on MiniMax H3's own model;
+another model in the Video settings is untested (turbo models run their own way). Your LoRAs are added; RefMods and
+Realism aren't.
 
 **Refine faces** (optional, with Carasibana's [ComfyUI-H3-FaceRefine](https://github.com/Carasibana/ComfyUI-H3-FaceRefine),
 the `MiniMaxH3NativeAudioLock` node and the `face_yolov8m.pt` detector in `models/ultralytics/bbox`; on RunPod

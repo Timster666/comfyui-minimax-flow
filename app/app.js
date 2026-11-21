@@ -58,6 +58,8 @@ const state = {
   mentionClosed: false,
   refs: [],                  // every uploaded image: {id, name, file, added, img, tone}
   attached: [],              // ids of the images in the prompt bar
+  motion: null,              // Motion from: the id of the video that gives a render its motion (Motion Transfer)
+  pickingMotion: false,      // the next video clicked in the gallery becomes Motion from
   library: { open: false, source: "uploads", selected: null, selectedGen: null, query: "", sort: "newest" },
   clips: [],
   tab: "video",              // "video" | "image" | "klein" | "edit": "edit" is the editor (edit.js), the others the gallery and prompt
@@ -283,6 +285,9 @@ function summary() {
     return ["Edit", s.model, s.steps + " steps", "Guidance " + s.cfg, size ? size.join("×") : mpText(s.res),
       s.seedMode === "fixed" ? "Seed " + s.seed : "Random seed", n + (n === 1 ? " LoRA" : " LoRAs")].join(" · ");
   }
+  if (!isImage() && state.motion && motionSource(state.motion))
+    return ["Motion from a video", modelOf(s.model)?.scheduler === "hyperflow" ? s.model + " (can't do Motion: pick another model)" : s.model, mpText(s.res), "the video's shape and length", s.seedMode === "fixed" ? "Seed " + s.seed : "Random seed",
+      n + (n === 1 ? " LoRA" : " LoRAs")].join(" · ");
   return [s.model, s.steps + " steps", ...(isImage() ? ["Guidance " + s.cfg] : []), mpText(s.res), s.aspect, ...(isImage() ? [] : [s.len + " s"]),
     s.seedMode === "fixed" ? "Seed " + s.seed : "Random seed", n + (n === 1 ? " LoRA" : " LoRAs")].join(" · ");
 }
@@ -313,7 +318,7 @@ function saveUi() {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
     state.drafts[draftKey()] = state.prompt;
-    api("PUT", "ui", { settings: state.videoSettings, imageSettings: state.imageSettings, attached: state.attached, perRow: state.perRow,
+    api("PUT", "ui", { settings: state.videoSettings, imageSettings: state.imageSettings, attached: state.attached, motion: state.motion, perRow: state.perRow,
       prompt: state.drafts.video, imagePrompt: state.drafts.image, imageNegative: state.negative, negativeOpen: state.negativeOpen,
       kleinSettings: state.kleinSettings, kleinPrompt: state.drafts.klein, kleinSlots: state.kleinSlots,
       kleinMode: state.kleinMode, kleinSwapSlots: state.kleinSwapSlots, kleinSwapPrompt: state.drafts.kleinSwap, kleinSwapMask: state.kleinSwapMask,
@@ -636,7 +641,27 @@ function renderRefs() {
       </span>
       <button class="ref-name pic-tag" data-act="insertPicture" data-id="${i}" title="Put &lt;Picture ${i + 1}&gt; in the prompt at the cursor">Picture ${i + 1}</button>
     </div>`).join("") + `
-    <button class="add-ref" id="addRef" data-act="openLibrary" aria-expanded="${state.library.open}" ${strip.length >= 9 ? "disabled" : ""}>${ICON.plus}Add image</button>`;
+    <button class="add-ref" id="addRef" data-act="openLibrary" aria-expanded="${state.library.open}" ${strip.length >= 9 ? "disabled" : ""}>${ICON.plus}Add image</button>` + motionChip();
+}
+
+// Motion from: a video whose motion, timing, camera and sound a render takes (Alissonerdx's Motion Transfer v1.0).
+// The pictures and the prompt say who and what performs it.
+const motionSource = (id) => { const c = clipById(id); return c && kindOf(c) === "video" && c.status === "done" && c.file ? c : null; };
+function motionChip() {
+  const c = state.motion && motionSource(state.motion);
+  if (!c) return `<button class="add-ref motion-add ${state.pickingMotion ? "on" : ""}" data-act="pickMotion" title="Take the motion of a video in the gallery: your pictures and prompt say who performs it">${ICON.swap}${state.pickingMotion ? "Click a video…" : "Motion from…"}</button>`;
+  return `<div class="motion-chip" title="This render takes the motion, timing, camera and sound of this video (Motion Transfer)">
+      <video src="${clipUrl(c)}" muted loop autoplay playsinline></video>
+      <span class="motion-text"><b>Motion from this video</b><button class="link" data-act="motionTemplate">Use the author's prompt</button></span>
+      <button class="ref-x motion-x" data-act="clearMotion" aria-label="Stop taking the motion of this video">${ICON.x}</button>
+    </div>`;
+}
+function setMotion(id) {
+  state.motion = id;
+  state.pickingMotion = false;
+  if (state.tab !== "video") ACT.tab("video");
+  render(); saveUi();
+  if (id) say("The next video takes this video's motion. Pick the pictures and say in the prompt who performs it.");
 }
 
 /* Klein's four slots, image 1-4. They keep their names: swapping two pictures (drag one onto another) or
@@ -1569,7 +1594,7 @@ async function refineFaces() {
 
 // Swap (Alissonerdx's Character Swap v1.1 and Head Swap v1.0): a video as the guide, a picture as the new character.
 const SWAP = { clip: null, mode: "character", picture: null, res: 0.6, status: null,
-  who: "main", point: null, opacity: 1, check: null, pictures: [], prompt: null };   // check: {state, pid, url, error} of the marked preview
+  who: "main", point: null, opacity: 1, check: null };   // check: {state, pid, url, error} of the marked preview
 async function openSwap(c) {
   try { SWAP.status = await api("GET", "swap"); } catch (error) { say(error.message); return; }
   if (SWAP.clip !== c.id) Object.assign(SWAP, { who: "main", point: null, check: null });
@@ -1589,34 +1614,22 @@ function drawSwap() {
   const m = st.models.find((x) => x.id === SWAP.model);
   $("swModelHint").textContent = !m ? "" : m.id === st.base ? "The author's: MiniMax H3's own model, which the swap LoRAs were trained on, with the DMD 8-step turbo LoRA as in his workflow."
     : `Untested: the swap LoRAs were trained on MiniMax H3's own model. ${m.turbo ? `${m.name} runs its own way (${m.steps} steps), without the DMD turbo LoRA.` : `${m.name} gets the DMD turbo LoRA and 8 steps, like the author's.`}`;
-  const motion = SWAP.mode === "motion";
-  $("swModes").innerHTML = [["character", "Character", "the whole person: face, hair, body and clothes"], ["head", "Head only", "experimental: the head, on the video's own body"],
-    ["motion", "Motion", "the video's motion, performed by the people and things in your pictures, as your prompt says"]]
+  $("swModes").innerHTML = [["character", "Character", "the whole person: face, hair, body and clothes"], ["head", "Head only", "experimental: the head, on the video's own body"]]
     .map(([id, name, what]) => `<button class="${SWAP.mode === id ? "on" : ""}" data-act="swapMode" data-id="${id}" title="${what}">${name}</button>`).join("");
   $("swModeHint").textContent = why || (head ? "Replaces only the head; the body, clothes and motion stay the video's. Experimental."
-    : motion ? "Motion Transfer: the video gives only the motion, timing and camera; your pictures and prompt give who, what and where."
     : "The person in the picture takes the place of the video's main person, with the same motion, lips and camera.");
   const pics = state.refs;
-  SWAP.pictures = SWAP.pictures.filter((id) => pics.some((r) => r.id === id));
-  const order = (id) => SWAP.pictures.indexOf(id) + 1;
-  $("swPics").innerHTML = pics.length ? pics.map((r) => {
-      const on = motion ? order(r.id) > 0 : SWAP.picture === r.id;
-      return `<button class="rm-pic fc-pic ${on ? "on" : ""}" data-act="swapPick" data-id="${r.id}" aria-pressed="${on}">
-      <img src="${r.img}" alt="">${motion && on ? `<b class="sw-num">${order(r.id)}</b>` : ""}<span>${motion && on ? "Picture " + order(r.id) : esc(r.name)}</span></button>`; }).join("")
+  $("swPics").innerHTML = pics.length ? pics.map((r) => `<button class="rm-pic fc-pic ${SWAP.picture === r.id ? "on" : ""}" data-act="swapPick" data-id="${r.id}" aria-pressed="${SWAP.picture === r.id}">
+      <img src="${r.img}" alt=""><span>${esc(r.name)}</span></button>`).join("")
     : `<p class="hint">Add the picture with Add image first.</p>`;
-  $("swPicLabel").textContent = motion ? "Pictures" : "Picture";
-  $("swPicHint").textContent = motion ? "Click them in order: the first is <Picture 1>, the next <Picture 2>… (up to 9). A person, another view of them, an outfit, an object, a place or a style."
-    : (head ? "A clear picture of the face and hair." : "The whole person, head to toe if you can.") +
+  $("swPicHint").textContent = (head ? "A clear picture of the face and hair." : "The whole person, head to toe if you can.") +
     (st.background ? " Its background is replaced by grey, as in the author's workflow." : "");
-  $("swDetailsField").hidden = motion;
-  $("swPromptField").hidden = !motion;
-  if (motion && SWAP.prompt == null) { SWAP.prompt = st.motionTemplate; $("swPrompt").value = SWAP.prompt; }
   $("swDetailsLabel").textContent = head ? "The face in words" : "The character in words";
   $("swDetails").placeholder = (head ? "Male, oval face shape, light brown skin, dark eyes, black tousled hair" : "Female, tall, slim, long red hair, green eyes, black leather jacket, blue jeans, white sneakers");
   $("swDetailsHint").textContent = st.describe ? "Optional. Empty: written from the picture while it renders, and saved with the clip."
     : "Needed: describing the picture needs MOSS-Image's text encoder, which isn't installed.";
   const pickable = !head && st.mark;
-  $("swWhoField").hidden = head || motion;
+  $("swWhoField").hidden = head;
   if (!pickable && SWAP.who === "pick") SWAP.who = "main";
   $("swWho").innerHTML = [["main", "The main person"], ["pick", "Pick on the first frame"]]
     .map(([id, name]) => `<button class="${SWAP.who === id ? "on" : ""}" data-act="swapWho" data-id="${id}" ${id === "pick" && !pickable ? "disabled" : ""}>${name}</button>`).join("");
@@ -1635,7 +1648,7 @@ function drawSwap() {
     : ck.state === "failed" ? `<span class="hint warn">${esc(ck.error || "It didn't work.")}</span>`
     : `<video src="${ck.url}" autoplay muted loop playsinline></video><span class="hint">The red person is the one that's replaced. Wrong one? Click again.</span>`;
   $("swRes").innerHTML = st.megapixels.map((mp) => `<button class="${SWAP.res === mp ? "on" : ""}" data-act="swapRes" data-id="${mp}">${mp.toFixed(1)} MP</button>`).join("");
-  $("swGo").disabled = !!why || (motion ? !SWAP.pictures.length || !(SWAP.prompt || "").trim() : !SWAP.picture || (SWAP.who === "pick" && !SWAP.point));
+  $("swGo").disabled = !!why || !SWAP.picture || (SWAP.who === "pick" && !SWAP.point);
 }
 function swapMark() {
   return !$("swWhoField").hidden && SWAP.who === "pick" && SWAP.point ? { ...SWAP.point, opacity: SWAP.opacity } : null;
@@ -1662,7 +1675,6 @@ function swFrameRect() {
   const pw = (v.videoWidth || w) * scale, ph = (v.videoHeight || h) * scale;
   return { left: (w - pw) / 2, top: (h - ph) / 2, width: pw, height: ph };
 }
-$("swPrompt").addEventListener("input", (e) => { SWAP.prompt = e.target.value; $("swGo").disabled = !SWAP.pictures.length || !SWAP.prompt.trim(); });
 $("swFrameBox").addEventListener("click", (e) => {
   const box = $("swFrame").getBoundingClientRect(), r = swFrameRect();
   const x = (e.clientX - box.left - r.left) / r.width, y = (e.clientY - box.top - r.top) / r.height;
@@ -1672,8 +1684,7 @@ $("swFrameBox").addEventListener("click", (e) => {
   drawSwap();
 });
 async function runSwap() {
-  const body = SWAP.mode === "motion" ? { model: SWAP.model, mode: "motion", pictures: SWAP.pictures, res: SWAP.res, prompt: SWAP.prompt }
-    : { model: SWAP.model, mode: SWAP.mode, picture: SWAP.picture, res: SWAP.res, details: $("swDetails").value.trim(), mark: swapMark() };
+  const body = { model: SWAP.model, mode: SWAP.mode, picture: SWAP.picture, res: SWAP.res, details: $("swDetails").value.trim(), mark: swapMark() };
   try {
     const r = await api("POST", "clips/" + SWAP.clip + "/swap", body);
     $("swapModal").hidden = true;
@@ -2400,7 +2411,8 @@ function generateBody() {
   if (empty.length) return { error: `The prompt names ${empty.map((n) => "image " + n).join(" and ")}, but ${empty.length > 1 ? "those slots are" : "that slot is"} empty. Fill it, or change the prompt.` };
   return { body: { prompt, settings: s, kind: state.tab, negative: isImage() ? state.negative : undefined,
     slots: isKlein() ? state.kleinSlots : undefined, edit: editOn() ? state.imageEditSlot[0] : undefined,
-    pictures: state.tab === "video" ? state.attached.filter((id) => state.refs.some((r) => r.id === id)) : undefined } };
+    pictures: state.tab === "video" ? state.attached.filter((id) => state.refs.some((r) => r.id === id)) : undefined,
+    motion: state.tab === "video" && state.motion && motionSource(state.motion) ? state.motion : undefined } };
 }
 
 async function generate() {
@@ -2432,6 +2444,7 @@ async function generate() {
     SENT.timer = setTimeout(() => hideSent(), 300);
   });
   document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("sentBox").hidden) hideSent(true); });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && state.pickingMotion) { state.pickingMotion = false; render(); } });
 }
 const SENT = { timer: null, key: "", pinned: false, busy: false };
 function sentKey() { try { return JSON.stringify(generateBody()); } catch { return ""; } }
@@ -2547,6 +2560,7 @@ function openMenu(id, x, y) {
     <span class="ctx-line"></span>${kindOf(c) === "video" ? (EDIT.has(c.id)
       ? `<button role="menuitem" aria-disabled="true" class="off" title="This video is on the edit's timeline already.">${ICON.check}Already in the edit</button>`
       : `<button role="menuitem" data-act="menuAddToEdit" ${c.status === "done" && c.file ? "" : 'aria-disabled="true" class="off"'}>${ICON.edit}Add to edit</button>`) : ""}${kindOf(c) === "video" ? `
+    <button role="menuitem" data-act="menuUseMotion" ${c.status === "done" && c.file ? "" : 'aria-disabled="true" class="off"'} title="Make a new video with this one's motion: your pictures and prompt say who performs it">${ICON.swap}Use its motion</button>
     <button role="menuitem" data-act="menuSwap" ${c.status === "done" && c.file ? "" : 'aria-disabled="true" class="off"'} title="Put the person from a picture into this video, with its motion and sound">${ICON.swap}Swap character…</button>
     <button role="menuitem" data-act="menuFaces" ${c.status === "done" && c.file ? "" : 'aria-disabled="true" class="off"'} title="${esc(FACES.why || "Re-render small faces up close and put them back, as a new clip")}">${ICON.face}Refine faces…</button>` : ""}
 ${plainVideo(c) ? "" : `
@@ -3052,7 +3066,23 @@ const ACT = {
   },
   // A click opens the clip; with ⌘ or Ctrl (add/take out) or Shift (a range) it selects instead, and while
   // anything is selected a plain click selects too.
+  pickMotion: () => {
+    state.pickingMotion = !state.pickingMotion;
+    render();
+    if (state.pickingMotion) say("Click the video to take the motion from (Esc to stop).");
+  },
+  clearMotion: () => setMotion(null),
+  menuUseMotion: () => { const c = motionSource(closeMenu()); if (c) setMotion(c.id); },
+  motionTemplate: async () => {
+    if (state.prompt.trim() && !confirm("Replace your prompt with the author's Motion Transfer prompt?")) return;
+    try { const st = await api("GET", "swap"); state.prompt = st.motionTemplate; state.caret = state.prompt.length; render(); saveUi(); }
+    catch (error) { say(error.message); }
+  },
   open: (id, el, e) => {
+    if (state.pickingMotion) {
+      if (motionSource(id)) setMotion(id); else say("That one isn't a finished video.");
+      return;
+    }
     if (e && (e.metaKey || e.ctrlKey || e.shiftKey || state.picked.size)) { pickClip(id, e); return; }
     openClip(id);
   },
@@ -3148,13 +3178,7 @@ const ACT = {
   menuSwap: () => { const id = closeMenu(); const c = clipById(id); if (c && c.status === "done" && c.file) openSwap(c); },
   swapMode: (id) => { SWAP.mode = id; drawSwap(); },
   swapRes: (id) => { SWAP.res = Number(id); drawSwap(); },
-  swapPick: (id) => {
-    if (SWAP.mode !== "motion") SWAP.picture = id;
-    else if (SWAP.pictures.includes(id)) SWAP.pictures = SWAP.pictures.filter((x) => x !== id);
-    else if (SWAP.pictures.length < 9) SWAP.pictures = [...SWAP.pictures, id];
-    drawSwap();
-  },
-  swapPromptReset: () => { SWAP.prompt = SWAP.status.motionTemplate; $("swPrompt").value = SWAP.prompt; drawSwap(); },
+  swapPick: (id) => { SWAP.picture = id; drawSwap(); },
   swapGo: () => runSwap(),
   swapWho: (id) => { SWAP.who = id; drawSwap(); },
   swapOpacity: (id) => { SWAP.opacity = Number(id); SWAP.check = null; drawSwap(); },
@@ -3427,6 +3451,7 @@ const ACT = {
       kindOf(c) === "image" ? { cfg: c.cfg } : { len: c.len, refmods: (c.refmods || []).filter((m) => RM.files.includes(m.file)),
         realism: { on: !!c.realism, strength: c.realism || realismOf(state.settings).strength } },
       { sampler: c.sampler || "", scheduler: c.scheduler || "" });
+    if (kindOf(c) === "video") state.motion = c.motion && motionSource(c.motion.from) ? c.motion.from : null;
     if (kindOf(c) === "image") {
       state.negative = c.negative != null ? c.negative : negativeDefault(c.model);
       // An edit comes back as an edit, with its picture when it's still in Add image.
@@ -4243,6 +4268,7 @@ async function load(first = true) {
       // ui.subjects: they come back into the strip.
       const fromSubjects = (ui.subjects || []).flatMap((x) => x.refs || []);
       state.attached = [...new Set([...(ui.attached || []), ...fromSubjects])].filter((id) => state.refs.some((r) => r.id === id));
+      state.motion = ui.motion && motionSource(ui.motion) ? ui.motion : null;
       state.perRow = ui.perRow || 3;
       state.prompt = state.drafts[state.tab];
       state.caret = state.prompt.length;
