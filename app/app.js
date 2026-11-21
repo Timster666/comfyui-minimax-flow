@@ -1568,11 +1568,14 @@ async function refineFaces() {
 }
 
 // Swap (Alissonerdx's Character Swap v1.1 and Head Swap v1.0): a video as the guide, a picture as the new character.
-const SWAP = { clip: null, mode: "character", picture: null, res: 0.6, status: null };
+const SWAP = { clip: null, mode: "character", picture: null, res: 0.6, status: null,
+  who: "main", point: null, opacity: 1, check: null };   // check: {state, pid, url, error} of the marked preview
 async function openSwap(c) {
   try { SWAP.status = await api("GET", "swap"); } catch (error) { say(error.message); return; }
+  if (SWAP.clip !== c.id) Object.assign(SWAP, { who: "main", point: null, check: null });
   SWAP.clip = c.id;
   if (!state.refs.some((r) => r.id === SWAP.picture)) SWAP.picture = null;
+  $("swFrame").src = clipUrl(c);
   $("swDetails").value = "";
   drawSwap();
   $("swapModal").hidden = false;
@@ -1593,11 +1596,63 @@ function drawSwap() {
   $("swDetails").placeholder = (head ? "Male, oval face shape, light brown skin, dark eyes, black tousled hair" : "Female, tall, slim, long red hair, green eyes, black leather jacket, blue jeans, white sneakers");
   $("swDetailsHint").textContent = st.describe ? "Optional. Empty: written from the picture while it renders, and saved with the clip."
     : "Needed: describing the picture needs MOSS-Image's text encoder, which isn't installed.";
+  const pickable = !head && st.mark;
+  $("swWhoField").hidden = head;
+  if (!pickable && SWAP.who === "pick") SWAP.who = "main";
+  $("swWho").innerHTML = [["main", "The main person"], ["pick", "Pick on the first frame"]]
+    .map(([id, name]) => `<button class="${SWAP.who === id ? "on" : ""}" data-act="swapWho" data-id="${id}" ${id === "pick" && !pickable ? "disabled" : ""}>${name}</button>`).join("");
+  $("swPick").hidden = SWAP.who !== "pick";
+  $("swWhoHint").textContent = SWAP.who === "main" ? "Character Swap replaces the person it sees as the main one, usually the biggest and most central."
+    + (st.mark ? "" : " Picking a person needs SAM 3.1 (gear menu › Models › Swap).")
+    : "Click the person to replace. They're painted red through the clip and the prompt says to replace only them; everyone else stays.";
+  const dot = $("swDot");
+  dot.hidden = !SWAP.point;
+  if (SWAP.point) { const r = swFrameRect(); dot.style.left = r.left + SWAP.point.x * r.width + "px"; dot.style.top = r.top + SWAP.point.y * r.height + "px"; }
+  $("swOpacity").innerHTML = [[1, "Solid"], [0.5, "See-through"]].map(([v, name]) =>
+    `<button class="${SWAP.opacity === v ? "on" : ""}" data-act="swapOpacity" data-id="${v}">${name}</button>`).join("");
+  const ck = SWAP.check;
+  $("swCheck").disabled = !SWAP.point || ck?.state === "working";
+  $("swCheckOut").innerHTML = !ck ? "" : ck.state === "working" ? `<span class="hint">Marking the person through the clip…</span>`
+    : ck.state === "failed" ? `<span class="hint warn">${esc(ck.error || "It didn't work.")}</span>`
+    : `<video src="${ck.url}" autoplay muted loop playsinline></video><span class="hint">The red person is the one that's replaced. Wrong one? Click again.</span>`;
   $("swRes").innerHTML = st.megapixels.map((mp) => `<button class="${SWAP.res === mp ? "on" : ""}" data-act="swapRes" data-id="${mp}">${mp.toFixed(1)} MP</button>`).join("");
-  $("swGo").disabled = !!why || !SWAP.picture;
+  $("swGo").disabled = !!why || !SWAP.picture || (SWAP.who === "pick" && !SWAP.point);
 }
+function swapMark() {
+  return !$("swWhoField").hidden && SWAP.who === "pick" && SWAP.point ? { ...SWAP.point, opacity: SWAP.opacity } : null;
+}
+async function checkMark() {
+  SWAP.check = { state: "working" };
+  drawSwap();
+  try {
+    const { prompt_id } = await api("POST", "clips/" + SWAP.clip + "/swap-mark", { mark: swapMark(), res: SWAP.res });
+    SWAP.check.pid = prompt_id;
+    while (SWAP.check?.pid === prompt_id) {
+      await new Promise((r) => setTimeout(r, 2000));
+      const r = await api("GET", "swap-mark/" + prompt_id);
+      if (SWAP.check?.pid !== prompt_id || r.state === "working") continue;
+      SWAP.check = r.state === "done" ? { state: "done", url: fileUrl(r.subfolder, r.file) } : { state: "failed", error: r.error };
+      drawSwap();
+    }
+  } catch (error) { SWAP.check = { state: "failed", error: error.message }; drawSwap(); }
+}
+// The picture inside the frame box (object-fit: contain leaves bars), in pixels from the box's corner.
+function swFrameRect() {
+  const v = $("swFrame"), w = v.clientWidth, h = v.clientHeight;
+  const scale = Math.min(w / (v.videoWidth || w), h / (v.videoHeight || h));
+  const pw = (v.videoWidth || w) * scale, ph = (v.videoHeight || h) * scale;
+  return { left: (w - pw) / 2, top: (h - ph) / 2, width: pw, height: ph };
+}
+$("swFrameBox").addEventListener("click", (e) => {
+  const box = $("swFrame").getBoundingClientRect(), r = swFrameRect();
+  const x = (e.clientX - box.left - r.left) / r.width, y = (e.clientY - box.top - r.top) / r.height;
+  if (x < 0 || x > 1 || y < 0 || y > 1) return;
+  SWAP.point = { x: Math.round(x * 10000) / 10000, y: Math.round(y * 10000) / 10000 };
+  SWAP.check = null;
+  drawSwap();
+});
 async function runSwap() {
-  const body = { mode: SWAP.mode, picture: SWAP.picture, res: SWAP.res, details: $("swDetails").value.trim() };
+  const body = { mode: SWAP.mode, picture: SWAP.picture, res: SWAP.res, details: $("swDetails").value.trim(), mark: swapMark() };
   try {
     const r = await api("POST", "clips/" + SWAP.clip + "/swap", body);
     $("swapModal").hidden = true;
@@ -3074,6 +3129,9 @@ const ACT = {
   swapRes: (id) => { SWAP.res = Number(id); drawSwap(); },
   swapPick: (id) => { SWAP.picture = id; drawSwap(); },
   swapGo: () => runSwap(),
+  swapWho: (id) => { SWAP.who = id; drawSwap(); },
+  swapOpacity: (id) => { SWAP.opacity = Number(id); SWAP.check = null; drawSwap(); },
+  swapCheck: () => checkMark(),
   swapClose: () => { $("swapModal").hidden = true; },
   menuFaces: () => { const id = closeMenu(); const c = clipById(id); if (c && c.status === "done" && c.file) openFaces(c); },
   facesGo: () => refineFaces(),
