@@ -632,6 +632,9 @@ body.dragging-ref .composer { border-color: var(--line-strong); }
 .sw-check { display: flex; flex-direction: column; gap: 6px; }
 .sw-check video { border-radius: 10px; }
 .hint.warn { color: var(--danger, #e5484d); }
+.sw-prompt { min-height: 180px; font-size: 12px; }
+.fc-pic { position: relative; }
+.sw-num { position: absolute; top: 4px; left: 4px; min-width: 18px; height: 18px; border-radius: 9px; background: var(--accent); color: #111; font-size: 11px; line-height: 18px; text-align: center; }
 .sw-details { resize: vertical; min-height: 64px; padding: 8px 12px; font: inherit; line-height: 1.4; }
 .fc-pic { background: none; border: 0; padding: 0; }
 .fc-pic.on img { border-color: var(--accent); }
@@ -986,8 +989,11 @@ body.dragging-ref .composer { border-color: var(--line-strong); }
             <button class="btn" id="swCheck" data-act="swapCheck">Check the mark</button></div>
           <div class="sw-check" id="swCheckOut"></div>
         </div></div>
-      <div class="rm-field"><span class="label">Picture</span><div class="rm-pics" id="swPics"></div><span class="hint" id="swPicHint"></span></div>
-      <label class="rm-field"><span class="label" id="swDetailsLabel">The character in words</span><textarea class="lm-link sw-details" id="swDetails" rows="3" spellcheck="false"></textarea><span class="hint" id="swDetailsHint"></span></label>
+      <div class="rm-field"><span class="label" id="swPicLabel">Picture</span><div class="rm-pics" id="swPics"></div><span class="hint" id="swPicHint"></span></div>
+      <div class="rm-field" id="swPromptField" hidden><div class="field-head"><span class="label">Prompt</span><button class="link" data-act="swapPromptReset">The author's prompt</button></div>
+        <textarea class="lm-link sw-details sw-prompt" id="swPrompt" rows="10" spellcheck="false"></textarea>
+        <span class="hint">The author's starting point: edit it to say what each picture is — "&lt;Picture 2&gt; is the outfit worn by &lt;Subject 1&gt;", "&lt;Picture 3&gt; is the target environment". It keeps the video's setting unless a picture is made the environment.</span></div>
+      <label class="rm-field" id="swDetailsField"><span class="label" id="swDetailsLabel">The character in words</span><textarea class="lm-link sw-details" id="swDetails" rows="3" spellcheck="false"></textarea><span class="hint" id="swDetailsHint"></span></label>
       <div class="rm-field"><span class="label">Resolution</span><div class="seg" id="swRes"></div><span class="hint">In the video's own shape. Uses the first 15 seconds.</span></div>
     </div>
     <div class="lm-foot"><span class="lm-hint">The result is a new clip; the video stays.</span>

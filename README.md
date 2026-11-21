@@ -65,7 +65,10 @@ the face shows), the prompt says to replace only the red-marked person, and **Ch
 video first. That is how Henge picks a person; it works best in one continuous shot. **Model** is the author's (MiniMax H3's own
 model) by default; any other installed H3 model but HyperFlow can be tried (untested): a turbo build (H3 Turbo,
 10Eros, PRISM, DaSiWa turbo) runs with its own steps and sampler without the DMD LoRA, a full one (Singularity,
-DaSiWa) gets the DMD LoRA and 8 steps.
+DaSiWa) gets the DMD LoRA and 8 steps. **Motion** (Motion Transfer v1.0, same author) takes the video's motion,
+timing and camera only: up to 9 pictures, picked in order as `<Picture 1>`…, give the people, outfits, objects,
+place or style, and the prompt (the author's six-part `motion_transfer:` template, prefilled to edit) says which
+picture is what. Pictures go in at up to 1 MP each at H3's largest reference size, as in his native workflow.
 
 **Refine faces** (optional, with Carasibana's [ComfyUI-H3-FaceRefine](https://github.com/Carasibana/ComfyUI-H3-FaceRefine),
 the `MiniMaxH3NativeAudioLock` node and the `face_yolov8m.pt` detector in `models/ultralytics/bbox`; on RunPod

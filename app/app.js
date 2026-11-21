@@ -1569,7 +1569,7 @@ async function refineFaces() {
 
 // Swap (Alissonerdx's Character Swap v1.1 and Head Swap v1.0): a video as the guide, a picture as the new character.
 const SWAP = { clip: null, mode: "character", picture: null, res: 0.6, status: null,
-  who: "main", point: null, opacity: 1, check: null };   // check: {state, pid, url, error} of the marked preview
+  who: "main", point: null, opacity: 1, check: null, pictures: [], prompt: null };   // check: {state, pid, url, error} of the marked preview
 async function openSwap(c) {
   try { SWAP.status = await api("GET", "swap"); } catch (error) { say(error.message); return; }
   if (SWAP.clip !== c.id) Object.assign(SWAP, { who: "main", point: null, check: null });
@@ -1589,22 +1589,34 @@ function drawSwap() {
   const m = st.models.find((x) => x.id === SWAP.model);
   $("swModelHint").textContent = !m ? "" : m.id === st.base ? "The author's: MiniMax H3's own model, which the swap LoRAs were trained on, with the DMD 8-step turbo LoRA as in his workflow."
     : `Untested: the swap LoRAs were trained on MiniMax H3's own model. ${m.turbo ? `${m.name} runs its own way (${m.steps} steps), without the DMD turbo LoRA.` : `${m.name} gets the DMD turbo LoRA and 8 steps, like the author's.`}`;
-  $("swModes").innerHTML = [["character", "Character", "the whole person: face, hair, body and clothes"], ["head", "Head only", "experimental: the head, on the video's own body"]]
+  const motion = SWAP.mode === "motion";
+  $("swModes").innerHTML = [["character", "Character", "the whole person: face, hair, body and clothes"], ["head", "Head only", "experimental: the head, on the video's own body"],
+    ["motion", "Motion", "the video's motion, performed by the people and things in your pictures, as your prompt says"]]
     .map(([id, name, what]) => `<button class="${SWAP.mode === id ? "on" : ""}" data-act="swapMode" data-id="${id}" title="${what}">${name}</button>`).join("");
   $("swModeHint").textContent = why || (head ? "Replaces only the head; the body, clothes and motion stay the video's. Experimental."
+    : motion ? "Motion Transfer: the video gives only the motion, timing and camera; your pictures and prompt give who, what and where."
     : "The person in the picture takes the place of the video's main person, with the same motion, lips and camera.");
   const pics = state.refs;
-  $("swPics").innerHTML = pics.length ? pics.map((r) => `<button class="rm-pic fc-pic ${SWAP.picture === r.id ? "on" : ""}" data-act="swapPick" data-id="${r.id}" aria-pressed="${SWAP.picture === r.id}">
-      <img src="${r.img}" alt=""><span>${esc(r.name)}</span></button>`).join("")
+  SWAP.pictures = SWAP.pictures.filter((id) => pics.some((r) => r.id === id));
+  const order = (id) => SWAP.pictures.indexOf(id) + 1;
+  $("swPics").innerHTML = pics.length ? pics.map((r) => {
+      const on = motion ? order(r.id) > 0 : SWAP.picture === r.id;
+      return `<button class="rm-pic fc-pic ${on ? "on" : ""}" data-act="swapPick" data-id="${r.id}" aria-pressed="${on}">
+      <img src="${r.img}" alt="">${motion && on ? `<b class="sw-num">${order(r.id)}</b>` : ""}<span>${motion && on ? "Picture " + order(r.id) : esc(r.name)}</span></button>`; }).join("")
     : `<p class="hint">Add the picture with Add image first.</p>`;
-  $("swPicHint").textContent = (head ? "A clear picture of the face and hair." : "The whole person, head to toe if you can.") +
+  $("swPicLabel").textContent = motion ? "Pictures" : "Picture";
+  $("swPicHint").textContent = motion ? "Click them in order: the first is <Picture 1>, the next <Picture 2>… (up to 9). A person, another view of them, an outfit, an object, a place or a style."
+    : (head ? "A clear picture of the face and hair." : "The whole person, head to toe if you can.") +
     (st.background ? " Its background is replaced by grey, as in the author's workflow." : "");
+  $("swDetailsField").hidden = motion;
+  $("swPromptField").hidden = !motion;
+  if (motion && SWAP.prompt == null) { SWAP.prompt = st.motionTemplate; $("swPrompt").value = SWAP.prompt; }
   $("swDetailsLabel").textContent = head ? "The face in words" : "The character in words";
   $("swDetails").placeholder = (head ? "Male, oval face shape, light brown skin, dark eyes, black tousled hair" : "Female, tall, slim, long red hair, green eyes, black leather jacket, blue jeans, white sneakers");
   $("swDetailsHint").textContent = st.describe ? "Optional. Empty: written from the picture while it renders, and saved with the clip."
     : "Needed: describing the picture needs MOSS-Image's text encoder, which isn't installed.";
   const pickable = !head && st.mark;
-  $("swWhoField").hidden = head;
+  $("swWhoField").hidden = head || motion;
   if (!pickable && SWAP.who === "pick") SWAP.who = "main";
   $("swWho").innerHTML = [["main", "The main person"], ["pick", "Pick on the first frame"]]
     .map(([id, name]) => `<button class="${SWAP.who === id ? "on" : ""}" data-act="swapWho" data-id="${id}" ${id === "pick" && !pickable ? "disabled" : ""}>${name}</button>`).join("");
@@ -1623,7 +1635,7 @@ function drawSwap() {
     : ck.state === "failed" ? `<span class="hint warn">${esc(ck.error || "It didn't work.")}</span>`
     : `<video src="${ck.url}" autoplay muted loop playsinline></video><span class="hint">The red person is the one that's replaced. Wrong one? Click again.</span>`;
   $("swRes").innerHTML = st.megapixels.map((mp) => `<button class="${SWAP.res === mp ? "on" : ""}" data-act="swapRes" data-id="${mp}">${mp.toFixed(1)} MP</button>`).join("");
-  $("swGo").disabled = !!why || !SWAP.picture || (SWAP.who === "pick" && !SWAP.point);
+  $("swGo").disabled = !!why || (motion ? !SWAP.pictures.length || !(SWAP.prompt || "").trim() : !SWAP.picture || (SWAP.who === "pick" && !SWAP.point));
 }
 function swapMark() {
   return !$("swWhoField").hidden && SWAP.who === "pick" && SWAP.point ? { ...SWAP.point, opacity: SWAP.opacity } : null;
@@ -1650,6 +1662,7 @@ function swFrameRect() {
   const pw = (v.videoWidth || w) * scale, ph = (v.videoHeight || h) * scale;
   return { left: (w - pw) / 2, top: (h - ph) / 2, width: pw, height: ph };
 }
+$("swPrompt").addEventListener("input", (e) => { SWAP.prompt = e.target.value; $("swGo").disabled = !SWAP.pictures.length || !SWAP.prompt.trim(); });
 $("swFrameBox").addEventListener("click", (e) => {
   const box = $("swFrame").getBoundingClientRect(), r = swFrameRect();
   const x = (e.clientX - box.left - r.left) / r.width, y = (e.clientY - box.top - r.top) / r.height;
@@ -1659,7 +1672,8 @@ $("swFrameBox").addEventListener("click", (e) => {
   drawSwap();
 });
 async function runSwap() {
-  const body = { model: SWAP.model, mode: SWAP.mode, picture: SWAP.picture, res: SWAP.res, details: $("swDetails").value.trim(), mark: swapMark() };
+  const body = SWAP.mode === "motion" ? { model: SWAP.model, mode: "motion", pictures: SWAP.pictures, res: SWAP.res, prompt: SWAP.prompt }
+    : { model: SWAP.model, mode: SWAP.mode, picture: SWAP.picture, res: SWAP.res, details: $("swDetails").value.trim(), mark: swapMark() };
   try {
     const r = await api("POST", "clips/" + SWAP.clip + "/swap", body);
     $("swapModal").hidden = true;
@@ -3134,7 +3148,13 @@ const ACT = {
   menuSwap: () => { const id = closeMenu(); const c = clipById(id); if (c && c.status === "done" && c.file) openSwap(c); },
   swapMode: (id) => { SWAP.mode = id; drawSwap(); },
   swapRes: (id) => { SWAP.res = Number(id); drawSwap(); },
-  swapPick: (id) => { SWAP.picture = id; drawSwap(); },
+  swapPick: (id) => {
+    if (SWAP.mode !== "motion") SWAP.picture = id;
+    else if (SWAP.pictures.includes(id)) SWAP.pictures = SWAP.pictures.filter((x) => x !== id);
+    else if (SWAP.pictures.length < 9) SWAP.pictures = [...SWAP.pictures, id];
+    drawSwap();
+  },
+  swapPromptReset: () => { SWAP.prompt = SWAP.status.motionTemplate; $("swPrompt").value = SWAP.prompt; drawSwap(); },
   swapGo: () => runSwap(),
   swapWho: (id) => { SWAP.who = id; drawSwap(); },
   swapOpacity: (id) => { SWAP.opacity = Number(id); SWAP.check = null; drawSwap(); },

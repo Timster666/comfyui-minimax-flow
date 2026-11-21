@@ -1354,7 +1354,8 @@ async def watch_real():
                         extra = {}
                         if clip.get("family") == "ph3" and clip.get("enhance"):
                             extra["upsampled"] = ph3_bridge.upsampled_text(entry)
-                        if (clip.get("swap") or {}).get("described"):
+                        # A video swap's swap is a dict; a Klein face swap's is True.
+                        if isinstance(clip.get("swap"), dict) and clip["swap"].get("described"):
                             extra["prompt"] = swap.written_prompt(entry) or clip["prompt"]
                         await set_clip(clip["id"], status="done", step=clip["steps"], file=file["filename"],
                                        subfolder=file.get("subfolder") or ROOT + ("/stills" if clip.get("kind") == "image" else "/clips"), **extra)
@@ -1463,9 +1464,16 @@ async def swaps(request):
         if not source or source.get("kind", "video") != "video" or source.get("status") != "done" or not source.get("file"):
             raise web.HTTPBadRequest(text="Only a finished video can be the guide of a swap.")
         images = list(data["images"])
-        picture = next((i for i in images if i["id"] == body.get("picture")), None)
-        if not picture:
-            raise web.HTTPBadRequest(text="Pick the picture of the %s." % ("character" if mode == "character" else "head"))
+        by_id = {i["id"]: i for i in images}
+        if mode == "motion":
+            cast = [by_id[i] for i in dict.fromkeys(body.get("pictures") or []) if i in by_id][:h3_graph.H3_PICTURES]
+            if not cast:
+                raise web.HTTPBadRequest(text="Pick at least one picture: Picture 1 is usually who performs the motion.")
+        else:
+            cast = [by_id[body["picture"]]] if body.get("picture") in by_id else []
+            if not cast:
+                raise web.HTTPBadRequest(text="Pick the picture of the %s." % ("character" if mode == "character" else "head"))
+        picture = cast[0]
     path = clip_path(source)
     if not os.path.isfile(path):
         raise web.HTTPBadRequest(text="The video file of that clip is gone.")
@@ -1475,11 +1483,22 @@ async def swaps(request):
     clip = {"id": "c" + uuid.uuid4().hex[:10], "kind": "video", "model": swap.MODES[mode]["name"] + " · " + model["name"],
             "profile": model["id"], "steps": swap.STEPS, "res": res, "aspect": source.get("aspect"), "width": width, "height": height,
             "len": round(length / 24, 2), "seed": random.randint(0, 2**31 - 1), "loras": [],
-            "pictures": [{"id": picture["id"], "name": picture["name"]}], "refs": [{"id": picture["id"], "name": picture["name"]}],
+            "pictures": [{"id": i["id"], "name": i["name"]} for i in cast], "refs": [{"id": i["id"], "name": i["name"]} for i in cast],
             "status": "queued", "step": 0, "file": None, "subfolder": ROOT + "/clips", "starred": False, "created": time.time(),
             "swap": {"from": source["id"], "mode": mode, "picture": picture["id"], "details": details or None, "described": not details,
                      "mark": mark}}
-    clip["prompt"] = swap.prompt_of(mode, details, bool(mark)) if details else swap.template_of(mode, bool(mark))
+    if mode == "motion":
+        text = str(body.get("prompt") or "").strip()
+        if not text:
+            raise web.HTTPBadRequest(text="Write the prompt: say what each picture is.")
+        try:
+            h3_graph.clean_pictures([i["id"] for i in cast], images, text)
+        except ValueError as error:
+            raise web.HTTPBadRequest(text=str(error))
+        clip["prompt"] = swap.motion_prompt(text[:8000])
+        clip["swap"].update(details=None, described=False)
+    else:
+        clip["prompt"] = swap.prompt_of(mode, details, bool(mark)) if details else swap.template_of(mode, bool(mark))
     try:
         graph = swap.build(clip, images, "%s/%s" % (source.get("subfolder") or ROOT + "/clips", source["file"]), mode,
                            details=details, megapixels=res, name=clip_info.file_stem(clip) + "_swap", mark=mark, model=model["id"])
