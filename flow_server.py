@@ -67,7 +67,7 @@ _exports = {}   # export id -> {"cancel": bool}
 
 DEFAULT_UI = {
     "settings": {"model": "HyperFlow H3 Flash", "steps": 6, "res": 0.6, "aspect": "16:9", "len": 5,
-                 "seedMode": "random", "seed": 48213, "loras": []},
+                 "seedMode": "random", "seed": 48213, "loras": [], "realism": {"on": True, "strength": 1.2}},
     "imageSettings": {"model": "MOSS-Image SFT (INT8)", "steps": 50, "cfg": 3.0, "res": 1.0, "aspect": "1:1",
                       "seedMode": "random", "seed": 48213, "loras": []},
     "attached": [],
@@ -294,6 +294,7 @@ async def get_state(request):
         "options": {"editSizes": EDIT_SIZES, "samplers": sampling_choices()[0], "schedulers": sampling_choices()[1],
                     "beta57": h3_graph.BETA57, "models": models, "aspects": ASPECTS, "megapixels": MEGAPIXELS, "videoMP": VIDEO_MP, "length": LENGTH,
                     "loras": loras, "missing": why, "root": ROOT,
+                    "realism": dict(h3_graph.REALISM, file=h3_graph.realism_lora()),
                     "image": {"models": imodels, "aspects": IMAGE_ASPECTS, "megapixels": IMAGE_MEGAPIXELS,
                               "recommendedMP": IMAGE_RECOMMENDED_MP, "cfg": CFG,
                               # Edit (one picture, with the edit LoRA): its settings, and whether the LoRA is there.
@@ -730,6 +731,10 @@ async def generate(request):
             clip["pictures"] = pictures
         if refmods:
             clip["refmods"] = refmods
+        realism = s.get("realism") or {}
+        if realism.get("on") and h3_graph.realism_lora():
+            low, high = h3_graph.REALISM["range"]
+            clip["realism"] = round(max(low, min(high, float(realism.get("strength", h3_graph.REALISM["strength"])))), 2)
         # The pictures it uses, so a project export finds them even after a rename.
         clip["refs"] = ([dict(p) for p in pictures] if pictures is not None
                         else [{"id": i["id"], "name": i["name"]} for i in edit_project.refs_of(clip, images)])

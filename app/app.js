@@ -1446,6 +1446,7 @@ function renderSettings() {
       </div>
     </div>
 
+    ${state.tab === "video" ? realismField(s) : ""}
     ${lorasField(s)}
     ${state.tab === "video" ? refmodsField(s) : ""}
 
@@ -1753,6 +1754,24 @@ function samplingFields(s, model) {
     </div>`;
 }
 
+// Realism: the MMH3 Realism Slider LoRA on every video, joining after the first steps so the composition stays.
+const realismOf = (s) => (s.realism ||= { on: true, strength: OPT.realism?.strength || 1.2 });
+function realismField(s) {
+  const R = OPT.realism || {}, r = realismOf(s);
+  if (!R.file) return `<div class="field"><span class="label">Realism</span><span class="hint">Natural skin, with the MMH3 Realism Slider LoRA: put MMH3-Realism-V2.safetensors in models/loras (on RunPod, REALISM_LORA=true).</span></div>`;
+  return `<div class="field">
+      <span class="label">Realism</span>
+      <div class="lora ${r.on ? "" : "dim"}">
+        <button class="switch ${r.on ? "on" : ""}" data-act="toggleRealism" aria-label="${r.on ? "Switch off" : "Switch on"} Realism" aria-pressed="${r.on}"></button>
+        <div class="lora-body">
+          <span class="lora-name" title="${esc(R.file)}">${esc(loraStem(R.file))}</span>
+          <input type="range" min="${R.range[0]}" max="2" step="0.05" value="${r.strength}" data-input="realismStrength" aria-label="Strength of Realism">
+        </div>
+        <span class="lora-val" id="realismVal">${Number(r.strength).toFixed(2)}</span>
+      </div>
+      <span class="hint">Natural, un-airbrushed skin. It joins after the first steps, so the composition stays as it would be. ${R.strength} is the H3 editor's setting.</span>
+    </div>`;
+}
 function lorasField(s) {
   return `<div class="field">
       <div class="field-head"><span class="label">LoRAs</span><button class="link" data-act="loraPicker">+ Add LoRA</button></div>
@@ -2986,6 +3005,7 @@ const ACT = {
     catch (error) { say(error.message); }
   },
   driveCancel: (id) => api("POST", `gdrive/${id}/cancel`).then((r) => driveJobs(r.jobs)).catch((e) => say(e.message)),
+  toggleRealism: () => { const r = realismOf(state.settings); r.on = !r.on; saveUi(); render(); },
   menuFaces: () => { const id = closeMenu(); const c = clipById(id); if (c && c.status === "done" && c.file) openFaces(c); },
   facesGo: () => refineFaces(),
   facesClose: () => { $("facesModal").hidden = true; },
@@ -3250,7 +3270,8 @@ const ACT = {
     const model = tabOpt().models.some((m) => m.name === c.model) ? c.model : state.settings.model;
     Object.assign(state.settings, { model, steps: c.steps, res: c.res, aspect: c.aspect, seedMode: "random",
       loras: c.loras.map((l) => ({ id: l.name, name: l.name, strength: l.strength, on: true })) },
-      kindOf(c) === "image" ? { cfg: c.cfg } : { len: c.len, refmods: (c.refmods || []).filter((m) => RM.files.includes(m.file)) },
+      kindOf(c) === "image" ? { cfg: c.cfg } : { len: c.len, refmods: (c.refmods || []).filter((m) => RM.files.includes(m.file)),
+        realism: { on: !!c.realism, strength: c.realism || realismOf(state.settings).strength } },
       { sampler: c.sampler || "", scheduler: c.scheduler || "" });
     if (kindOf(c) === "image") {
       state.negative = c.negative != null ? c.negative : negativeDefault(c.model);
@@ -3416,6 +3437,11 @@ const INPUT = {
     $("pill").textContent = summary(); saveUi();
   },
   len: (el) => { state.settings.len = Number(el.value); $("lenVal").textContent = el.value + " s"; $("pill").textContent = summary(); saveUi(); },
+  realismStrength: (el) => {
+    realismOf(state.settings).strength = Number(el.value);
+    $("realismVal").textContent = Number(el.value).toFixed(2);
+    saveUi();
+  },
   loraStrength: (el) => {
     const l = state.settings.loras.find((x) => x.id === el.dataset.id);
     l.strength = Number(el.value);

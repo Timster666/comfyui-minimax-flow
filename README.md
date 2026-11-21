@@ -46,6 +46,11 @@ Drive set up, RefMods are kept in a `refmods` folder in the Drive folder too: th
 first time the Video settings look at RefMods after ComfyUI starts, a new one is uploaded when it's made, and
 **Sync now** copies both ways. Nothing is deleted on either side.
 
+**Realism** (Video settings, on at 1.2 when `MMH3-Realism-V2.safetensors` is in `models/loras`, V1 as a fallback):
+the MMH3 Realism Slider LoRA on every video, as the H3 editor ran it on finals: it sits out the steps above sigma
+0.75, which set the composition, and joins for the detail, for natural, un-airbrushed skin. A clip keeps its
+strength, so Refine faces and **Use this prompt and settings** use it too.
+
 **Refine faces** (optional, with Carasibana's [ComfyUI-H3-FaceRefine](https://github.com/Carasibana/ComfyUI-H3-FaceRefine),
 the `MiniMaxH3NativeAudioLock` node and the `face_yolov8m.pt` detector in `models/ultralytics/bbox`; on RunPod
 `ENABLE_FACEREFINE=true`): a finished video's ⋯ menu › **Refine faces…** tracks the face on every frame, re-renders it
